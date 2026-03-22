@@ -109,6 +109,17 @@ export async function getTopic(id: string): Promise<Topic> {
   return readJSON<Topic>(topicFile(id))
 }
 
+async function loadGlobalDefaultModels(): Promise<Record<string, string>> {
+  try {
+    const settingsFile = Bun.file(join(getDataDir(), "settings.json"))
+    if (await settingsFile.exists()) {
+      const settings = await settingsFile.json() as { default_models?: Record<string, string> }
+      if (settings.default_models) return { ...DEFAULT_MODELS, ...settings.default_models }
+    }
+  } catch { /* fallback to hardcoded */ }
+  return DEFAULT_MODELS
+}
+
 export async function createTopic(data: { title: string; description: string; models?: Partial<Topic["models"]>; settings?: Partial<Topic["settings"]> }): Promise<Topic> {
   const id = slugify(data.title) + "-" + Date.now().toString(36)
   const dir = topicDir(id)
@@ -118,6 +129,8 @@ export async function createTopic(data: { title: string; description: string; mo
   await ensureDir(join(dir, "logs"))
   await ensureDir(join(dir, "exports"))
 
+  const globalModels = await loadGlobalDefaultModels()
+
   const topic: Topic = {
     id,
     title: data.title,
@@ -126,7 +139,7 @@ export async function createTopic(data: { title: string; description: string; mo
     updated_at: new Date().toISOString(),
     status: "draft",
     current_version: 0,
-    models: { ...DEFAULT_MODELS, ...data.models },
+    models: { ...globalModels, ...data.models },
     settings: { ...DEFAULT_SETTINGS, ...data.settings },
   }
 

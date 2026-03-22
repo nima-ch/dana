@@ -6,6 +6,9 @@ import { streamRouter } from "./routes/stream"
 import { cluesRouter } from "./routes/clues"
 import { partiesRouter } from "./routes/parties"
 import { forumRouter } from "./routes/forum"
+import { pipelineRouter } from "./routes/pipeline"
+import { expertCouncilRouter } from "./routes/expertCouncil"
+import { settingsRouter } from "./routes/settings"
 import { fetchAvailableModels } from "./llm/proxyClient"
 
 const app = new Elysia()
@@ -16,6 +19,9 @@ const app = new Elysia()
   .use(cluesRouter)
   .use(partiesRouter)
   .use(forumRouter)
+  .use(pipelineRouter)
+  .use(expertCouncilRouter)
+  .use(settingsRouter)
   .get("/health", () => ({ status: "ok" }))
   .get("/api/models", async () => {
     return fetchAvailableModels()

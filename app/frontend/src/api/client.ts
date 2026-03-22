@@ -35,6 +35,32 @@ export const api = {
     delete: (id: string) =>
       request<{ success: boolean }>(`/topics/${id}`, { method: "DELETE" }),
   },
+  expertCouncil: {
+    get: (topicId: string) => request<any>(`/topics/${topicId}/expert-council`),
+    getVersion: (topicId: string, version: number) => request<any>(`/topics/${topicId}/expert-council/${version}`),
+  },
+  verdict: {
+    get: (topicId: string) => request<any>(`/topics/${topicId}/verdict`),
+  },
+  pipeline: {
+    run: (topicId: string) =>
+      request<{ run_id: string; started_at: string; status: string }>(
+        `/topics/${topicId}/pipeline/run`, { method: "POST" }
+      ),
+    update: (topicId: string) =>
+      request<{ run_id: string; started_at: string; status: string }>(
+        `/topics/${topicId}/pipeline/update`, { method: "POST" }
+      ),
+    status: (topicId: string) =>
+      request<{ running: boolean; run_id?: string; started_at?: string }>(
+        `/topics/${topicId}/pipeline/status`
+      ),
+  },
+  settings: {
+    get: () => request<{ default_models: Record<string, string> }>("/settings"),
+    update: (data: { default_models?: Record<string, string> }) =>
+      request<{ default_models: Record<string, string> }>("/settings", { method: "PUT", body: JSON.stringify(data) }),
+  },
   models: {
     list: () => request<{ id: string }[]>("/models"),
   },

@@ -2,10 +2,12 @@ import { useEffect, useState } from "react"
 import { useTopicsStore } from "../stores/topicsStore"
 import { TopicCard } from "../components/Dashboard/TopicCard"
 import { NewTopicDialog } from "../components/Dashboard/NewTopicDialog"
+import { GlobalSettingsDialog } from "../components/Dashboard/GlobalSettingsDialog"
 
 export function Dashboard() {
   const { topics, loading, error, fetch, create, delete: deleteTopic } = useTopicsStore()
   const [showDialog, setShowDialog] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
 
   useEffect(() => { fetch() }, [])
 
@@ -16,12 +18,21 @@ export function Dashboard() {
           <h1 className="text-xl font-bold text-gray-900">Dana</h1>
           <p className="text-xs text-gray-500">Geopolitical & Scenario Analysis</p>
         </div>
-        <button
-          className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
-          onClick={() => setShowDialog(true)}
-        >
-          + New Topic
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="px-3 py-2 text-gray-400 hover:text-gray-600 text-sm"
+            onClick={() => setShowSettings(true)}
+            title="Global Settings"
+          >
+            &#9881;
+          </button>
+          <button
+            className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
+            onClick={() => setShowDialog(true)}
+          >
+            + New Topic
+          </button>
+        </div>
       </header>
 
       <main className="px-6 py-6 max-w-6xl mx-auto">
@@ -63,6 +74,10 @@ export function Dashboard() {
           onClose={() => setShowDialog(false)}
           onCreate={create}
         />
+      )}
+
+      {showSettings && (
+        <GlobalSettingsDialog onClose={() => setShowSettings(false)} />
       )}
     </div>
   )

@@ -5,3 +5,4 @@ app/frontend/node_modules/
 app/backend/node_modules/
 app/frontend/dist/
 *.log
+.pids
