@@ -117,7 +117,7 @@ export async function runWeightCalculator(
         { role: "user", content: attempt === 0 ? prompt : `${prompt}\n\nOutput ONLY valid JSON array. No trailing commas.` },
       ],
       temperature: 0.2,
-      max_tokens: 2000,
+      max_tokens: 4000,
     })
     try {
       const match = raw.match(/\[[\s\S]+\]/)
