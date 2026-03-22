@@ -1,5 +1,5 @@
 # Dana — Specification Document
-**Version:** 0.5 | **Date:** 2026-03-22
+**Version:** 0.6 | **Date:** 2026-03-22
 
 ---
 
@@ -12,6 +12,7 @@
 | 0.3 | 2026-03-22 | Task-based model assignment (Haiku/Sonnet/Opus per task type) with per-topic settings; GitHub Pages static export per version |
 | 0.4 | 2026-03-22 | Tool-pull context model (agents fetch on demand via tools, not full context dumps); dynamic context injection pattern; artifact file outputs per agent; ClueProcessor merges BiasCorrector+SourceSummarizer; expert isolation via structured scenario summary; per-topic write queue |
 | 0.5 | 2026-03-22 | Citation chain collapse rule: independent source count based on origin_source, not outlet count; origin_source field added to clue schema and ClueProcessor output; weight challenge acceptance rule defined; contested clue classification moved to ForumOrchestrator write time |
+| 0.6 | 2026-03-22 | Weighted speaking model: rep word budgets proportional to party weight; ForumOrchestrator drives sequencing (not pipeline runner); rebuttals in reverse weight order; floor allocation for low-weight parties; fixed: duplicate ToC entry, missing origin_source on clue v2, stale §5.3 prose, DeltaForumAgent renamed consistently |
 
 ---
 
@@ -30,7 +31,6 @@
 11. [Topic Lifecycle](#11-topic-lifecycle)
 12. [Bias Correction & Reasoning Protocol](#12-bias-correction--reasoning-protocol)
 13. [Build Roadmap](#13-build-roadmap)
-14. [GitHub Pages Static Export](#14-github-pages-static-export)
 14. [GitHub Pages Static Export](#14-github-pages-static-export)
 
 ---
@@ -126,8 +126,10 @@ This adversarial-but-honest design surfaces real tensions rather than letting bi
 The **General Forum** is the structured debate session where all Representatives speak.
 
 Forum mechanics:
-- Speaking order is weighted by party **Weight × Clue Relevance** for each round
-- Each representative gets a **Statement**, a **Rebuttal**, and a **Closing**
+- **Speaking allocation is proportional to party weight.** The ForumOrchestrator divides the total speaking budget across parties by weight — a party with weight 80 gets roughly twice the words as a party with weight 40. This reflects real-world influence: a minor actor doesn't get equal airtime to a dominant one.
+- Allocation is computed once before the forum starts and stored as `speaking_budget` (word count) per representative per round type.
+- Within each round, speaking **order** is weight-descending (heaviest first in opening statements, reversed in rebuttals so smaller parties get the last word).
+- A party below a minimum weight threshold (default: weight < 15) gets a single brief statement per round rather than a full allocation — they are present but not dominant.
 - The forum produces a **Scenario List**: a set of possible outcomes with arguments for why each might occur
 - Scenarios are tagged with which parties benefit, which clues support them, and what conditions would need to be true
 
@@ -185,7 +187,7 @@ Default expert pool structure:
 │  │                                                             │   │
 │  │  DiscoveryAgent │ EnrichmentAgent │ RepresentativeAgent(N)  │   │
 │  │  ForumOrchestrator │ ExpertAgent(M) │ VerdictSynthesizer    │   │
-│  │  DeltaForumAgent │ DevilsAdvocate                           │   │
+│  │  DeltaRepresentativeAgent │ DevilsAdvocate                   │   │
 │  └──────────────────────────┬───────────────────────────────---┘   │
 │                             │                                       │
 │  ┌──────────────────────────▼─────────────────────────────────┐    │
@@ -346,7 +348,12 @@ Each clue carries its full version history inline. The `current` field always po
         "source_credibility": {
           "score": 68,
           "notes": "Opposition media; single source; unconfirmed by state media",
-          "bias_flags": ["opposition_media", "unverified"]
+          "bias_flags": ["opposition_media", "unverified"],
+          "origin_source": {
+            "url": "https://...",
+            "outlet": "Iran International",
+            "is_republication": false
+          }
         },
         "bias_corrected_summary": "Reports (unconfirmed) suggest the replaced commander subsequently left Iran. If confirmed, this would indicate a significant loyalty fracture in IRGC officer corps.",
         "relevance_score": 92,
@@ -413,6 +420,15 @@ The knowledge state ledger. Each entry is a snapshot of what was known at a poin
     "party_id": "irgc",
     "persona_prompt": "You are the advocate for the Islamic Revolutionary Guard Corps in this analysis. Your role is to present the strongest reasoned case for the IRGC's position and likely actions, using only verified clues and logical inference. You must acknowledge the strongest arguments against your party before addressing them. You are objective in method, though partisan in focus.",
     "speaking_weight": 87,
+    "speaking_budget": {
+      // word counts per round type, proportional to party weight
+      // computed by WeightCalculator: (party_weight / total_weight_sum) × round_word_pool
+      // round_word_pools: opening=600, rebuttal=400, closing=300 (these are per-party totals)
+      "opening_statement": 520,   // ~87/sum × 600 pool
+      "rebuttal": 347,
+      "closing": 260,
+      "minimum_floor": 150        // no round drops below this regardless of weight
+    },
     "auto_generated": true
   }
 ]
@@ -624,27 +640,23 @@ The update does NOT re-run the full pipeline. It runs a targeted delta:
 
 ```
 Step 1: CLUE DELTA SUMMARY
-  - Identify new and changed clues since last version
-  - Generate a brief "what changed" narrative for agent context
+  - Diff current clue versions against last state snapshot
+  - Generate a brief "what changed" narrative stored as delta_context
 
 Step 2: DELTA FORUM SESSION
-  - Each representative receives:
-      [prior forum summary (condensed)]
-      [new/changed clues with bias-corrected summaries]
-      [instruction: update your position — what stands, what changes, why]
-  - Representatives produce position_update turns (shorter than original statements)
-  - ForumOrchestrator synthesizes scenario_updates: which scenarios strengthen/weaken/new/removed
+  - Each DeltaRepresentativeAgent receives lean context snapshot + delta_context summary
+  - Agent pulls its own prior turns via get_prior_turns and new/updated clues via get_clue
+  - Writes a position_update artifact (what stands, what changed, why)
+  - ForumOrchestrator reads all delta artifacts and writes scenario_updates
 
 Step 3: DELTA EXPERT REVIEW
-  - Each expert receives:
-      [prior verdict summary]
-      [delta forum output]
-      [instruction: revise probability estimates based on new information]
-  - Experts produce updated probability estimates with delta reasoning
+  - Each ExpertAgent receives prior verdict summary + structured scenario update summary
+  - Agent pulls updated clue versions via get_clue as needed
+  - Writes revised probability estimate artifact with delta reasoning
 
 Step 4: VERDICT UPDATE
-  - VerdictSynthesizer produces updated verdict incorporating deltas
-  - Watch indicators list is updated/extended
+  - VerdictSynthesizer reads all delta artifacts, merges with prior verdict
+  - Watch indicators list updated/extended
   - New version saved to states.json
 ```
 
@@ -705,20 +717,32 @@ Stage 3: WEIGHT CALCULATION
   - Representative personas auto-generated
 
 Stage 4: GENERAL FORUM
-  Input:  parties.json (weighted), clues.json (index), representatives.json
+  Input:  parties.json (weighted), clues.json (index), representatives.json (with speaking_budget)
   Output: forum_session_v<N>.json, logs/run-<id>/representative_<party>_r<N>.json (per rep per round)
-  Agent:  ForumOrchestrator + RepresentativeAgents
-  - Each RepresentativeAgent receives: lean context snapshot (party index + clue index + injected role prompt)
-  - Representatives pull full clue detail via get_clue, prior turns via get_prior_turns as needed
-  - Each representative writes turn artifact via write_artifact before next rep begins
-  - ForumOrchestrator reads completed turn artifacts via read_artifact to sequence rounds
-  - Round 1: Opening statements (weighted order)
-  - Round 2: Rebuttals — each rep calls get_prior_turns(round=1) to read others before responding
-  - Round 3: Closings + scenario proposals
+  Sequencing: ForumOrchestrator drives the entire forum loop. It calls each RepresentativeAgent
+              in turn, waits for the artifact, then triggers the next. Representatives never
+              run concurrently within a round — each sees the turns before them.
+
+  Speaking budget:
+  - ForumOrchestrator computes speaking_budget per rep from party weights before Round 1
+    Formula: rep_words = (party_weight / sum_of_all_weights) × round_word_pool
+    Word pools: opening=600/party, rebuttal=400/party, closing=300/party (minimum floor: 150)
+  - Budget is passed to each RepresentativeAgent as a hard constraint in its system prompt
+  - Parties with weight < 15 receive floor allocation only (present but not dominant)
+
+  Round sequencing:
+  - Round 1 (Openings): weight-descending order; each rep receives lean context + budget
+  - Round 2 (Rebuttals): weight-ascending order (lightest first, heaviest last — smaller parties
+    get the last word in rebuttals); each rep calls get_prior_turns(round=1) before writing
+  - Round 3 (Closings + scenarios): weight-descending; each rep calls get_prior_turns to read
+    rounds 1–2 before writing closing + proposing/endorsing scenarios
   - Devil's Advocate pass: reads scenario list via get_scenario_list, stress-tests leading scenario
+
+  After all rounds:
   - ForumOrchestrator reads all round artifacts and writes consolidated forum_session_v<N>.json
-  - ForumOrchestrator computes contested/uncontested clue classification and writes pre-computed scenario_summary field into forum_session_v<N>.json — this is the only point where this classification is made
-  - All turns stream to UI in real-time via SSE as artifact writes complete
+  - ForumOrchestrator computes contested/uncontested clue classification and writes pre-computed
+    scenario_summary field — this is the only point where this classification is made
+  - All turns stream to UI in real-time via SSE as each artifact write completes
 
 Stage 5: EXPERT COUNCIL
   Input:  forum_session_v<N>.json (structured summary only), clues.json (index), parties.json
@@ -858,10 +882,10 @@ ForumOrchestrator does not receive all representative outputs as context — it 
 | `DiscoveryAgent` | Identify parties and seed clues | `enrichment` | Sonnet | WebSearch, HttpFetch, WriteArtifact | Must generate ≥5 parties; no assumed facts |
 | `EnrichmentAgent` | Deepen profiles, expand clues | `enrichment` | Sonnet | WebSearch, HttpFetch, TimelineLookup, GetClue, WriteArtifact | Runs ClueProcessor on every clue |
 | `ClueProcessor` | Extract + bias-correct a single clue from raw HTML | `extraction` | Haiku | none | Single-pass: extraction + bias correction together; no invention |
-| `WeightCalculator` | Score party influence | `enrichment` | Sonnet | GetPartyProfile, WriteArtifact | Must show working per dimension |
+| `WeightCalculator` | Score party influence; compute speaking budgets | `enrichment` | Sonnet | GetPartyProfile, WriteArtifact | Must show working per dimension; speaking_budget written to representatives.json |
 | `RepresentativeAgent` | Argue for one party | `forum_reasoning` | Opus | GetClue, GetPartyProfile, GetPriorTurns, GetScenarioList, WriteArtifact | Steelman; cite clues; acknowledge counter-evidence |
 | `DeltaRepresentativeAgent` | Update position given new clues | `delta_updates` | Sonnet | GetClue, GetPriorTurns, ReadArtifact, WriteArtifact | Must reference prior position; explain what changed and why |
-| `ForumOrchestrator` | Sequence forum, synthesize scenarios | `forum_reasoning` | Opus | ReadArtifact, WriteArtifact | Reads rep artifacts; deduplicates scenarios; all parties addressed |
+| `ForumOrchestrator` | Drive forum loop, sequence reps by weight, synthesize scenarios | `forum_reasoning` | Opus | ReadArtifact, WriteArtifact | Calls each rep in weighted order; enforces speaking budget; deduplicates scenarios; computes contested clue classification |
 | `DevilsAdvocate` | Stress-test leading scenario | `forum_reasoning` | Opus | GetClue, GetScenarioList, WriteArtifact | Must produce ≥3 genuine falsification arguments |
 | `ExpertAgent` | Domain analysis, probabilities | `expert_council` | Opus | GetClue, GetScenarioSummary, WebSearch, HttpFetch, WriteArtifact | Receives scenario list + clue index only — not raw forum; must cite historic analogues |
 | `VerdictSynthesizer` | Final report | `verdict` | Opus | ReadArtifact, WriteArtifact | Reads all expert artifacts; probabilities sum ≤1.0; applies weight challenges |
