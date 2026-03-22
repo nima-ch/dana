@@ -9,6 +9,7 @@ import { StalenessBanner } from "../components/Topic/StalenessBanner"
 import { ConversationView } from "../components/Forum/ConversationView"
 import { ExpertCouncilPanel } from "../components/Expert/ExpertCouncilPanel"
 import { VerdictPanel } from "../components/Expert/VerdictPanel"
+import { AnalysisProgressView } from "../components/Pipeline/AnalysisProgressView"
 import { SettingsPanel } from "../components/Topic/SettingsPanel"
 
 type Stage = "discovery" | "enrichment" | "forum" | "expert_council" | "verdict"
@@ -56,6 +57,8 @@ export function TopicView() {
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null)
   const [showSettings, setShowSettings] = useState(false)
   const [approveLoading, setApproveLoading] = useState(false)
+  const [analysisRunning, setAnalysisRunning] = useState(false)
+  const [pipelineError, setPipelineError] = useState<string | null>(null)
 
   const refreshTopic = useCallback(() => {
     if (!id) return
@@ -98,14 +101,15 @@ export function TopicView() {
       setCompletedStages(prev => new Set([...prev, event.stage]))
       if (event.stage === "verdict") {
         setPipelineRunning(false)
+        setAnalysisRunning(false)
         setProgressMsg("")
         setLiveStage(null)
       }
-      // Always refresh to pick up new status
       refreshTopic()
     } else if (event.type === "error") {
       setPipelineRunning(false)
       setProgressMsg(`Error: ${event.message}`)
+      setPipelineError(event.message)
       setLiveStage(null)
       refreshTopic()
     }
@@ -146,7 +150,11 @@ export function TopicView() {
     setApproveLoading(true)
     try {
       setPipelineRunning(true)
+      setAnalysisRunning(true)
+      setPipelineError(null)
+      setCompletedStages(new Set())
       setProgressMsg("Starting analysis (weight, forum, expert council, verdict)...")
+      setActiveStage("forum")
       await api.pipeline.analyze(id)
     } catch (e) {
       setPipelineRunning(false)
@@ -160,8 +168,11 @@ export function TopicView() {
     if (!confirm("This will run a fresh analysis (weight, forum, expert council, verdict) using the current parties and clues. Previous analysis is preserved as a prior version. Continue?")) return
     try {
       setPipelineRunning(true)
+      setAnalysisRunning(true)
+      setPipelineError(null)
       setCompletedStages(new Set())
       setProgressMsg("Starting clean re-analysis...")
+      setActiveStage("forum")
       await api.pipeline.reanalyze(id)
     } catch (e) {
       setPipelineRunning(false)
@@ -329,15 +340,26 @@ export function TopicView() {
               approveLoading={approveLoading}
             />
           )}
-          {activeStage === "forum" && (
-            <ConversationView
-              topicId={topic.id}
-              sessionId={`forum-session-v${selectedVersion ?? Math.max(topic.current_version, 1)}`}
-              isLive={topic.status === "forum" || (pipelineRunning && liveStage === "forum")}
+          {analysisRunning && (activeStage === "forum" || activeStage === "expert_council" || activeStage === "verdict") ? (
+            <AnalysisProgressView
+              liveStage={liveStage}
+              completedStages={completedStages}
+              progressMsg={progressMsg}
+              error={pipelineError}
             />
+          ) : (
+            <>
+              {activeStage === "forum" && (
+                <ConversationView
+                  topicId={topic.id}
+                  sessionId={`forum-session-v${selectedVersion ?? Math.max(topic.current_version, 1)}`}
+                  isLive={topic.status === "forum" || (pipelineRunning && liveStage === "forum")}
+                />
+              )}
+              {activeStage === "expert_council" && <ExpertCouncilPanel topicId={topic.id} />}
+              {activeStage === "verdict" && <VerdictPanel topicId={topic.id} />}
+            </>
           )}
-          {activeStage === "expert_council" && <ExpertCouncilPanel topicId={topic.id} />}
-          {activeStage === "verdict" && <VerdictPanel topicId={topic.id} />}
         </main>
       </div>
 
