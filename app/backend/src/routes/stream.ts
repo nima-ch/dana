@@ -3,6 +3,9 @@ import { Elysia } from "elysia"
 export type SSEEvent =
   | { type: "progress"; stage: string; pct: number; msg: string }
   | { type: "forum_turn"; turn: Record<string, unknown> }
+  | { type: "expert_assessment"; expert: string; domain: string; summary: string }
+  | { type: "verdict_content"; scenarios: { title: string; probability: number }[]; headline: string }
+  | { type: "weight_result"; parties: { name: string; weight: number }[] }
   | { type: "stage_complete"; stage: string; session_id?: string }
   | { type: "error"; message: string }
   | { type: "ping" }

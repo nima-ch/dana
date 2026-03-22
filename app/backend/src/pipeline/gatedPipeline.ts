@@ -9,6 +9,7 @@ import { generateExpertPersonas, runExpertAgent, runCrossDeliberation } from "..
 import { runVerdictSynthesizer } from "../agents/VerdictSynthesizer"
 import { writeCheckpoint, readCheckpoint, isStageComplete } from "./checkpointManager"
 import { createVersion } from "./stateManager"
+import { readArtifact } from "../tools/internal/artifactStore"
 import { emit } from "../routes/stream"
 import type { Topic } from "./topicManager"
 
@@ -121,6 +122,12 @@ export async function runAnalyzeStages(topicId: string): Promise<{ run_id: strin
         (msg) => emit(topicId, { type: "progress", stage: "weight", pct: 0.5, msg })
       )
 
+      // Emit weight results for live UI
+      try {
+        const weightedParties = await Bun.file(join(getDataDir(), "topics", topicId, "parties.json")).json()
+        emit(topicId, { type: "weight_result", parties: weightedParties.map((p: any) => ({ name: p.name, weight: p.weight })) })
+      } catch { /* non-fatal */ }
+
       await writeCheckpoint(topicId, runId, { stage: "forum", step: 0 })
       log.weight("Stage 3/6: WEIGHT CALCULATION complete")
       emit(topicId, { type: "stage_complete", stage: "weight" })
@@ -154,11 +161,16 @@ export async function runAnalyzeStages(topicId: string): Promise<{ run_id: strin
       const BATCH = 3
       for (let i = 0; i < experts.length; i += BATCH) {
         const batch = experts.slice(i, i + BATCH)
-        await Promise.all(batch.map(expert =>
-          runExpertAgent(topicId, runId, expert, sessionId, topic.models.expert_council,
+        await Promise.all(batch.map(async expert => {
+          await runExpertAgent(topicId, runId, expert, sessionId, topic.models.expert_council,
             (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: (i + 1) / experts.length, msg })
           )
-        ))
+          try {
+            const artifact = await readArtifact(topicId, runId, `expert_${expert.domain}`)
+            const summary = artifact?.scenarios_assessed?.[0]?.assessment?.slice(0, 200) || ""
+            emit(topicId, { type: "expert_assessment", expert: expert.name, domain: expert.domain, summary })
+          } catch { /* non-fatal */ }
+        }))
       }
 
       log.expert("Cross-expert deliberation round starting")
@@ -187,6 +199,18 @@ export async function runAnalyzeStages(topicId: string): Promise<{ run_id: strin
       topicId, runId, experts, sessionId, topic.models.verdict,
       (msg) => emit(topicId, { type: "progress", stage: "verdict", pct: 0.5, msg })
     )
+
+    // Emit verdict content for live UI
+    try {
+      const verdictArtifact = await readArtifact(topicId, runId, "verdict")
+      if (verdictArtifact?.scenarios_ranked) {
+        emit(topicId, {
+          type: "verdict_content",
+          headline: verdictArtifact.headline_assessment || "",
+          scenarios: verdictArtifact.scenarios_ranked.map((s: any) => ({ title: s.scenario_title, probability: s.probability })),
+        })
+      }
+    } catch { /* non-fatal */ }
 
     await createVersion(topicId, {
       label: "Initial analysis",
@@ -241,6 +265,12 @@ export async function runReanalysis(topicId: string): Promise<{ run_id: string; 
       (msg) => emit(topicId, { type: "progress", stage: "weight", pct: 0.5, msg })
     )
 
+    // Emit weight results for live UI
+    try {
+      const weightedParties = await Bun.file(join(getDataDir(), "topics", topicId, "parties.json")).json()
+      emit(topicId, { type: "weight_result", parties: weightedParties.map((p: any) => ({ name: p.name, weight: p.weight })) })
+    } catch { /* non-fatal */ }
+
     log.weight("Stage 3/6: WEIGHT CALCULATION complete")
     emit(topicId, { type: "stage_complete", stage: "weight" })
 
@@ -267,11 +297,16 @@ export async function runReanalysis(topicId: string): Promise<{ run_id: string; 
     const BATCH = 3
     for (let i = 0; i < experts.length; i += BATCH) {
       const batch = experts.slice(i, i + BATCH)
-      await Promise.all(batch.map(expert =>
-        runExpertAgent(topicId, runId, expert, sessionId, topic.models.expert_council,
+      await Promise.all(batch.map(async expert => {
+        await runExpertAgent(topicId, runId, expert, sessionId, topic.models.expert_council,
           (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: (i + 1) / experts.length, msg })
         )
-      ))
+        try {
+          const artifact = await readArtifact(topicId, runId, `expert_${expert.domain}`)
+          const summary = artifact?.scenarios_assessed?.[0]?.assessment?.slice(0, 200) || ""
+          emit(topicId, { type: "expert_assessment", expert: expert.name, domain: expert.domain, summary })
+        } catch { /* non-fatal */ }
+      }))
     }
 
     log.expert("Cross-expert deliberation round starting")
@@ -297,6 +332,18 @@ export async function runReanalysis(topicId: string): Promise<{ run_id: string; 
       topicId, runId, experts, sessionId, topic.models.verdict,
       (msg) => emit(topicId, { type: "progress", stage: "verdict", pct: 0.5, msg })
     )
+
+    // Emit verdict content for live UI
+    try {
+      const verdictArtifact = await readArtifact(topicId, runId, "verdict")
+      if (verdictArtifact?.scenarios_ranked) {
+        emit(topicId, {
+          type: "verdict_content",
+          headline: verdictArtifact.headline_assessment || "",
+          scenarios: verdictArtifact.scenarios_ranked.map((s: any) => ({ title: s.scenario_title, probability: s.probability })),
+        })
+      }
+    } catch { /* non-fatal */ }
 
     await createVersion(topicId, {
       label: `Re-analysis v${nextVersion}`,

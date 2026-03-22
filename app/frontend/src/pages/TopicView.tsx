@@ -59,6 +59,10 @@ export function TopicView() {
   const [approveLoading, setApproveLoading] = useState(false)
   const [analysisRunning, setAnalysisRunning] = useState(false)
   const [pipelineError, setPipelineError] = useState<string | null>(null)
+  const [forumTurns, setForumTurns] = useState<Record<string, unknown>[]>([])
+  const [expertAssessments, setExpertAssessments] = useState<{ expert: string; domain: string; summary: string }[]>([])
+  const [verdictContent, setVerdictContent] = useState<{ headline: string; scenarios: { title: string; probability: number }[] } | null>(null)
+  const [weightResults, setWeightResults] = useState<{ name: string; weight: number }[] | null>(null)
 
   const refreshTopic = useCallback(() => {
     if (!id) return
@@ -97,6 +101,14 @@ export function TopicView() {
     if (event.type === "progress") {
       setProgressMsg(event.msg)
       setLiveStage(event.stage)
+    } else if (event.type === "forum_turn") {
+      setForumTurns(prev => [...prev, event.turn])
+    } else if (event.type === "weight_result") {
+      setWeightResults(event.parties)
+    } else if (event.type === "expert_assessment") {
+      setExpertAssessments(prev => [...prev, { expert: event.expert, domain: event.domain, summary: event.summary }])
+    } else if (event.type === "verdict_content") {
+      setVerdictContent({ headline: event.headline, scenarios: event.scenarios })
     } else if (event.type === "stage_complete") {
       setCompletedStages(prev => new Set([...prev, event.stage]))
       if (event.stage === "verdict") {
@@ -153,6 +165,10 @@ export function TopicView() {
       setAnalysisRunning(true)
       setPipelineError(null)
       setCompletedStages(new Set())
+      setForumTurns([])
+      setExpertAssessments([])
+      setVerdictContent(null)
+      setWeightResults(null)
       setProgressMsg("Starting analysis (weight, forum, expert council, verdict)...")
       setActiveStage("forum")
       await api.pipeline.analyze(id)
@@ -171,6 +187,10 @@ export function TopicView() {
       setAnalysisRunning(true)
       setPipelineError(null)
       setCompletedStages(new Set())
+      setForumTurns([])
+      setExpertAssessments([])
+      setVerdictContent(null)
+      setWeightResults(null)
       setProgressMsg("Starting clean re-analysis...")
       setActiveStage("forum")
       await api.pipeline.reanalyze(id)
@@ -346,6 +366,10 @@ export function TopicView() {
               completedStages={completedStages}
               progressMsg={progressMsg}
               error={pipelineError}
+              forumTurns={forumTurns}
+              expertAssessments={expertAssessments}
+              verdictContent={verdictContent}
+              weightResults={weightResults}
             />
           ) : (
             <>
