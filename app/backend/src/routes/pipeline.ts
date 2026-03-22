@@ -26,17 +26,17 @@ function trackRun(topicId: string, run_id: string) {
 export const pipelineRouter = new Elysia({ prefix: "/api/topics" })
 
   // Gated: Discovery only → review_parties
-  .post("/:id/pipeline/discover", async ({ params, error }) => {
+  .post("/:id/pipeline/discover", async ({ params, set }) => {
     const topicId = params.id
     try {
       const topic = await getTopic(topicId)
       if (topic.status !== "draft" && topic.status !== "complete") {
-        return error(400, { message: `Cannot discover from status "${topic.status}"` })
+        set.status = 400; return { message: `Cannot discover from status "${topic.status}"` }
       }
-    } catch { return error(404, { message: "Topic not found" }) }
+    } catch { set.status = 404; return { message: "Topic not found" } }
 
     const conflict = guardRunning(topicId)
-    if (conflict) return error(409, { message: "Pipeline already running", ...conflict })
+    if (conflict) { set.status = 409; return { message: "Pipeline already running", ...conflict } }
 
     const { run_id, started_at } = trackRun(topicId, "discover")
 
@@ -48,17 +48,17 @@ export const pipelineRouter = new Elysia({ prefix: "/api/topics" })
   })
 
   // Gated: Enrichment only → review_enrichment
-  .post("/:id/pipeline/enrich", async ({ params, error }) => {
+  .post("/:id/pipeline/enrich", async ({ params, set }) => {
     const topicId = params.id
     try {
       const topic = await getTopic(topicId)
       if (topic.status !== "review_parties") {
-        return error(400, { message: `Cannot enrich from status "${topic.status}". Approve parties first.` })
+        set.status = 400; return { message: `Cannot enrich from status "${topic.status}". Approve parties first.` }
       }
-    } catch { return error(404, { message: "Topic not found" }) }
+    } catch { set.status = 404; return { message: "Topic not found" } }
 
     const conflict = guardRunning(topicId)
-    if (conflict) return error(409, { message: "Pipeline already running", ...conflict })
+    if (conflict) { set.status = 409; return { message: "Pipeline already running", ...conflict } }
 
     const { run_id, started_at } = trackRun(topicId, "enrich")
 
@@ -70,17 +70,17 @@ export const pipelineRouter = new Elysia({ prefix: "/api/topics" })
   })
 
   // Gated: Weight → Forum → Expert → Verdict (autonomous)
-  .post("/:id/pipeline/analyze", async ({ params, error }) => {
+  .post("/:id/pipeline/analyze", async ({ params, set }) => {
     const topicId = params.id
     try {
       const topic = await getTopic(topicId)
       if (topic.status !== "review_enrichment") {
-        return error(400, { message: `Cannot analyze from status "${topic.status}". Approve clues first.` })
+        set.status = 400; return { message: `Cannot analyze from status "${topic.status}". Approve clues first.` }
       }
-    } catch { return error(404, { message: "Topic not found" }) }
+    } catch { set.status = 404; return { message: "Topic not found" } }
 
     const conflict = guardRunning(topicId)
-    if (conflict) return error(409, { message: "Pipeline already running", ...conflict })
+    if (conflict) { set.status = 409; return { message: "Pipeline already running", ...conflict } }
 
     const { run_id, started_at } = trackRun(topicId, "analyze")
 
@@ -92,17 +92,17 @@ export const pipelineRouter = new Elysia({ prefix: "/api/topics" })
   })
 
   // Clean re-analysis: fresh Weight → Forum → Expert → Verdict with current data
-  .post("/:id/pipeline/reanalyze", async ({ params, error }) => {
+  .post("/:id/pipeline/reanalyze", async ({ params, set }) => {
     const topicId = params.id
     try {
       const topic = await getTopic(topicId)
-      if (topic.status !== "complete" && topic.status !== "stale" && topic.status !== "review_enrichment") {
-        return error(400, { message: `Cannot re-analyze from status "${topic.status}"` })
+      if (topic.status === "draft" || topic.status === "review_parties") {
+        set.status = 400; return { message: `Cannot re-analyze from status "${topic.status}" — need at least enriched clues` }
       }
-    } catch { return error(404, { message: "Topic not found" }) }
+    } catch { set.status = 404; return { message: "Topic not found" } }
 
     const conflict = guardRunning(topicId)
-    if (conflict) return error(409, { message: "Pipeline already running", ...conflict })
+    if (conflict) { set.status = 409; return { message: "Pipeline already running", ...conflict } }
 
     const { run_id, started_at } = trackRun(topicId, "reanalyze")
 
@@ -114,13 +114,13 @@ export const pipelineRouter = new Elysia({ prefix: "/api/topics" })
   })
 
   // Full auto-run (skips gates — chains all stages)
-  .post("/:id/pipeline/run", async ({ params, error }) => {
+  .post("/:id/pipeline/run", async ({ params, set }) => {
     const topicId = params.id
     try { await getTopic(topicId) }
-    catch { return error(404, { message: "Topic not found" }) }
+    catch { set.status = 404; return { message: "Topic not found" } }
 
     const conflict = guardRunning(topicId)
-    if (conflict) return error(409, { message: "Pipeline already running", ...conflict })
+    if (conflict) { set.status = 409; return { message: "Pipeline already running", ...conflict } }
 
     const { run_id, started_at } = trackRun(topicId, "initial-v1")
 
@@ -132,17 +132,17 @@ export const pipelineRouter = new Elysia({ prefix: "/api/topics" })
   })
 
   // Delta update (stale topics)
-  .post("/:id/pipeline/update", async ({ params, error }) => {
+  .post("/:id/pipeline/update", async ({ params, set }) => {
     const topicId = params.id
     try {
       const topic = await getTopic(topicId)
       if (topic.status !== "stale") {
-        return error(400, { message: "Topic is not stale" })
+        set.status = 400; return { message: "Topic is not stale" }
       }
-    } catch { return error(404, { message: "Topic not found" }) }
+    } catch { set.status = 404; return { message: "Topic not found" } }
 
     const conflict = guardRunning(topicId)
-    if (conflict) return error(409, { message: "Pipeline already running", ...conflict })
+    if (conflict) { set.status = 409; return { message: "Pipeline already running", ...conflict } }
 
     const run_id = `delta-${Date.now().toString(36)}`
     const { started_at } = trackRun(topicId, run_id)
