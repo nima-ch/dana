@@ -1,4 +1,5 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { budgetOutput } from "../llm/tokenBudget"
 import { getScenarioList } from "../tools/internal/getForumData"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
@@ -62,6 +63,7 @@ Clues cited: ${target.clues_cited.join(", ")}
 
 Stress-test this scenario. Produce ≥3 genuine falsification arguments.`
 
+  const daOutputBudget = budgetOutput(model, SYSTEM + prompt, { min: 2000, max: 6000 })
   for (let attempt = 0; attempt < 3; attempt++) {
     const raw = await chatCompletionText({
       model,
@@ -70,7 +72,7 @@ Stress-test this scenario. Produce ≥3 genuine falsification arguments.`
         { role: "user", content: attempt === 0 ? prompt : `${prompt}\n\nOutput ONLY valid JSON. Min 3 arguments.` },
       ],
       temperature: 0.4,
-      max_tokens: 4000,
+      max_tokens: daOutputBudget,
     })
 
     try {

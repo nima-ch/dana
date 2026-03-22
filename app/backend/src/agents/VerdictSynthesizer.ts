@@ -1,4 +1,5 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { budgetOutput, fitContext } from "../llm/tokenBudget"
 import { log } from "../utils/logger"
 import { readArtifact, writeArtifact } from "../tools/internal/artifactStore"
 import { getScenarioSummary } from "../tools/internal/getForumData"
@@ -159,9 +160,17 @@ export async function runVerdictSynthesizer(
     ? scenarioSummary.scenarios.map(s => `${s.id}: ${s.title} (conditions: ${s.required_conditions.join(", ")})`).join("\n")
     : "No scenario summary available"
 
-  const prompt = `SCENARIOS:\n${scenarioStr}\n\nAGGREGATED PROBABILITIES:\n${JSON.stringify(avgProbs, null, 2)}\n\nEXPERT ASSESSMENTS:\n${expertSummary}\n\nWEIGHT CHALLENGE DECISIONS:\n${JSON.stringify(weightDecisions, null, 2)}\n\nSynthesize the final verdict.`
+  const prompt = fitContext([
+    { content: `SCENARIOS:\n${scenarioStr}`, priority: 9, label: "scenarios" },
+    { content: `AGGREGATED PROBABILITIES:\n${JSON.stringify(avgProbs, null, 2)}`, priority: 10, label: "probabilities" },
+    { content: `EXPERT ASSESSMENTS:\n${expertSummary}`, priority: 8, label: "expert assessments" },
+    { content: `WEIGHT CHALLENGE DECISIONS:\n${JSON.stringify(weightDecisions, null, 2)}`, priority: 7, label: "weight challenges" },
+    { content: "Synthesize the final verdict.", priority: 10, label: "instruction" },
+  ], 80_000)
 
   onProgress?.("Verdict: synthesizing final assessment")
+
+  const verdictOutputBudget = budgetOutput(model, VERDICT_SYSTEM + prompt, { min: 4000, max: 12000 })
 
   let verdict: Omit<FinalVerdict, "synthesized_at" | "weight_challenge_decisions"> | null = null
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -172,7 +181,7 @@ export async function runVerdictSynthesizer(
         { role: "user", content: prompt },
       ],
       temperature: 0.3,
-      max_tokens: 8000,
+      max_tokens: verdictOutputBudget,
     })
     try {
       const match = raw.match(/\{[\s\S]+\}/)

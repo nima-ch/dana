@@ -1,4 +1,5 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { budgetOutput } from "../llm/tokenBudget"
 import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { processClue } from "../tools/processing/clueProcessor"
@@ -125,6 +126,7 @@ export async function runDiscoveryAgent(
   const prompt = `TOPIC: ${title}\n\nDESCRIPTION: ${description}\n\nIdentify all involved parties and generate search queries.`
 
   // Step A: get parties (array output — smaller, less likely to truncate)
+  const discoveryOutputBudget = budgetOutput(model, PARTIES_SYSTEM + prompt, { min: 4000, max: 10000 })
   const parties = await parseWithRetry<Party[]>(
     async (hint) => chatCompletionText({
       model,
@@ -133,7 +135,7 @@ export async function runDiscoveryAgent(
         { role: "user", content: prompt + (hint ? `\n\n${hint}` : "") },
       ],
       temperature: 0.3,
-      max_tokens: 8000,
+      max_tokens: discoveryOutputBudget,
     }),
     (raw) => {
       const match = raw.match(/\[[\s\S]+\]/)

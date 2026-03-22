@@ -1,4 +1,5 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { budgetOutput } from "../llm/tokenBudget"
 import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { log } from "../utils/logger"
@@ -95,7 +96,7 @@ Generate a complete party profile for "${partyName}". Output ONLY valid JSON, no
       },
     ],
     temperature: 0.3,
-    max_tokens: 4000,
+    max_tokens: budgetOutput(model, research + topicTitle, { min: 2000, max: 5000 }),
   })
 
   const match = raw.match(/\{[\s\S]+\}/)
@@ -152,7 +153,7 @@ Update the party profile based on the feedback. Output ONLY valid JSON, no markd
       },
     ],
     temperature: 0.3,
-    max_tokens: 4000,
+    max_tokens: budgetOutput(model, JSON.stringify(currentParty) + research + feedback, { min: 2000, max: 5000 }),
   })
 
   const match = raw.match(/\{[\s\S]+\}/)
@@ -208,7 +209,7 @@ Generate a complete profile for each sub-party. Output ONLY a valid JSON array, 
       },
     ],
     temperature: 0.3,
-    max_tokens: 8000,
+    max_tokens: budgetOutput(model, JSON.stringify(sourceParty) + research, { min: 3000, max: Math.max(splitNames.length * 2000, 6000) }),
   })
 
   const match = raw.match(/\[[\s\S]+\]/)
@@ -258,7 +259,7 @@ Synthesize a single party profile. Output ONLY valid JSON, no markdown fences.`,
       },
     ],
     temperature: 0.3,
-    max_tokens: 4000,
+    max_tokens: budgetOutput(model, sources.map(s => JSON.stringify(s)).join(""), { min: 2000, max: 5000 }),
   })
 
   const match = raw.match(/\{[\s\S]+\}/)

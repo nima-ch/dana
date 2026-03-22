@@ -1,4 +1,5 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { budgetOutput } from "../llm/tokenBudget"
 import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { log } from "../utils/logger"
@@ -172,7 +173,7 @@ ${chunks[i]}`,
         },
       ],
       temperature: 0.2,
-      max_tokens: 8000,
+      max_tokens: budgetOutput(model, topicContext + chunks[i], { min: 4000, max: 10000 }),
     })
 
     try {
@@ -279,7 +280,7 @@ Update the clue. Output ONLY valid JSON.`,
       },
     ],
     temperature: 0.2,
-    max_tokens: 2000,
+    max_tokens: budgetOutput(model, topicTitle + JSON.stringify(currentClue) + feedback + research, { min: 1000, max: 3000 }),
   })
 
   const match = raw.match(/\{[\s\S]+\}/)
@@ -410,7 +411,7 @@ Extract all relevant factual claims as structured clues.`,
       },
     ],
     temperature: 0.2,
-    max_tokens: 8000,
+    max_tokens: budgetOutput(model, partyList + combinedResearch + query, { min: 4000, max: 10000 }),
   })
 
   try {

@@ -1,4 +1,5 @@
 import { log } from "../utils/logger"
+import { budgetOutput, fitContext } from "../llm/tokenBudget"
 import { runRepresentativeAgent } from "./RepresentativeAgent"
 import { runDevilsAdvocate } from "./DevilsAdvocate"
 import { readArtifact, writeArtifact } from "../tools/internal/artifactStore"
@@ -179,14 +180,20 @@ export async function runForumOrchestrator(
 
   let scenarios: ForumScenario[] = []
   for (let attempt = 0; attempt < 3; attempt++) {
+    const scenarioInput = fitContext([
+      { content: `CONTEXT:\n${contextStr}`, priority: 5, label: "context" },
+      { content: `FORUM TURNS:\n${turnsStr}`, priority: 8, label: "forum turns" },
+      { content: "Synthesize distinct scenarios.", priority: 10, label: "instruction" },
+    ], 80_000)
+    const scenarioOutputBudget = budgetOutput(model, SCENARIO_SYSTEM + scenarioInput, { min: 3000, max: 8000 })
     const raw = await chatCompletionText({
       model,
       messages: [
         { role: "system", content: SCENARIO_SYSTEM },
-        { role: "user", content: `CONTEXT:\n${contextStr}\n\nFORUM TURNS:\n${turnsStr}\n\nSynthesize distinct scenarios.` },
+        { role: "user", content: scenarioInput },
       ],
       temperature: 0.3,
-      max_tokens: 6000,
+      max_tokens: scenarioOutputBudget,
     })
     try {
       const match = raw.match(/\[[\s\S]+\]/)

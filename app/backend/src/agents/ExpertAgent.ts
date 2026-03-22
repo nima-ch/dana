@@ -1,4 +1,5 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { budgetOutput, fitContext } from "../llm/tokenBudget"
 import { log } from "../utils/logger"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
 import { getClue } from "../tools/internal/getClue"
@@ -204,15 +205,17 @@ export async function runExpertAgent(
   const parties = await partiesFile.json() as { id: string; name: string; weight: number; weight_factors: Record<string, number> }[]
   const partyWeightStr = parties.map(p => `${p.name} (${p.id}): total=${p.weight}, factors=${JSON.stringify(p.weight_factors)}`).join("\n")
 
-  const userPrompt = [
-    `EXPERT ROLE: ${expert.persona_prompt}`,
-    `\nCONTEXT:\n${contextStr}`,
-    `\nSCENARIO SUMMARY:\n${JSON.stringify(scenarioSummary, null, 2)}`,
-    `\nKEY CLUE DETAILS:\n${clueDetails.join("\n")}`,
-    `\nPARTY WEIGHTS:\n${partyWeightStr}`,
-    analogueContext,
-    `\nProduce your expert assessment as JSON.`,
-  ].join("\n")
+  const userPrompt = fitContext([
+    { content: `EXPERT ROLE: ${expert.persona_prompt}`, priority: 10, label: "expert role" },
+    { content: `SCENARIO SUMMARY:\n${JSON.stringify(scenarioSummary, null, 2)}`, priority: 9, label: "scenarios" },
+    { content: `KEY CLUE DETAILS:\n${clueDetails.join("\n")}`, priority: 8, label: "clue details" },
+    { content: `PARTY WEIGHTS:\n${partyWeightStr}`, priority: 6, label: "party weights" },
+    { content: `CONTEXT:\n${contextStr}`, priority: 5, label: "clue context" },
+    ...(analogueContext ? [{ content: analogueContext, priority: 4, label: "analogues" }] : []),
+    { content: "\nProduce your expert assessment as JSON.", priority: 10, label: "instruction" },
+  ], 80_000)
+
+  const expertOutputBudget = budgetOutput(model, EXPERT_SYSTEM + userPrompt, { min: 4000, max: 12000 })
 
   let artifact: Omit<ExpertArtifact, "expert_id" | "expert_name" | "domain"> | null = null
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -223,7 +226,7 @@ export async function runExpertAgent(
         { role: "user", content: userPrompt },
       ],
       temperature: 0.4,
-      max_tokens: 8000,
+      max_tokens: expertOutputBudget,
     })
     try {
       const match = raw.match(/\{[\s\S]+\}/)

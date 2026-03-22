@@ -1,4 +1,5 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { budgetOutput, fitContext } from "../llm/tokenBudget"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
 import { log } from "../utils/logger"
@@ -105,7 +106,14 @@ export async function runWeightCalculator(
 
   // Score weights
   const partyList = parties.map(p => ({ id: p.id, name: p.name, type: p.type, agenda: p.agenda }))
-  const prompt = `TOPIC: ${title}\n\nCONTEXT:\n${contextStr}\n\nPARTIES TO SCORE:\n${JSON.stringify(partyList, null, 2)}`
+  const fittedContext = fitContext([
+    { content: `TOPIC: ${title}`, priority: 10, label: "topic" },
+    { content: `PARTIES TO SCORE:\n${JSON.stringify(partyList, null, 2)}`, priority: 9, label: "parties" },
+    { content: `CONTEXT:\n${contextStr}`, priority: 5, label: "clue context" },
+  ], 50_000)
+  const prompt = fittedContext
+
+  const outputBudget = budgetOutput(model, WEIGHT_SYSTEM + prompt, { min: 2000, max: Math.max(parties.length * 350, 3000) })
 
   let weightScores: { party_id: string; weight: number; weight_factors: Party["weight_factors"] }[] = []
 
@@ -117,7 +125,7 @@ export async function runWeightCalculator(
         { role: "user", content: attempt === 0 ? prompt : `${prompt}\n\nOutput ONLY valid JSON array. No trailing commas.` },
       ],
       temperature: 0.2,
-      max_tokens: 4000,
+      max_tokens: outputBudget,
     })
     try {
       const match = raw.match(/\[[\s\S]+\]/)
