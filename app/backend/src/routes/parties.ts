@@ -64,3 +64,64 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
       (parties) => parties.filter(p => p.id !== params.partyId), [])
     return { success: true }
   })
+
+  .post("/merge", async ({ params, body, error }) => {
+    const b = body as { source_ids: string[]; target: Partial<Party> }
+    if (!b.source_ids?.length || b.source_ids.length < 2) {
+      return error(400, { message: "Need at least 2 source_ids to merge" })
+    }
+    if (!b.target?.name) return error(400, { message: "target.name is required" })
+
+    const topicId = params.id
+    const targetId = b.target.id || b.target.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 30)
+    let merged: Party | null = null
+
+    await queuedWrite<Party[]>(topicId, partiesPath(topicId), (parties) => {
+      const sources = parties.filter(p => b.source_ids.includes(p.id))
+      if (sources.length < 2) throw new Error("Not enough matching source parties found")
+
+      // Merge: combine means, circles, vulnerabilities from all sources
+      const allMeans = [...new Set(sources.flatMap(s => s.means))]
+      const allVisible = [...new Set(sources.flatMap(s => s.circle?.visible ?? []))]
+      const allShadow = [...new Set(sources.flatMap(s => s.circle?.shadow ?? []))]
+      const allVulns = [...new Set(sources.flatMap(s => s.vulnerabilities))]
+      const avgWeight = Math.round(sources.reduce((s, p) => s + p.weight, 0) / sources.length)
+
+      merged = {
+        id: targetId,
+        name: b.target.name!,
+        type: b.target.type ?? sources[0].type,
+        description: b.target.description ?? sources.map(s => s.description).join(" "),
+        weight: b.target.weight ?? avgWeight,
+        weight_factors: b.target.weight_factors ?? sources[0].weight_factors,
+        agenda: b.target.agenda ?? sources.map(s => s.agenda).filter(Boolean).join("; "),
+        means: b.target.means ?? allMeans,
+        circle: b.target.circle ?? { visible: allVisible, shadow: allShadow },
+        stance: b.target.stance ?? sources[0].stance,
+        vulnerabilities: b.target.vulnerabilities ?? allVulns,
+        auto_discovered: false,
+        user_verified: true,
+      }
+
+      return [...parties.filter(p => !b.source_ids.includes(p.id)), merged!]
+    }, [])
+
+    // Update clue party_relevance references
+    const cluesFilePath = join(getDataDir(), "topics", topicId, "clues.json")
+    const cluesFile = Bun.file(cluesFilePath)
+    if (await cluesFile.exists()) {
+      await queuedWrite<any[]>(topicId, cluesFilePath, (clues) => {
+        return clues.map((clue: any) => ({
+          ...clue,
+          versions: clue.versions.map((v: any) => ({
+            ...v,
+            party_relevance: v.party_relevance.map((pr: string) =>
+              b.source_ids.includes(pr) ? targetId : pr
+            ).filter((pr: string, i: number, arr: string[]) => arr.indexOf(pr) === i),
+          })),
+        }))
+      }, [])
+    }
+
+    return merged
+  }, { body: t.Record(t.String(), t.Any()) })

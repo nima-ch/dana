@@ -10,7 +10,7 @@ export interface Topic {
   description: string
   created_at: string
   updated_at: string
-  status: "draft" | "discovery" | "enrichment" | "forum" | "expert_council" | "verdict" | "complete" | "stale"
+  status: "draft" | "discovery" | "review_parties" | "enrichment" | "review_enrichment" | "forum" | "expert_council" | "verdict" | "complete" | "stale"
   current_version: number
   models: {
     data_gathering: string

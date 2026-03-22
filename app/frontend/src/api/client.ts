@@ -43,6 +43,18 @@ export const api = {
     get: (topicId: string) => request<any>(`/topics/${topicId}/verdict`),
   },
   pipeline: {
+    discover: (topicId: string) =>
+      request<{ run_id: string; started_at: string; status: string }>(
+        `/topics/${topicId}/pipeline/discover`, { method: "POST" }
+      ),
+    enrich: (topicId: string) =>
+      request<{ run_id: string; started_at: string; status: string }>(
+        `/topics/${topicId}/pipeline/enrich`, { method: "POST" }
+      ),
+    analyze: (topicId: string) =>
+      request<{ run_id: string; started_at: string; status: string }>(
+        `/topics/${topicId}/pipeline/analyze`, { method: "POST" }
+      ),
     run: (topicId: string) =>
       request<{ run_id: string; started_at: string; status: string }>(
         `/topics/${topicId}/pipeline/run`, { method: "POST" }
@@ -55,6 +67,30 @@ export const api = {
       request<{ running: boolean; run_id?: string; started_at?: string }>(
         `/topics/${topicId}/pipeline/status`
       ),
+  },
+  parties: {
+    list: (topicId: string) => request<any[]>(`/topics/${topicId}/parties`),
+    update: (topicId: string, partyId: string, data: Record<string, unknown>) =>
+      request<any>(`/topics/${topicId}/parties/${partyId}`, { method: "PUT", body: JSON.stringify(data) }),
+    delete: (topicId: string, partyId: string) =>
+      request<{ success: boolean }>(`/topics/${topicId}/parties/${partyId}`, { method: "DELETE" }),
+    add: (topicId: string, data: Record<string, unknown>) =>
+      request<any>(`/topics/${topicId}/parties`, { method: "POST", body: JSON.stringify(data) }),
+    merge: (topicId: string, sourceIds: string[], target: Record<string, unknown>) =>
+      request<any>(`/topics/${topicId}/parties/merge`, {
+        method: "POST", body: JSON.stringify({ source_ids: sourceIds, target }),
+      }),
+  },
+  clues: {
+    list: (topicId: string) => request<any[]>(`/topics/${topicId}/clues`),
+    update: (topicId: string, clueId: string, data: Record<string, unknown>) =>
+      request<any>(`/topics/${topicId}/clues/${clueId}`, { method: "PUT", body: JSON.stringify(data) }),
+    delete: (topicId: string, clueId: string) =>
+      request<{ success: boolean }>(`/topics/${topicId}/clues/${clueId}`, { method: "DELETE" }),
+    bulkImport: (topicId: string, type: "text" | "urls", content: string) =>
+      request<{ imported: number; clues: any[] }>(`/topics/${topicId}/clues/bulk`, {
+        method: "POST", body: JSON.stringify({ type, content }),
+      }),
   },
   settings: {
     get: () => request<{ default_models: Record<string, string> }>("/settings"),

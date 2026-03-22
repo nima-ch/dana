@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
+import { api } from "../../api/client"
+import { ConfirmationBanner } from "./ConfirmationBanner"
 
 interface ClueVersion {
   v: number
@@ -26,17 +28,46 @@ interface Clue {
   versions: ClueVersion[]
 }
 
+const BIAS_OPTIONS = [
+  "state_media", "propaganda", "selective_reporting", "unverified_source",
+  "editorial_bias", "conflict_of_interest", "single_source", "outdated",
+]
+
 function credColor(score: number) {
   if (score >= 80) return "text-green-700 bg-green-50 border-green-200"
   if (score >= 50) return "text-yellow-700 bg-yellow-50 border-yellow-200"
   return "text-red-700 bg-red-50 border-red-200"
 }
 
-function ClueCard({ clue, diffVersion }: { clue: Clue; diffVersion?: number }) {
+function ClueCard({ clue, onUpdate, onDelete }: {
+  clue: Clue
+  onUpdate: (id: string, data: Record<string, unknown>) => void
+  onDelete: (id: string) => void
+}) {
   const [showHistory, setShowHistory] = useState(false)
+  const [editing, setEditing] = useState(false)
   const cur = clue.versions.find(v => v.v === clue.current)!
-  const isNew = diffVersion !== undefined && !clue.versions.some(v => v.v <= (diffVersion ?? 0))
-  const isUpdated = diffVersion !== undefined && !isNew && clue.current > (diffVersion ?? 0)
+
+  const [draft, setDraft] = useState({
+    credibility_score: cur.source_credibility.score,
+    bias_flags: [...cur.source_credibility.bias_flags],
+    relevance_score: cur.relevance_score,
+    bias_corrected_summary: cur.bias_corrected_summary,
+  })
+
+  const handleSave = () => {
+    onUpdate(clue.id, draft)
+    setEditing(false)
+  }
+
+  const toggleBias = (flag: string) => {
+    setDraft(d => ({
+      ...d,
+      bias_flags: d.bias_flags.includes(flag)
+        ? d.bias_flags.filter(f => f !== flag)
+        : [...d.bias_flags, flag],
+    }))
+  }
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-4 space-y-2">
@@ -44,8 +75,6 @@ function ClueCard({ clue, diffVersion }: { clue: Clue; diffVersion?: number }) {
         <div className="flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-medium text-gray-900">{cur.title}</span>
-            {isNew && <span className="text-xs bg-blue-100 text-blue-700 px-1.5 rounded">New</span>}
-            {isUpdated && <span className="text-xs bg-orange-100 text-orange-700 px-1.5 rounded">Updated</span>}
           </div>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             <span className="text-xs text-gray-400">{cur.timeline_date}</span>
@@ -61,32 +90,78 @@ function ClueCard({ clue, diffVersion }: { clue: Clue; diffVersion?: number }) {
             {cur.source_credibility.score}
           </span>
           <span className="text-xs text-gray-400">v{clue.current}</span>
+          {!editing && (
+            <button className="text-xs text-blue-400 hover:text-blue-600" onClick={() => setEditing(true)}>edit</button>
+          )}
+          <button className="text-xs text-red-400 hover:text-red-600" onClick={() => onDelete(clue.id)}>✕</button>
           {clue.versions.length > 1 && (
-            <button
-              className="text-xs text-blue-500 hover:underline"
-              onClick={() => setShowHistory(h => !h)}
-            >
+            <button className="text-xs text-blue-500 hover:underline" onClick={() => setShowHistory(h => !h)}>
               {showHistory ? "hide" : "history"}
             </button>
           )}
         </div>
       </div>
 
-      {cur.source_credibility.bias_flags.length > 0 && (
-        <div className="flex gap-1 flex-wrap">
-          {cur.source_credibility.bias_flags.map(f => (
-            <span key={f} className="text-xs bg-red-50 text-red-600 border border-red-100 px-1.5 rounded">{f}</span>
-          ))}
+      {editing ? (
+        <div className="space-y-3 border-t border-gray-100 pt-2">
+          {/* Credibility slider */}
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">Credibility: {draft.credibility_score}</label>
+            <input type="range" min={0} max={100} value={draft.credibility_score}
+              className="w-full h-1.5 accent-blue-600"
+              onChange={e => setDraft(d => ({ ...d, credibility_score: parseInt(e.target.value) }))} />
+          </div>
+          {/* Relevance slider */}
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">Relevance: {draft.relevance_score}</label>
+            <input type="range" min={0} max={100} value={draft.relevance_score}
+              className="w-full h-1.5 accent-blue-600"
+              onChange={e => setDraft(d => ({ ...d, relevance_score: parseInt(e.target.value) }))} />
+          </div>
+          {/* Bias flags */}
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">Bias Flags</label>
+            <div className="flex gap-1 flex-wrap">
+              {BIAS_OPTIONS.map(flag => (
+                <button key={flag}
+                  className={`text-xs px-2 py-0.5 rounded border ${draft.bias_flags.includes(flag)
+                    ? "bg-red-100 text-red-700 border-red-300" : "bg-gray-50 text-gray-500 border-gray-200"}`}
+                  onClick={() => toggleBias(flag)}
+                >
+                  {flag.replace(/_/g, " ")}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Summary edit */}
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">Summary</label>
+            <textarea className="w-full text-xs border border-gray-300 rounded px-2 py-1 h-16"
+              value={draft.bias_corrected_summary}
+              onChange={e => setDraft(d => ({ ...d, bias_corrected_summary: e.target.value }))} />
+          </div>
+          <div className="flex gap-2">
+            <button className="text-xs px-3 py-1 bg-blue-600 text-white rounded" onClick={handleSave}>Save</button>
+            <button className="text-xs text-gray-400" onClick={() => setEditing(false)}>Cancel</button>
+          </div>
         </div>
-      )}
-
-      <p className="text-xs text-gray-600 leading-relaxed">{cur.bias_corrected_summary}</p>
-
-      {cur.source_credibility.origin_source.outlet && (
-        <p className="text-xs text-gray-400">
-          Origin: {cur.source_credibility.origin_source.outlet}
-          {cur.source_credibility.origin_source.is_republication && " (republication)"}
-        </p>
+      ) : (
+        <>
+          {cur.source_credibility.bias_flags.length > 0 && (
+            <div className="flex gap-1 flex-wrap">
+              {cur.source_credibility.bias_flags.map(f => (
+                <span key={f} className="text-xs bg-red-50 text-red-600 border border-red-100 px-1.5 rounded">{f}</span>
+              ))}
+            </div>
+          )}
+          <p className="text-xs text-gray-600 leading-relaxed">{cur.bias_corrected_summary}</p>
+          {cur.source_credibility.origin_source?.outlet && (
+            <p className="text-xs text-gray-400">
+              Origin: {cur.source_credibility.origin_source.outlet}
+              {cur.source_credibility.origin_source.is_republication && " (republication)"}
+            </p>
+          )}
+        </>
       )}
 
       {showHistory && (
@@ -102,17 +177,116 @@ function ClueCard({ clue, diffVersion }: { clue: Clue; diffVersion?: number }) {
   )
 }
 
-export function CluesPanel({ topicId }: { topicId: string }) {
+// Bulk import modal
+function BulkImportModal({ topicId, onClose, onImported }: {
+  topicId: string
+  onClose: () => void
+  onImported: () => void
+}) {
+  const [tab, setTab] = useState<"text" | "urls">("text")
+  const [content, setContent] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<{ imported: number } | null>(null)
+
+  const handleImport = async () => {
+    if (!content.trim()) return
+    setLoading(true)
+    try {
+      const res = await api.clues.bulkImport(topicId, tab, content)
+      setResult(res)
+      onImported()
+    } catch (e) {
+      setResult({ imported: -1 })
+    }
+    setLoading(false)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 p-5 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-gray-800">Bulk Import Clues</h3>
+          <button className="text-gray-400 hover:text-gray-600" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="flex gap-1 border-b border-gray-200">
+          <button
+            className={`text-xs px-3 py-2 ${tab === "text" ? "border-b-2 border-blue-600 text-blue-600" : "text-gray-500"}`}
+            onClick={() => setTab("text")}
+          >
+            Paste Text
+          </button>
+          <button
+            className={`text-xs px-3 py-2 ${tab === "urls" ? "border-b-2 border-blue-600 text-blue-600" : "text-gray-500"}`}
+            onClick={() => setTab("urls")}
+          >
+            Paste URLs
+          </button>
+        </div>
+
+        <textarea
+          className="w-full text-xs border border-gray-300 rounded px-3 py-2 h-40 font-mono"
+          placeholder={tab === "text"
+            ? "Paste a news article, report, or any text. The system will extract factual claims as clues..."
+            : "Paste one URL per line. Each will be fetched and processed as a clue..."
+          }
+          value={content}
+          onChange={e => setContent(e.target.value)}
+        />
+
+        {result && (
+          <p className={`text-xs ${result.imported >= 0 ? "text-green-600" : "text-red-600"}`}>
+            {result.imported >= 0 ? `Imported ${result.imported} clue(s)` : "Import failed — check content and try again"}
+          </p>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button className="text-xs text-gray-400" onClick={onClose}>Close</button>
+          <button
+            className="text-xs px-4 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+            onClick={handleImport}
+            disabled={loading || !content.trim()}
+          >
+            {loading ? "Processing..." : tab === "text" ? "Extract Clues" : "Fetch & Process"}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+interface CluesPanelProps {
+  topicId: string
+  status: string
+  onApprove?: () => void
+  approveLoading?: boolean
+}
+
+export function CluesPanel({ topicId, status, onApprove, approveLoading }: CluesPanelProps) {
   const [clues, setClues] = useState<Clue[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState({ party: "", domain: "", type: "" })
+  const [showBulkImport, setShowBulkImport] = useState(false)
 
-  useEffect(() => {
-    fetch(`/api/topics/${topicId}/clues`)
-      .then(r => r.json())
+  const reviewMode = status === "review_enrichment"
+
+  const load = useCallback(() => {
+    api.clues.list(topicId)
       .then(d => { setClues(d); setLoading(false) })
       .catch(() => setLoading(false))
   }, [topicId])
+
+  useEffect(load, [load])
+
+  const handleUpdate = async (id: string, data: Record<string, unknown>) => {
+    const updated = await api.clues.update(topicId, id, data)
+    setClues(cs => cs.map(c => c.id === id ? updated : c))
+  }
+
+  const handleDelete = async (id: string) => {
+    await api.clues.delete(topicId, id)
+    setClues(cs => cs.filter(c => c.id !== id))
+  }
 
   const filtered = clues.filter(clue => {
     const cur = clue.versions.find(v => v.v === clue.current)!
@@ -126,45 +300,50 @@ export function CluesPanel({ topicId }: { topicId: string }) {
   const allDomains = [...new Set(clues.flatMap(c => c.versions.find(v => v.v === c.current)?.domain_tags ?? []))]
   const allTypes = [...new Set(clues.map(c => c.versions.find(v => v.v === c.current)?.clue_type ?? ""))]
 
-  if (loading) return <div className="text-gray-400 text-sm text-center py-8">Loading clues…</div>
+  if (loading) return <div className="text-gray-400 text-sm text-center py-8">Loading clues...</div>
 
   return (
     <div className="space-y-4">
+      {reviewMode && onApprove && (
+        <ConfirmationBanner
+          message={`${clues.length} clues gathered. Review, edit, or add more before running the forum.`}
+          detail="Adjust credibility scores, flag biases, import additional sources, or remove irrelevant clues."
+          actionLabel="Approve & Run Analysis"
+          onConfirm={onApprove}
+          loading={approveLoading}
+        />
+      )}
+
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-gray-700">Clues ({filtered.length})</h2>
+        <button
+          className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+          onClick={() => setShowBulkImport(true)}
+        >
+          + Bulk Import
+        </button>
       </div>
 
       {/* Filters */}
       <div className="flex gap-2 flex-wrap">
-        <select
-          className="text-xs border border-gray-200 rounded px-2 py-1"
-          value={filter.party}
-          onChange={e => setFilter(f => ({ ...f, party: e.target.value }))}
-        >
+        <select className="text-xs border border-gray-200 rounded px-2 py-1" value={filter.party}
+          onChange={e => setFilter(f => ({ ...f, party: e.target.value }))}>
           <option value="">All parties</option>
           {allParties.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
-        <select
-          className="text-xs border border-gray-200 rounded px-2 py-1"
-          value={filter.domain}
-          onChange={e => setFilter(f => ({ ...f, domain: e.target.value }))}
-        >
+        <select className="text-xs border border-gray-200 rounded px-2 py-1" value={filter.domain}
+          onChange={e => setFilter(f => ({ ...f, domain: e.target.value }))}>
           <option value="">All domains</option>
           {allDomains.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
-        <select
-          className="text-xs border border-gray-200 rounded px-2 py-1"
-          value={filter.type}
-          onChange={e => setFilter(f => ({ ...f, type: e.target.value }))}
-        >
+        <select className="text-xs border border-gray-200 rounded px-2 py-1" value={filter.type}
+          onChange={e => setFilter(f => ({ ...f, type: e.target.value }))}>
           <option value="">All types</option>
           {allTypes.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
         {(filter.party || filter.domain || filter.type) && (
-          <button
-            className="text-xs text-gray-400 hover:text-gray-600"
-            onClick={() => setFilter({ party: "", domain: "", type: "" })}
-          >
+          <button className="text-xs text-gray-400 hover:text-gray-600"
+            onClick={() => setFilter({ party: "", domain: "", type: "" })}>
             clear filters
           </button>
         )}
@@ -174,8 +353,18 @@ export function CluesPanel({ topicId }: { topicId: string }) {
         <div className="text-gray-400 text-sm text-center py-8">No clues match the current filters.</div>
       ) : (
         <div className="space-y-3">
-          {filtered.map(clue => <ClueCard key={clue.id} clue={clue} />)}
+          {filtered.map(clue => (
+            <ClueCard key={clue.id} clue={clue} onUpdate={handleUpdate} onDelete={handleDelete} />
+          ))}
         </div>
+      )}
+
+      {showBulkImport && (
+        <BulkImportModal
+          topicId={topicId}
+          onClose={() => setShowBulkImport(false)}
+          onImported={load}
+        />
       )}
     </div>
   )

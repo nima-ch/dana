@@ -24,9 +24,21 @@ const STAGES: { key: Stage; label: string }[] = [
 const STAGE_ORDER: Stage[] = ["discovery", "enrichment", "forum", "expert_council", "verdict"]
 
 function stageIndex(status: string): number {
-  const idx = STAGE_ORDER.indexOf(status as Stage)
+  if (status === "review_parties") return 1
+  if (status === "review_enrichment") return 2
   if (status === "complete" || status === "stale") return STAGE_ORDER.length
-  return idx
+  const idx = STAGE_ORDER.indexOf(status as Stage)
+  return idx >= 0 ? idx : 0
+}
+
+// Map status to which panel should be active
+function defaultStageForStatus(status: string): Stage {
+  if (status === "review_parties") return "discovery"
+  if (status === "review_enrichment") return "enrichment"
+  if (status === "forum") return "forum"
+  if (status === "expert_council") return "expert_council"
+  if (status === "verdict" || status === "complete" || status === "stale") return "verdict"
+  return "discovery"
 }
 
 export function TopicView() {
@@ -43,10 +55,15 @@ export function TopicView() {
   const [states, setStates] = useState<{ version: number; label: string; created_at: string; trigger: string }[]>([])
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [approveLoading, setApproveLoading] = useState(false)
 
   const refreshTopic = useCallback(() => {
     if (!id) return
-    api.topics.get(id).then(setTopic).catch(() => {})
+    api.topics.get(id).then(t => {
+      setTopic(t)
+      // Auto-navigate to the right panel when status changes
+      setActiveStage(defaultStageForStatus(t.status))
+    }).catch(() => {})
     fetch(`/api/topics/${id}/states`)
       .then(r => r.json())
       .then((s: any[]) => setStates(s))
@@ -56,15 +73,17 @@ export function TopicView() {
   useEffect(() => {
     if (!id) return
     api.topics.get(id)
-      .then(t => { setTopic(t); setLoading(false) })
+      .then(t => {
+        setTopic(t)
+        setActiveStage(defaultStageForStatus(t.status))
+        setLoading(false)
+      })
       .catch(e => { setError(String(e)); setLoading(false) })
 
-    // Check if pipeline is already running
     api.pipeline.status(id).then(s => {
       if (s.running) setPipelineRunning(true)
     }).catch(() => {})
 
-    // Load states for version picker
     fetch(`/api/topics/${id}/states`)
       .then(r => r.json())
       .then((s: any[]) => setStates(s))
@@ -81,10 +100,9 @@ export function TopicView() {
         setPipelineRunning(false)
         setProgressMsg("")
         setLiveStage(null)
-        refreshTopic()
-      } else {
-        refreshTopic()
       }
+      // Always refresh to pick up new status
+      refreshTopic()
     } else if (event.type === "error") {
       setPipelineRunning(false)
       setProgressMsg(`Error: ${event.message}`)
@@ -95,17 +113,46 @@ export function TopicView() {
 
   useSSE(pipelineRunning ? id ?? null : null, handleSSE)
 
-  const handleRunAnalysis = async () => {
+  // Gated pipeline actions
+  const handleStartDiscovery = async () => {
     if (!id) return
     try {
       setPipelineRunning(true)
       setCompletedStages(new Set())
-      setProgressMsg("Starting pipeline...")
-      await api.pipeline.run(id)
+      setProgressMsg("Starting discovery...")
+      await api.pipeline.discover(id)
     } catch (e) {
       setPipelineRunning(false)
-      setProgressMsg(`Failed to start: ${e}`)
+      setProgressMsg(`Failed: ${e}`)
     }
+  }
+
+  const handleApproveParties = async () => {
+    if (!id) return
+    setApproveLoading(true)
+    try {
+      setPipelineRunning(true)
+      setProgressMsg("Starting enrichment...")
+      await api.pipeline.enrich(id)
+    } catch (e) {
+      setPipelineRunning(false)
+      setProgressMsg(`Failed: ${e}`)
+    }
+    setApproveLoading(false)
+  }
+
+  const handleApproveClues = async () => {
+    if (!id) return
+    setApproveLoading(true)
+    try {
+      setPipelineRunning(true)
+      setProgressMsg("Starting analysis (weight, forum, expert council, verdict)...")
+      await api.pipeline.analyze(id)
+    } catch (e) {
+      setPipelineRunning(false)
+      setProgressMsg(`Failed: ${e}`)
+    }
+    setApproveLoading(false)
   }
 
   if (loading) return <div className="flex items-center justify-center h-screen text-gray-400 text-sm">Loading...</div>
@@ -116,16 +163,13 @@ export function TopicView() {
   )
 
   const currentStageIdx = stageIndex(topic.status)
-  const canRun = topic.status === "draft" || topic.status === "complete"
+  const isDraft = topic.status === "draft"
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-4">
-        <button
-          className="text-gray-400 hover:text-gray-700 text-sm"
-          onClick={() => navigate("/")}
-        >
+        <button className="text-gray-400 hover:text-gray-700 text-sm" onClick={() => navigate("/")}>
           &#8592; Back
         </button>
         <div className="flex-1 min-w-0">
@@ -149,22 +193,23 @@ export function TopicView() {
             <span className="text-xs text-gray-400">v{topic.current_version}</span>
           )}
           <StatusBadge status={topic.status} />
-          {canRun && !pipelineRunning && (
-            <button
-              onClick={handleRunAnalysis}
-              className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              Run Analysis
+          {isDraft && !pipelineRunning && (
+            <button onClick={handleStartDiscovery}
+              className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700">
+              Start Discovery
+            </button>
+          )}
+          {(topic.status === "complete") && !pipelineRunning && (
+            <button onClick={handleStartDiscovery}
+              className="px-3 py-1.5 bg-gray-600 text-white text-xs font-medium rounded-lg hover:bg-gray-700">
+              Re-run Discovery
             </button>
           )}
           {topic.status === "stale" && !pipelineRunning && (
             <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" title="Updates available" />
           )}
-          <button
-            onClick={() => setShowSettings(true)}
-            className="text-gray-400 hover:text-gray-600 text-sm"
-            title="Settings"
-          >
+          <button onClick={() => setShowSettings(true)}
+            className="text-gray-400 hover:text-gray-600 text-sm" title="Settings">
             &#9881;
           </button>
         </div>
@@ -177,23 +222,19 @@ export function TopicView() {
           <span className="text-xs text-blue-700 flex-1 truncate">{progressMsg}</span>
           <div className="flex gap-1">
             {STAGES.map(s => (
-              <div
-                key={s.key}
-                className={[
-                  "w-6 h-1.5 rounded-full transition-colors",
-                  completedStages.has(s.key) ? "bg-green-500" :
-                  liveStage === s.key ? "bg-blue-500 animate-pulse" :
-                  "bg-gray-200"
-                ].join(" ")}
-                title={s.label}
-              />
+              <div key={s.key} className={[
+                "w-6 h-1.5 rounded-full transition-colors",
+                completedStages.has(s.key) ? "bg-green-500" :
+                liveStage === s.key ? "bg-blue-500 animate-pulse" :
+                "bg-gray-200",
+              ].join(" ")} title={s.label} />
             ))}
           </div>
         </div>
       )}
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar — stage navigator */}
+        {/* Left sidebar */}
         <aside className="w-48 bg-white border-r border-gray-200 flex flex-col py-4 shrink-0">
           <nav className="space-y-1 px-3">
             {STAGES.map((stage, idx) => {
@@ -201,12 +242,14 @@ export function TopicView() {
               const isActive = activeStage === stage.key
               const isLive = liveStage === stage.key
               const isAccessible = idx <= currentStageIdx || isComplete
+              // Highlight review gates
+              const isReviewGate = (stage.key === "discovery" && topic.status === "review_parties")
+                || (stage.key === "enrichment" && topic.status === "review_enrichment")
 
               return (
                 <button
                   key={stage.key}
                   onClick={() => isAccessible && setActiveStage(stage.key)}
-                  data-stage={stage.key}
                   className={[
                     "w-full text-left px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors",
                     isActive ? "bg-blue-50 text-blue-700 font-medium" : "",
@@ -216,19 +259,21 @@ export function TopicView() {
                 >
                   <span className={[
                     "w-2 h-2 rounded-full shrink-0",
+                    isReviewGate ? "bg-amber-500 animate-pulse" :
                     isComplete ? "bg-green-500" :
                     isLive ? "bg-blue-500 animate-pulse" :
                     isActive ? "bg-blue-500" :
                     "bg-gray-200",
                   ].join(" ")} />
                   {stage.label}
+                  {isReviewGate && <span className="text-xs text-amber-600 ml-auto">review</span>}
                 </button>
               )
             })}
           </nav>
         </aside>
 
-        {/* Main content area */}
+        {/* Main content */}
         <main className="flex-1 overflow-auto p-6 space-y-4">
           <StalenessBanner
             topicId={topic.id}
@@ -242,21 +287,33 @@ export function TopicView() {
                 await api.pipeline.update(id)
               } catch (e) {
                 setPipelineRunning(false)
-                setProgressMsg(`Failed to start update: ${e}`)
+                setProgressMsg(`Failed: ${e}`)
               }
             }}
           />
 
-          {activeStage === "discovery" && <PartiesPanel topicId={topic.id} />}
-          {activeStage === "enrichment" && <CluesPanel topicId={topic.id} />}
+          {activeStage === "discovery" && (
+            <PartiesPanel
+              topicId={topic.id}
+              status={topic.status}
+              onApprove={handleApproveParties}
+              approveLoading={approveLoading}
+            />
+          )}
+          {activeStage === "enrichment" && (
+            <CluesPanel
+              topicId={topic.id}
+              status={topic.status}
+              onApprove={handleApproveClues}
+              approveLoading={approveLoading}
+            />
+          )}
           {activeStage === "forum" && (
-            <div className="h-full">
-              <ConversationView
-                topicId={topic.id}
-                sessionId={`forum-session-v${selectedVersion ?? Math.max(topic.current_version, 1)}`}
-                isLive={topic.status === "forum" || (pipelineRunning && liveStage === "forum")}
-              />
-            </div>
+            <ConversationView
+              topicId={topic.id}
+              sessionId={`forum-session-v${selectedVersion ?? Math.max(topic.current_version, 1)}`}
+              isLive={topic.status === "forum" || (pipelineRunning && liveStage === "forum")}
+            />
           )}
           {activeStage === "expert_council" && <ExpertCouncilPanel topicId={topic.id} />}
           {activeStage === "verdict" && <VerdictPanel topicId={topic.id} />}
