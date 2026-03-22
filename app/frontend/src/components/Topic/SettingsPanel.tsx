@@ -42,8 +42,8 @@ export function SettingsPanel({ topic, onClose, onSave }: Props) {
 
   const handleReset = () => {
     setModels({
-      data_gathering: "claude-haiku-4-5",
-      extraction: "claude-haiku-4-5",
+      data_gathering: "claude-haiku-4-5-20251001",
+      extraction: "claude-haiku-4-5-20251001",
       enrichment: "claude-sonnet-4-6",
       delta_updates: "claude-sonnet-4-6",
       forum_reasoning: "claude-opus-4-6",

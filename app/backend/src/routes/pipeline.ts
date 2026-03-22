@@ -23,13 +23,13 @@ export const pipelineRouter = new Elysia({ prefix: "/api/topics" })
       return error(409, { message: "Pipeline already running", run: activeRuns.get(topicId) })
     }
 
-    // Start pipeline in background — return immediately with run_id
-    const run_id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+    // Start pipeline in background — return immediately
+    const run_id = `initial-v1`  // deterministic — pipeline will compute actual value
     const started_at = new Date().toISOString()
     activeRuns.set(topicId, { run_id, started_at })
 
-    // Fire-and-forget the pipeline
-    runInitialPipeline(topicId, run_id).then(result => {
+    // Fire-and-forget the pipeline (pipeline computes its own deterministic runId)
+    runInitialPipeline(topicId).then(result => {
       activeRuns.delete(topicId)
       console.log(`Pipeline completed for ${topicId}: ${result.status}`)
     }).catch(err => {

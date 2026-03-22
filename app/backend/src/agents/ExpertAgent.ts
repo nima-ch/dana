@@ -1,4 +1,5 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { log } from "../utils/logger"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
 import { getClue } from "../tools/internal/getClue"
 import { getScenarioSummary } from "../tools/internal/getForumData"
@@ -161,6 +162,7 @@ export async function runExpertAgent(
   model: string,
   onProgress?: (msg: string) => void,
 ): Promise<ExpertArtifact> {
+  log.expert(`${expert.name} (${expert.domain}): starting analysis`)
   onProgress?.(`Expert ${expert.name}: starting analysis`)
 
   const ctx = await buildAgentContext("expert", topicId)
@@ -221,7 +223,7 @@ export async function runExpertAgent(
         { role: "user", content: userPrompt },
       ],
       temperature: 0.4,
-      max_tokens: 3000,
+      max_tokens: 8000,
     })
     try {
       const match = raw.match(/\{[\s\S]+\}/)
@@ -254,6 +256,8 @@ export async function runExpertAgent(
   }
 
   await writeArtifact(topicId, runId, `expert_${expert.domain}`, result)
+  const probStr = result.scenario_assessments.map(a => `${a.scenario_id}=${Math.round(a.probability_contribution * 100)}%`).join(", ")
+  log.expert(`${expert.name} done: ${probStr}`, `${result.weight_challenges.length} weight challenge(s), ${result.scenario_assessments.flatMap(a => a.historic_analogues).length} analogues`)
   onProgress?.(`Expert ${expert.name}: complete`)
 
   return result

@@ -1,4 +1,5 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { log } from "../utils/logger"
 import { readArtifact, writeArtifact } from "../tools/internal/artifactStore"
 import { getScenarioSummary } from "../tools/internal/getForumData"
 import { join } from "path"
@@ -99,6 +100,7 @@ export async function runVerdictSynthesizer(
   model: string,
   onProgress?: (msg: string) => void,
 ): Promise<ExpertCouncilOutput> {
+  log.verdict("Reading expert artifacts")
   onProgress?.("Verdict: reading expert artifacts")
 
   const deliberations: ExpertArtifact[] = []
@@ -170,7 +172,7 @@ export async function runVerdictSynthesizer(
         { role: "user", content: prompt },
       ],
       temperature: 0.3,
-      max_tokens: 4000,
+      max_tokens: 8000,
     })
     try {
       const match = raw.match(/\{[\s\S]+\}/)
@@ -219,6 +221,9 @@ export async function runVerdictSynthesizer(
   // Write verdict artifact for pipeline tracking
   await writeArtifact(topicId, runId, "verdict_synthesis", finalVerdict)
 
+  const rankedStr = finalVerdict.scenarios_ranked.map(s => `${s.title || s.scenario_id}=${Math.round(s.probability * 100)}%`).join(", ")
+  log.verdict(`Synthesis complete: ${rankedStr}`)
+  log.verdict(`Weight challenges: ${weightDecisions.length} total, ${weightDecisions.filter(d => d.status === "accepted").length} accepted`)
   onProgress?.("Verdict: synthesis complete")
   return councilOutput
 }

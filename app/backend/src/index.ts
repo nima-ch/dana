@@ -28,4 +28,6 @@ const app = new Elysia()
   })
   .listen(Number(process.env.PORT) || 3000)
 
-console.log(`Dana backend running at http://localhost:${app.server?.port}`)
+console.log(`\x1b[1m\x1b[36mDana\x1b[0m backend running at \x1b[36mhttp://localhost:${app.server?.port}\x1b[0m`)
+console.log(`  Data:  ${process.env.DATA_DIR || "/home/nima/dana/data"}`)
+console.log(`  Proxy: ${process.env.PROXY_BASE_URL || "http://127.0.0.1:8317"}`)

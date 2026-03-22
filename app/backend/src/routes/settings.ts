@@ -4,8 +4,8 @@ import { join } from "path"
 function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
 
 const DEFAULT_MODELS: Record<string, string> = {
-  data_gathering: "claude-haiku-4-5",
-  extraction: "claude-haiku-4-5",
+  data_gathering: "claude-haiku-4-5-20251001",
+  extraction: "claude-haiku-4-5-20251001",
   enrichment: "claude-sonnet-4-6",
   delta_updates: "claude-sonnet-4-6",
   forum_reasoning: "claude-opus-4-6",

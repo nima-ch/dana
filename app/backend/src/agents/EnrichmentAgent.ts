@@ -5,6 +5,7 @@ import { processClue } from "../tools/processing/clueProcessor"
 import { storeClue } from "../tools/processing/storeClue"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
+import { log } from "../utils/logger"
 import { join } from "path"
 import type { Party } from "./DiscoveryAgent"
 
@@ -60,12 +61,15 @@ export async function runEnrichmentAgent(
   const enrichedIds: string[] = []
   const newClueIds: string[] = []
 
+  log.enrichment(`Enriching ${parties.length} parties, batch size=4`)
+
   // Enrich each party in parallel (cap at 6 concurrent)
   const BATCH = 4
   for (let i = 0; i < parties.length; i += BATCH) {
     const batch = parties.slice(i, i + BATCH)
     await Promise.all(batch.map(async (party) => {
       try {
+        log.enrichment(`Enriching party: ${party.name}`)
         onProgress?.(`Enrichment: enriching party "${party.name}"`)
 
         // Step A: Deepen party profile via LLM

@@ -1,5 +1,7 @@
+import { log } from "../utils/logger"
+
 const PROXY_BASE_URL = process.env.PROXY_BASE_URL || "http://127.0.0.1:8317"
-const TIMEOUT_MS = 120_000
+const TIMEOUT_MS = 300_000  // 5 minutes — Opus can take a while on complex prompts
 const RETRY_BACKOFFS = [1000, 5000, 15000]
 
 export interface ModelInfo {
@@ -101,6 +103,9 @@ export async function fetchAvailableModels(): Promise<ModelInfo[]> {
 
 export async function chatCompletion(options: ChatCompletionOptions): Promise<ChatCompletionResponse> {
   const limiter = getRateLimiter(options.model)
+  const startTime = Date.now()
+  const promptPreview = options.messages[options.messages.length - 1]?.content?.slice(0, 80) || ""
+  log.llm(`→ ${options.model}`, `"${promptPreview}..."`)
 
   for (let attempt = 0; attempt <= RETRY_BACKOFFS.length; attempt++) {
     try {
@@ -130,10 +135,16 @@ export async function chatCompletion(options: ChatCompletionOptions): Promise<Ch
         throw new Error(`HTTP ${res.status}: ${body}`)
       }
 
-      return res.json() as Promise<ChatCompletionResponse>
+      const result = await res.json() as ChatCompletionResponse
+      const elapsed = Date.now() - startTime
+      const tokens = result.usage
+        ? `${result.usage.prompt_tokens}→${result.usage.completion_tokens} tok`
+        : "no usage data"
+      log.llm(`← ${options.model} ${elapsed}ms`, tokens)
+      return result
     } catch (e) {
       if (attempt < RETRY_BACKOFFS.length) {
-        console.warn(`LLM call attempt ${attempt + 1} failed, retrying in ${RETRY_BACKOFFS[attempt]}ms:`, e)
+        log.error("LLM", `attempt ${attempt + 1} failed, retrying in ${RETRY_BACKOFFS[attempt]}ms`, e)
         await new Promise(r => setTimeout(r, RETRY_BACKOFFS[attempt]))
       } else {
         throw e

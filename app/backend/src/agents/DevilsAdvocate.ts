@@ -70,7 +70,7 @@ Stress-test this scenario. Produce ≥3 genuine falsification arguments.`
         { role: "user", content: attempt === 0 ? prompt : `${prompt}\n\nOutput ONLY valid JSON. Min 3 arguments.` },
       ],
       temperature: 0.4,
-      max_tokens: 1500,
+      max_tokens: 4000,
     })
 
     try {

@@ -202,7 +202,10 @@ cmd_test() {
     tests/internalTools.test.ts \
     tests/contextBuilder.test.ts \
     tests/stateManager.test.ts \
-    tests/forumTools.test.ts
+    tests/forumTools.test.ts \
+    tests/pipeline.test.ts \
+    tests/expertAgent.test.ts \
+    tests/deltaPipeline.test.ts
 }
 
 cmd_test_llm() {

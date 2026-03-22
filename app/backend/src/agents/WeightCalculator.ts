@@ -1,6 +1,7 @@
 import { chatCompletionText } from "../llm/proxyClient"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
+import { log } from "../utils/logger"
 import { join } from "path"
 import type { Party } from "./DiscoveryAgent"
 
@@ -92,6 +93,7 @@ export async function runWeightCalculator(
   const ctx = await buildAgentContext("weight", topicId)
   const contextStr = serializeContext(ctx)
 
+  log.weight(`Scoring ${parties.length} parties: ${parties.map(p => p.name).join(", ")}`)
   onProgress?.(`WeightCalculator: scoring ${parties.length} parties`)
 
   // Score weights
@@ -173,6 +175,7 @@ export async function runWeightCalculator(
   }
 
   await writeArtifact(topicId, runId, "weight_calculation", output)
+  log.weight(`Results: ${representatives.map(r => `${r.party_id}=${r.speaking_weight}w (opening=${r.speaking_budget.opening_statement}w)`).join(", ")}`)
   onProgress?.(`WeightCalculator: done. ${representatives.length} representatives created`)
   return output
 }

@@ -1,3 +1,4 @@
+import { log } from "../utils/logger"
 import { runRepresentativeAgent } from "./RepresentativeAgent"
 import { runDevilsAdvocate } from "./DevilsAdvocate"
 import { readArtifact, writeArtifact } from "../tools/internal/artifactStore"
@@ -93,6 +94,7 @@ export async function runForumOrchestrator(
 ): Promise<ForumOrchestratorOutput> {
   const representatives = await loadRepresentatives(topicId)
   if (!representatives.length) throw new Error("No representatives found")
+  log.forum(`${representatives.length} representatives loaded: ${representatives.map(r => `${r.party_id} (w=${r.speaking_weight})`).join(", ")}`)
 
   // Initialize or resume forum session
   let session: ForumSession
@@ -137,6 +139,8 @@ export async function runForumOrchestrator(
         continue
       }
 
+      const budgetWords = type === "opening_statements" ? rep.speaking_budget.opening_statement : type === "rebuttals" ? rep.speaking_budget.rebuttal : rep.speaking_budget.closing
+      log.forum(`Round ${round} (${type}): ${rep.party_id} speaking`, `budget=${budgetWords}w`)
       onProgress?.(`Forum Round ${round}: ${rep.party_id} speaking`)
 
       const { turn } = await runRepresentativeAgent({
@@ -154,6 +158,8 @@ export async function runForumOrchestrator(
       roundEntry.turns.push(turn)
       await writeForumSession(topicId, session)
 
+      log.forum(`  ${rep.party_id} done: ${turn.word_count}w, cited ${turn.clues_cited.length} clues`)
+
       // Emit SSE event for live streaming
       emit(topicId, { type: "forum_turn", turn: turn as unknown as Record<string, unknown> })
 
@@ -161,6 +167,7 @@ export async function runForumOrchestrator(
     }
   }
 
+  log.forum("Synthesizing scenarios from all turns")
   onProgress?.("Forum: synthesizing scenarios")
 
   // Synthesize scenarios from all turns
@@ -178,7 +185,7 @@ export async function runForumOrchestrator(
         { role: "user", content: `CONTEXT:\n${contextStr}\n\nFORUM TURNS:\n${turnsStr}\n\nSynthesize distinct scenarios.` },
       ],
       temperature: 0.3,
-      max_tokens: 2000,
+      max_tokens: 6000,
     })
     try {
       const match = raw.match(/\[[\s\S]+\]/)
@@ -190,7 +197,10 @@ export async function runForumOrchestrator(
     }
   }
 
+  log.forum(`Scenario synthesis produced ${scenarios.length} scenarios: ${scenarios.map(s => s.title).join(", ")}`)
+
   // Devil's Advocate pass
+  log.forum("Devil's Advocate pass starting")
   onProgress?.("Forum: Devil's Advocate pass")
   if (scenarios.length > 0) {
     session.scenarios = scenarios

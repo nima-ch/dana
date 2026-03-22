@@ -3,6 +3,7 @@ import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { processClue } from "../tools/processing/clueProcessor"
 import { storeClue } from "../tools/processing/storeClue"
+import { log } from "../utils/logger"
 import { join } from "path"
 
 export interface Party {
@@ -117,6 +118,7 @@ export async function runDiscoveryAgent(
   runId: string,
   onProgress?: (msg: string) => void
 ): Promise<DiscoveryOutput> {
+  log.discovery(`Analyzing topic: "${title}"`)
   onProgress?.(`Discovery: analyzing topic "${title}"`)
 
   // Step 1: LLM identifies parties and search queries
@@ -131,7 +133,7 @@ export async function runDiscoveryAgent(
         { role: "user", content: prompt + (hint ? `\n\n${hint}` : "") },
       ],
       temperature: 0.3,
-      max_tokens: 4000,
+      max_tokens: 8000,
     }),
     (raw) => {
       const match = raw.match(/\[[\s\S]+\]/)
@@ -174,6 +176,8 @@ export async function runDiscoveryAgent(
     id: p.id || slugify(p.name),
   }))
 
+  log.discovery(`Found ${normalizedParties.length} parties: ${normalizedParties.map(p => `${p.name} (w=${p.weight})`).join(", ")}`)
+  log.discovery(`Generated ${parsed.search_queries.length} search queries`)
   onProgress?.(`Discovery: found ${normalizedParties.length} parties, running ${parsed.search_queries.length} searches`)
 
   // Step 2: Run searches and seed clues
