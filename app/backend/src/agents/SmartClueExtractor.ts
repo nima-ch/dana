@@ -289,3 +289,138 @@ Update the clue. Output ONLY valid JSON.`,
   log.enrichment(`Smart clue edit complete: "${updated.title}"`)
   return updated
 }
+
+// Research a direction/question and extract clues from findings
+export async function researchAndExtractClues(
+  topicId: string,
+  topicTitle: string,
+  topicDescription: string,
+  query: string,
+  parties: Party[],
+  model: string,
+): Promise<ExtractedClue[]> {
+  const partyList = parties.map(p => `${p.id}: ${p.name}`).join("\n")
+
+  log.enrichment(`Research: generating search queries for "${query.slice(0, 80)}"`)
+
+  // Step 1: LLM generates targeted search queries from the user's research direction
+  const queriesRaw = await chatCompletionText({
+    model,
+    messages: [
+      {
+        role: "system",
+        content: `You generate targeted web search queries to investigate a specific research direction for geopolitical analysis. Output ONLY a JSON array of 3-5 search query strings. No markdown.`,
+      },
+      {
+        role: "user",
+        content: `TOPIC: ${topicTitle}
+RESEARCH DIRECTION: ${query}
+
+Generate 3-5 specific, fact-finding search queries that would uncover concrete evidence, events, statements, or data related to this research direction. Focus on recent news and verifiable facts.`,
+      },
+    ],
+    temperature: 0.3,
+    max_tokens: 500,
+  })
+
+  let searchQueries: string[] = []
+  try {
+    const match = queriesRaw.match(/\[[\s\S]+\]/)
+    if (match) searchQueries = JSON.parse(match[0])
+  } catch { /* fallback */ }
+  if (searchQueries.length === 0) {
+    searchQueries = [query, `${query} ${topicTitle} ${new Date().getFullYear()}`]
+  }
+
+  log.enrichment(`Research: ${searchQueries.length} search queries: ${searchQueries.join(" | ")}`)
+
+  // Step 2: Search and fetch (limited to avoid memory/timeout issues)
+  const fetchedContent: string[] = []
+  for (const sq of searchQueries.slice(0, 4)) {
+    try {
+      const results = await webSearch(sq, 3)
+      for (const r of results.slice(0, 2)) {
+        try {
+          if (!isFetchable(r.url)) {
+            if (r.snippet) fetchedContent.push(`[${r.title}] (${r.url})\n${r.snippet}`)
+            continue
+          }
+          const fetched = await httpFetch(r.url, topicId)
+          fetchedContent.push(`[${r.title}] (${r.url})\n${fetched.raw_content.slice(0, 2000)}`)
+        } catch {
+          if (r.snippet) fetchedContent.push(`[${r.title}] (${r.url})\n${r.snippet}`)
+        }
+      }
+    } catch { /* skip */ }
+  }
+
+  log.enrichment(`Research: fetched ${fetchedContent.length} source fragments`)
+
+  if (fetchedContent.length === 0) {
+    log.enrichment("Research: no sources found, returning empty")
+    return []
+  }
+
+  // Step 3: Extract clues from research findings
+  const combinedResearch = fetchedContent.join("\n\n---\n\n").slice(0, 12000)
+
+  const raw = await chatCompletionText({
+    model,
+    messages: [
+      {
+        role: "system",
+        content: `You are an intelligence analyst extracting structured factual claims from research material gathered to investigate a specific question.
+
+KNOWN PARTIES (use these IDs in party relevance):
+${partyList}
+
+Output ONLY a valid JSON array of clues:
+[{
+  "title": "<concise factual title>",
+  "summary": "<bias-corrected factual summary, 1-3 sentences>",
+  "date": "<YYYY-MM-DD or 'unknown'>",
+  "relevance": <50-100>,
+  "credibility": <0-100>,
+  "parties": ["<party_id>"],
+  "source_url": "<URL if available>",
+  "source_outlet": "<source name>",
+  "bias_flags": ["<flag if applicable>"],
+  "clue_type": "<event|statement|military_action|intelligence|economic|diplomatic>",
+  "domain_tags": ["<tag>"],
+  "key_points": ["<key fact>"]
+}]
+
+Rules:
+- Extract every distinct verifiable fact relevant to the research question
+- Each clue = one fact/event/statement
+- Attribute sources precisely
+- Be thorough — the user asked to research this specific direction
+- Output ONLY valid JSON array`,
+      },
+      {
+        role: "user",
+        content: `TOPIC: ${topicTitle}: ${topicDescription}
+
+RESEARCH QUESTION: ${query}
+
+GATHERED SOURCES:
+${combinedResearch}
+
+Extract all relevant factual claims as structured clues.`,
+      },
+    ],
+    temperature: 0.2,
+    max_tokens: 8000,
+  })
+
+  try {
+    const match = raw.match(/\[[\s\S]+\]/)
+    if (!match) throw new Error("No JSON array")
+    const clues = JSON.parse(match[0]) as ExtractedClue[]
+    log.enrichment(`Research: extracted ${clues.length} clues for "${query.slice(0, 50)}"`)
+    return clues
+  } catch (e) {
+    log.error("RESEARCH", "Failed to parse extracted clues", e)
+    return []
+  }
+}

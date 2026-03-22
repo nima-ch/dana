@@ -245,3 +245,59 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     if (created.length > 0) await markStale(topicId)
     return { imported: created.length, clues: created }
   }, { body: t.Record(t.String(), t.Any()) })
+
+  // Research: user gives a direction → system searches, fetches, extracts clues
+  .post("/research", async ({ params, body, error }) => {
+    const { getTopic } = await import("../pipeline/topicManager")
+    const { researchAndExtractClues } = await import("../agents/SmartClueExtractor")
+
+    const b = body as { query: string }
+    if (!b.query?.trim()) return error(400, { message: "query is required" })
+
+    const topicId = params.id
+    const topic = await getTopic(topicId)
+
+    const partiesFile = Bun.file(join(getDataDir(), "topics", topicId, "parties.json"))
+    const parties = await partiesFile.exists() ? await partiesFile.json() : []
+
+    const extracted = await researchAndExtractClues(
+      topicId, topic.title, topic.description,
+      b.query.trim(), parties, topic.models.enrichment,
+    )
+
+    const created: Clue[] = []
+    for (const item of extracted) {
+      const now = new Date().toISOString()
+      let newClue: Clue | null = null
+      await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (clues) => {
+        const id = `clue-${String(clues.length + 1).padStart(3, "0")}`
+        newClue = {
+          id, current: 1, added_at: now, last_updated_at: now,
+          added_by: "research", status: "verified",
+          versions: [{
+            v: 1, date: now, title: item.title,
+            raw_source: { url: item.source_url || "", fetched_at: now },
+            source_credibility: {
+              score: item.credibility ?? 50,
+              notes: `Research: ${b.query.slice(0, 60)}`,
+              bias_flags: item.bias_flags ?? [],
+              origin_source: { url: item.source_url || "", outlet: item.source_outlet || "research", is_republication: false },
+            },
+            bias_corrected_summary: item.summary,
+            relevance_score: item.relevance ?? 70,
+            party_relevance: item.parties ?? [],
+            domain_tags: item.domain_tags ?? [],
+            timeline_date: item.date || now.slice(0, 10),
+            clue_type: item.clue_type || "event",
+            change_note: `Research query: ${b.query.slice(0, 80)}`,
+            key_points: item.key_points ?? [],
+          }],
+        }
+        return [...clues, newClue!]
+      }, [])
+      if (newClue) created.push(newClue)
+    }
+
+    if (created.length > 0) await markStale(topicId)
+    return { imported: created.length, clues: created, query: b.query }
+  }, { body: t.Record(t.String(), t.Any()) })

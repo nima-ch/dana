@@ -315,6 +315,9 @@ export function CluesPanel({ topicId, status, onApprove, onReanalyze, approveLoa
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState({ party: "", domain: "", type: "" })
   const [showBulkImport, setShowBulkImport] = useState(false)
+  const [researchQuery, setResearchQuery] = useState("")
+  const [researching, setResearching] = useState(false)
+  const [researchResult, setResearchResult] = useState<{ imported: number; query: string } | null>(null)
 
   const reviewMode = status === "review_enrichment"
 
@@ -334,6 +337,21 @@ export function CluesPanel({ topicId, status, onApprove, onReanalyze, approveLoa
   const handleDelete = async (id: string) => {
     await api.clues.delete(topicId, id)
     setClues(cs => cs.filter(c => c.id !== id))
+  }
+
+  const handleResearch = async () => {
+    if (!researchQuery.trim()) return
+    setResearching(true)
+    setResearchResult(null)
+    try {
+      const res = await api.clues.research(topicId, researchQuery.trim())
+      setResearchResult({ imported: res.imported, query: res.query })
+      setResearchQuery("")
+      load()
+    } catch {
+      setResearchResult({ imported: -1, query: researchQuery })
+    }
+    setResearching(false)
   }
 
   const filtered = clues.filter(clue => {
@@ -379,6 +397,41 @@ export function CluesPanel({ topicId, status, onApprove, onReanalyze, approveLoa
         >
           + Bulk Import
         </button>
+      </div>
+
+      {/* Research bar */}
+      <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+        <div className="flex gap-2 items-center">
+          <span className="text-xs text-gray-500 shrink-0">Research:</span>
+          <input
+            className="flex-1 text-xs border border-gray-300 rounded px-2 py-1 bg-white"
+            placeholder="e.g. 'degradation of Iran missile capability after strikes' or 'fate of new supreme leader Mojtaba Khamenei'..."
+            value={researchQuery}
+            onChange={e => setResearchQuery(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleResearch()}
+            disabled={researching}
+          />
+          <button
+            className="text-xs px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 shrink-0"
+            onClick={handleResearch}
+            disabled={researching || !researchQuery.trim()}
+          >
+            {researching ? "Searching..." : "Find Clues"}
+          </button>
+        </div>
+        {researching && (
+          <div className="flex items-center gap-2 text-xs text-green-600 mt-1.5">
+            <div className="animate-spin w-3 h-3 border-2 border-green-500 border-t-transparent rounded-full" />
+            Searching the web and extracting clues...
+          </div>
+        )}
+        {researchResult && (
+          <p className={`text-xs mt-1.5 ${researchResult.imported >= 0 ? "text-green-600" : "text-red-600"}`}>
+            {researchResult.imported >= 0
+              ? `Found ${researchResult.imported} clue(s) for "${researchResult.query}"`
+              : "Research failed — try rephrasing"}
+          </p>
+        )}
       </div>
 
       {/* Filters */}

@@ -114,6 +114,10 @@ export const api = {
       request<{ imported: number; clues: any[] }>(`/topics/${topicId}/clues/bulk`, {
         method: "POST", body: JSON.stringify({ content }),
       }),
+    research: (topicId: string, query: string) =>
+      request<{ imported: number; clues: any[]; query: string }>(`/topics/${topicId}/clues/research`, {
+        method: "POST", body: JSON.stringify({ query }),
+      }),
   },
   settings: {
     get: () => request<{ default_models: Record<string, string> }>("/settings"),
