@@ -107,11 +107,34 @@ export function AnalysisProgressView({
         {/* Forum turns */}
         {forumTurns.map((turn, i) => {
           const t = turn as any
-          const position = t.position || ""
-          const evidence = t.evidence || []
-          const challenges = t.challenges || []
-          const concessions = t.concessions || []
-          const statement = t.statement || t.content || ""
+          // Parse structured fields - may be on the turn object or inside a JSON statement
+          let position = t.position || ""
+          let evidence: any[] = t.evidence || []
+          let challenges: any[] = t.challenges || []
+          let concessions: any[] = t.concessions || []
+          let scenario_endorsement = t.scenario_endorsement || ""
+          let rawStatement = t.statement || t.content || ""
+
+          // If statement is a JSON string, try parsing it to extract structured fields
+          if (typeof rawStatement === "string" && (!position || !evidence.length)) {
+            try {
+              const jsonMatch = rawStatement.match(/\{[\s\S]+\}/)
+              if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0])
+                position = position || parsed.position || ""
+                evidence = evidence.length ? evidence : parsed.evidence || []
+                challenges = challenges.length ? challenges : parsed.challenges || []
+                concessions = concessions.length ? concessions : parsed.concessions || []
+                scenario_endorsement = scenario_endorsement || parsed.scenario_endorsement || ""
+                rawStatement = parsed.statement || ""
+              }
+            } catch { /* not JSON, use as-is */ }
+          }
+
+          // Clean up statement - strip JSON artifacts
+          if (typeof rawStatement === "string" && rawStatement.trim().startsWith("{")) rawStatement = ""
+
+          const hasStructured = !!(position || evidence.length || challenges.length)
           const personaTitle = t.persona_title || t.party_name || t.party_id || "Representative"
           const roundLabel = `Round ${t.round || t.round_number || "?"} ${t.type ? `(${t.type.replace(/_/g, " ")})` : ""}`
           const clueCount = (t.clues_cited || []).length
@@ -124,51 +147,54 @@ export function AnalysisProgressView({
               stage="forum"
             >
               {position && (
-                <div className="text-sm text-gray-800 mb-2 leading-relaxed">{position}</div>
+                <div className="text-sm text-gray-800 mb-3 leading-relaxed">{position}</div>
               )}
               {evidence.length > 0 && (
-                <div className="space-y-1 mb-2">
-                  <div className="text-xs font-medium text-blue-700 mb-0.5">Evidence</div>
-                  {evidence.map((e: any, j: number) => (
-                    <div key={j} className="flex gap-1.5 text-xs">
-                      <span className="text-blue-400 shrink-0 mt-0.5">&#8226;</span>
-                      <span className="text-gray-700">{typeof e === "string" ? e : e.point || e.claim || JSON.stringify(e)}</span>
-                    </div>
-                  ))}
+                <div className="mb-3">
+                  <div className="text-xs font-semibold text-blue-700 mb-1">Evidence ({evidence.length})</div>
+                  <div className="space-y-2">
+                    {evidence.map((e: any, j: number) => (
+                      <div key={j} className="bg-blue-50 rounded px-2.5 py-1.5">
+                        <div className="text-xs font-medium text-gray-800">{typeof e === "string" ? e : e.claim || e.point || ""}</div>
+                        {e.interpretation && <div className="text-xs text-gray-600 mt-0.5">{e.interpretation}</div>}
+                        {e.clue_id && <span className="text-[10px] text-blue-500 font-mono">[{e.clue_id}]</span>}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
               {challenges.length > 0 && (
-                <div className="space-y-1 mb-2">
-                  <div className="text-xs font-medium text-red-700 mb-0.5">Challenges</div>
-                  {challenges.map((c: any, j: number) => (
-                    <div key={j} className="flex gap-1.5 text-xs">
-                      <span className="text-red-400 shrink-0 mt-0.5">&#9650;</span>
-                      <span className="text-gray-700">{typeof c === "string" ? c : c.point || c.challenge || JSON.stringify(c)}</span>
-                    </div>
-                  ))}
+                <div className="mb-3">
+                  <div className="text-xs font-semibold text-red-700 mb-1">Challenges ({challenges.length})</div>
+                  <div className="space-y-2">
+                    {challenges.map((c: any, j: number) => (
+                      <div key={j} className="bg-red-50 rounded px-2.5 py-1.5">
+                        {c.target_party && <div className="text-[10px] text-red-500 font-medium mb-0.5">To: {c.target_party}</div>}
+                        <div className="text-xs text-gray-800">{typeof c === "string" ? c : c.challenge || c.point || ""}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
               {concessions.length > 0 && (
-                <div className="space-y-1 mb-2">
-                  <div className="text-xs font-medium text-amber-700 mb-0.5">Concessions</div>
-                  {concessions.map((c: any, j: number) => (
-                    <div key={j} className="flex gap-1.5 text-xs">
-                      <span className="text-amber-400 shrink-0 mt-0.5">&#9671;</span>
-                      <span className="text-gray-700">{typeof c === "string" ? c : c.point || JSON.stringify(c)}</span>
-                    </div>
-                  ))}
+                <div className="mb-3">
+                  <div className="text-xs font-semibold text-amber-700 mb-1">Concessions</div>
+                  <div className="space-y-1">
+                    {concessions.map((c: any, j: number) => (
+                      <div key={j} className="bg-amber-50 rounded px-2.5 py-1.5 text-xs text-gray-700">
+                        {typeof c === "string" ? c : c.point || JSON.stringify(c)}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
-              {t.scenario_endorsement && (
-                <div className="text-xs bg-purple-50 rounded px-2 py-1 text-purple-800">
-                  <span className="font-medium">Endorses: </span>{t.scenario_endorsement}
+              {scenario_endorsement && (
+                <div className="text-xs bg-purple-50 rounded px-2.5 py-1.5 text-purple-800">
+                  <span className="font-medium">Endorses: </span>{scenario_endorsement}
                 </div>
               )}
-              {!position && !evidence.length && statement && (
-                <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{statement}</div>
-              )}
-              {position && !evidence.length && statement && statement !== position && (
-                <div className="text-xs text-gray-500 leading-relaxed whitespace-pre-wrap mt-2 border-t pt-2">{statement}</div>
+              {!hasStructured && rawStatement && (
+                <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{rawStatement}</div>
               )}
             </ContentCard>
           )
