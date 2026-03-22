@@ -80,6 +80,18 @@ export const api = {
       request<any>(`/topics/${topicId}/parties/merge`, {
         method: "POST", body: JSON.stringify({ source_ids: sourceIds, target }),
       }),
+    smartAdd: (topicId: string, name: string) =>
+      request<any>(`/topics/${topicId}/parties/smart-add`, {
+        method: "POST", body: JSON.stringify({ name }),
+      }),
+    smartEdit: (topicId: string, partyId: string, feedback: string) =>
+      request<any>(`/topics/${topicId}/parties/${partyId}/smart-edit`, {
+        method: "POST", body: JSON.stringify({ feedback }),
+      }),
+    split: (topicId: string, sourceId: string, into: { name: string }[]) =>
+      request<{ removed: string; created: any[] }>(`/topics/${topicId}/parties/split`, {
+        method: "POST", body: JSON.stringify({ source_id: sourceId, into }),
+      }),
   },
   clues: {
     list: (topicId: string) => request<any[]>(`/topics/${topicId}/clues`),
