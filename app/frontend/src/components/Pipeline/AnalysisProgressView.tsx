@@ -111,16 +111,17 @@ export function AnalysisProgressView({
           const evidence = t.evidence || []
           const challenges = t.challenges || []
           const concessions = t.concessions || []
-          const personaTitle = t.persona_title || t.party_id || "Representative"
+          const statement = t.statement || t.content || ""
+          const personaTitle = t.persona_title || t.party_name || t.party_id || "Representative"
           const roundLabel = `Round ${t.round || t.round_number || "?"} ${t.type ? `(${t.type.replace(/_/g, " ")})` : ""}`
+          const clueCount = (t.clues_cited || []).length
 
           return (
             <ContentCard
               key={i}
               title={personaTitle}
-              subtitle={`${roundLabel} \u00b7 ${t.word_count || 0}w \u00b7 ${(t.clues_cited || []).length} clues`}
+              subtitle={`${roundLabel} \u00b7 ${t.word_count || 0}w${clueCount > 0 ? ` \u00b7 ${clueCount} clues` : ""}`}
               stage="forum"
-              status="done"
             >
               {position && (
                 <div className="text-sm text-gray-800 mb-2 leading-relaxed">{position}</div>
@@ -163,8 +164,11 @@ export function AnalysisProgressView({
                   <span className="font-medium">Endorses: </span>{t.scenario_endorsement}
                 </div>
               )}
-              {!position && !evidence.length && t.content && (
-                <div className="text-xs text-gray-600 leading-relaxed">{t.content}</div>
+              {!position && !evidence.length && statement && (
+                <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{statement}</div>
+              )}
+              {position && !evidence.length && statement && statement !== position && (
+                <div className="text-xs text-gray-500 leading-relaxed whitespace-pre-wrap mt-2 border-t pt-2">{statement}</div>
               )}
             </ContentCard>
           )
