@@ -8,8 +8,14 @@ interface Turn {
   id: string
   representative_id: string
   party_name: string
+  persona_title?: string
   party_color?: string
   statement: string
+  position?: string
+  evidence?: { claim: string; clue_id: string; interpretation: string }[]
+  challenges?: { target_party: string; challenge: string; clue_id?: string }[]
+  concessions?: string[]
+  scenario_endorsement?: string
   clues_cited: string[]
   timestamp: string
   round: number

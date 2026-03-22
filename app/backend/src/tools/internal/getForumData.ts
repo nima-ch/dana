@@ -2,12 +2,30 @@ import { join } from "path"
 
 function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
 
+export interface EvidenceItem {
+  claim: string
+  clue_id: string
+  interpretation: string
+}
+
+export interface ChallengeItem {
+  target_party: string
+  challenge: string
+  clue_id?: string
+}
+
 export interface ForumTurn {
   id: string
   representative_id: string
   party_name: string
+  persona_title?: string
   party_color?: string
   statement: string
+  position?: string
+  evidence?: EvidenceItem[]
+  challenges?: ChallengeItem[]
+  concessions?: string[]
+  scenario_endorsement?: string
   clues_cited: string[]
   timestamp: string
   round: number

@@ -1,6 +1,9 @@
 import { Elysia } from "elysia"
+import { join } from "path"
 import { getForumSession } from "../tools/internal/getForumData"
 import { getAllVersions } from "../pipeline/stateManager"
+
+function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
 
 export const forumRouter = new Elysia({ prefix: "/api/topics/:id" })
   .get("/forum/:sessionId", async ({ params, error }) => {
@@ -11,7 +14,6 @@ export const forumRouter = new Elysia({ prefix: "/api/topics/:id" })
     }
   })
   .get("/forum", async ({ params }) => {
-    // Return the latest forum session ID from states
     const states = await getAllVersions(params.id)
     const latest = states.findLast(s => s.forum_session_id)
     if (!latest?.forum_session_id) return null
@@ -20,4 +22,9 @@ export const forumRouter = new Elysia({ prefix: "/api/topics/:id" })
     } catch {
       return null
     }
+  })
+  .get("/representatives", async ({ params }) => {
+    const f = Bun.file(join(getDataDir(), "topics", params.id, "representatives.json"))
+    if (!(await f.exists())) return []
+    return f.json()
   })

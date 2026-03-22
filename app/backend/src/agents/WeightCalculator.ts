@@ -16,6 +16,7 @@ export interface Representative {
   id: string
   party_id: string
   persona_prompt: string
+  persona_title: string
   speaking_weight: number
   speaking_budget: SpeakingBudget
   auto_generated: true
@@ -57,12 +58,18 @@ Rules:
 - Show working: weight_factors drive the overall weight (roughly their average)
 - Output ONLY the JSON array, no prose`
 
-const PERSONA_SYSTEM = `Generate a representative persona prompt for a geopolitical forum advocate.
+const PERSONA_SYSTEM = `Generate a representative persona for a geopolitical analysis forum.
 
-The advocate argues FOR their party using only evidence and logic — they are honest but partisan in focus.
-They must: acknowledge strongest counter-arguments, cite clue IDs, apply the Steelman Protocol.
+This persona argues WITH CONVICTION from their party's perspective — they are an advocate, not a neutral analyst.
+They must be evidence-based and intellectually honest, but their VOICE, FRAMING, and EMPHASIS reflect their party's worldview.
 
-Output ONLY a 3-4 sentence persona prompt string (no JSON wrapper, just the plain text prompt).`
+Output ONLY a valid JSON object:
+{
+  "title": "<short role title, e.g. 'Senior IRGC Strategic Affairs Analyst' or 'EU Foreign Policy Coordinator'>",
+  "prompt": "<4-6 sentence persona prompt that defines: (1) their professional background, (2) their communication style and rhetorical tendencies, (3) what they emphasize and what they downplay, (4) their key concerns and blind spots. The persona should create a DISTINCT VOICE that readers can recognize.>"
+}
+
+Output ONLY the JSON object. No markdown.`
 
 function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
 
@@ -139,16 +146,28 @@ export async function runWeightCalculator(
   const representatives: Representative[] = []
 
   for (const party of parties) {
-    const personaPrompt = `PARTY: ${party.name}\nAGENDA: ${party.agenda}\nTOPIC: ${title}`
-    const persona = await chatCompletionText({
+    const personaInput = `PARTY: ${party.name}\nTYPE: ${party.type}\nAGENDA: ${party.agenda}\nMEANS: ${party.means.join(", ")}\nSTANCE: ${party.stance}\nTOPIC: ${title}`
+    const personaRaw = await chatCompletionText({
       model,
       messages: [
         { role: "system", content: PERSONA_SYSTEM },
-        { role: "user", content: personaPrompt },
+        { role: "user", content: personaInput },
       ],
-      temperature: 0.3,
-      max_tokens: 200,
+      temperature: 0.4,
+      max_tokens: 400,
     })
+
+    let personaTitle = party.name + " Representative"
+    let personaPrompt = personaRaw.trim()
+
+    try {
+      const match = personaRaw.match(/\{[\s\S]+\}/)
+      if (match) {
+        const parsed = JSON.parse(match[0])
+        personaTitle = parsed.title || personaTitle
+        personaPrompt = parsed.prompt || personaPrompt
+      }
+    } catch { /* use raw */ }
 
     const isLowWeight = party.weight < LOW_WEIGHT_THRESHOLD
     const budget = computeSpeakingBudget(party.weight, totalWeight, isLowWeight)
@@ -156,7 +175,8 @@ export async function runWeightCalculator(
     representatives.push({
       id: `rep-${party.id}`,
       party_id: party.id,
-      persona_prompt: persona.trim(),
+      persona_prompt: personaPrompt,
+      persona_title: personaTitle,
       speaking_weight: party.weight,
       speaking_budget: budget,
       auto_generated: true,

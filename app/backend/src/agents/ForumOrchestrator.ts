@@ -147,6 +147,7 @@ export async function runForumOrchestrator(
         topicId, runId, sessionId,
         partyId: rep.party_id,
         personaPrompt: rep.persona_prompt,
+        personaTitle: rep.persona_title,
         speakingBudget: rep.speaking_budget,
         round,
         roundType: type as any,

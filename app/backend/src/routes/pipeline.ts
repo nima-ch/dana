@@ -2,7 +2,7 @@ import { Elysia } from "elysia"
 import { getTopic } from "../pipeline/topicManager"
 import { runInitialPipeline } from "../pipeline/initialPipeline"
 import { runDeltaPipeline } from "../pipeline/deltaPipeline"
-import { runDiscoverStage, runEnrichStage, runAnalyzeStages } from "../pipeline/gatedPipeline"
+import { runDiscoverStage, runEnrichStage, runAnalyzeStages, runReanalysis } from "../pipeline/gatedPipeline"
 
 const activeRuns = new Map<string, { run_id: string; started_at: string }>()
 
@@ -84,7 +84,29 @@ export const pipelineRouter = new Elysia({ prefix: "/api/topics" })
 
     const { run_id, started_at } = trackRun(topicId, "analyze")
 
-    runAnalyzeStages(topicId).then(result => {
+    runAnalyzeStages(topicId).then(() => {
+      activeRuns.delete(topicId)
+    }).catch(() => { activeRuns.delete(topicId) })
+
+    return { run_id, started_at, status: "started" }
+  })
+
+  // Clean re-analysis: fresh Weight → Forum → Expert → Verdict with current data
+  .post("/:id/pipeline/reanalyze", async ({ params, error }) => {
+    const topicId = params.id
+    try {
+      const topic = await getTopic(topicId)
+      if (topic.status !== "complete" && topic.status !== "stale" && topic.status !== "review_enrichment") {
+        return error(400, { message: `Cannot re-analyze from status "${topic.status}"` })
+      }
+    } catch { return error(404, { message: "Topic not found" }) }
+
+    const conflict = guardRunning(topicId)
+    if (conflict) return error(409, { message: "Pipeline already running", ...conflict })
+
+    const { run_id, started_at } = trackRun(topicId, "reanalyze")
+
+    runReanalysis(topicId).then(() => {
       activeRuns.delete(topicId)
     }).catch(() => { activeRuns.delete(topicId) })
 

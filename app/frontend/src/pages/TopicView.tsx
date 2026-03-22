@@ -155,6 +155,20 @@ export function TopicView() {
     setApproveLoading(false)
   }
 
+  const handleReanalyze = async () => {
+    if (!id) return
+    if (!confirm("This will run a fresh analysis (weight, forum, expert council, verdict) using the current parties and clues. Previous analysis is preserved as a prior version. Continue?")) return
+    try {
+      setPipelineRunning(true)
+      setCompletedStages(new Set())
+      setProgressMsg("Starting clean re-analysis...")
+      await api.pipeline.reanalyze(id)
+    } catch (e) {
+      setPipelineRunning(false)
+      setProgressMsg(`Failed: ${e}`)
+    }
+  }
+
   if (loading) return <div className="flex items-center justify-center h-screen text-gray-400 text-sm">Loading...</div>
   if (error || !topic) return (
     <div className="flex items-center justify-center h-screen text-red-500 text-sm">
@@ -197,6 +211,12 @@ export function TopicView() {
             <button onClick={handleStartDiscovery}
               className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg hover:bg-blue-700">
               Start Discovery
+            </button>
+          )}
+          {(topic.status === "complete" || topic.status === "stale") && !pipelineRunning && (
+            <button onClick={handleReanalyze}
+              className="px-3 py-1.5 bg-purple-600 text-white text-xs font-medium rounded-lg hover:bg-purple-700">
+              Re-analyze
             </button>
           )}
           {(topic.status === "complete") && !pipelineRunning && (

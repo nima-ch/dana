@@ -63,10 +63,17 @@ export const api = {
       request<{ run_id: string; started_at: string; status: string }>(
         `/topics/${topicId}/pipeline/update`, { method: "POST" }
       ),
+    reanalyze: (topicId: string) =>
+      request<{ run_id: string; started_at: string; status: string }>(
+        `/topics/${topicId}/pipeline/reanalyze`, { method: "POST" }
+      ),
     status: (topicId: string) =>
       request<{ running: boolean; run_id?: string; started_at?: string }>(
         `/topics/${topicId}/pipeline/status`
       ),
+  },
+  representatives: {
+    list: (topicId: string) => request<any[]>(`/topics/${topicId}/representatives`),
   },
   parties: {
     list: (topicId: string) => request<any[]>(`/topics/${topicId}/parties`),
