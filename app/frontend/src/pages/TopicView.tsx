@@ -5,6 +5,7 @@ import { StatusBadge } from "../components/Dashboard/StatusBadge"
 import { CluesPanel } from "../components/Topic/CluesPanel"
 import { PartiesPanel } from "../components/Topic/PartiesPanel"
 import { StalenessBanner } from "../components/Topic/StalenessBanner"
+import { ConversationView } from "../components/Forum/ConversationView"
 
 type Stage = "discovery" | "enrichment" | "forum" | "expert_council" | "verdict"
 
@@ -109,9 +110,18 @@ export function TopicView() {
 
           {activeStage === "discovery" && <PartiesPanel topicId={topic.id} />}
           {activeStage === "enrichment" && <CluesPanel topicId={topic.id} />}
-          {(activeStage === "forum" || activeStage === "expert_council" || activeStage === "verdict") && (
+          {activeStage === "forum" && (
+            <div className="h-full">
+              <ConversationView
+                topicId={topic.id}
+                sessionId={`forum-session-v${topic.current_version}`}
+                isLive={topic.status === "forum"}
+              />
+            </div>
+          )}
+          {(activeStage === "expert_council" || activeStage === "verdict") && (
             <div className="text-gray-400 text-sm text-center py-12">
-              {activeStage} panel — Phase 3
+              {activeStage} panel — Phase 4
             </div>
           )}
         </main>

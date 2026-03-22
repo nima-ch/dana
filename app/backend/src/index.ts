@@ -5,6 +5,7 @@ import { topicsRouter } from "./routes/topics"
 import { streamRouter } from "./routes/stream"
 import { cluesRouter } from "./routes/clues"
 import { partiesRouter } from "./routes/parties"
+import { forumRouter } from "./routes/forum"
 import { fetchAvailableModels } from "./llm/proxyClient"
 
 const app = new Elysia()
@@ -14,6 +15,7 @@ const app = new Elysia()
   .use(streamRouter)
   .use(cluesRouter)
   .use(partiesRouter)
+  .use(forumRouter)
   .get("/health", () => ({ status: "ok" }))
   .get("/api/models", async () => {
     return fetchAvailableModels()
