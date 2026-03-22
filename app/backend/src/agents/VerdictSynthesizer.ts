@@ -215,16 +215,27 @@ export async function runVerdictSynthesizer(
     weight_challenge_decisions: weightDecisions,
   }
 
+  // Determine version number from runId or topic
+  let version = 1
+  const vMatch = runId.match(/v(\d+)/)
+  if (vMatch) version = parseInt(vMatch[1])
+  // Also check topic.json for next version
+  try {
+    const topicFile = Bun.file(join(getDataDir(), "topics", topicId, "topic.json"))
+    const topic = await topicFile.json()
+    version = Math.max(version, (topic.current_version || 0) + 1)
+  } catch { /* use parsed version */ }
+
   const councilOutput: ExpertCouncilOutput = {
-    version: 1, // will be set by pipeline
-    verdict_id: `verdict-v1`,
+    version,
+    verdict_id: `verdict-v${version}`,
     experts,
     deliberations,
     final_verdict: finalVerdict,
   }
 
   // Write expert council file
-  const councilPath = join(getDataDir(), "topics", topicId, `expert_council_v1.json`)
+  const councilPath = join(getDataDir(), "topics", topicId, `expert_council_v${version}.json`)
   await Bun.write(councilPath, JSON.stringify(councilOutput, null, 2))
 
   // Write verdict artifact for pipeline tracking
