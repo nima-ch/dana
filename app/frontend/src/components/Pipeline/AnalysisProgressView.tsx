@@ -80,17 +80,26 @@ export function AnalysisProgressView({
       <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 pr-1">
         {/* Weight results */}
         {weightResults && (
-          <ContentCard title="Party Weights" stage="weight" status={getStageStatus("weight")}>
-            <div className="flex flex-wrap gap-2">
-              {weightResults.sort((a, b) => b.weight - a.weight).map(p => (
-                <div key={p.name} className="flex items-center gap-1.5 bg-gray-50 rounded px-2 py-1">
-                  <div className="w-2 h-2 rounded-full" style={{
-                    backgroundColor: p.weight > 70 ? "#22c55e" : p.weight > 40 ? "#eab308" : "#9ca3af"
-                  }} />
-                  <span className="text-xs text-gray-700">{p.name}</span>
-                  <span className="text-xs font-mono font-bold text-gray-900">{p.weight}</span>
-                </div>
-              ))}
+          <ContentCard title="Party Weights Assigned" stage="weight">
+            <div className="space-y-1.5">
+              {weightResults.sort((a, b) => b.weight - a.weight).map(p => {
+                const maxW = weightResults[0]?.weight || 100
+                return (
+                  <div key={p.name} className="flex items-center gap-2">
+                    <span className="text-xs text-gray-600 w-48 truncate shrink-0" title={p.name}>{p.name}</span>
+                    <div className="flex-1 h-3 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${(p.weight / maxW) * 100}%`,
+                          backgroundColor: p.weight > 70 ? "#3b82f6" : p.weight > 40 ? "#8b5cf6" : "#9ca3af",
+                        }}
+                      />
+                    </div>
+                    <span className="text-xs font-mono font-bold text-gray-800 w-8 text-right">{p.weight}</span>
+                  </div>
+                )
+              })}
             </div>
           </ContentCard>
         )}
@@ -103,7 +112,7 @@ export function AnalysisProgressView({
           const challenges = t.challenges || []
           const concessions = t.concessions || []
           const personaTitle = t.persona_title || t.party_id || "Representative"
-          const roundLabel = `Round ${t.round_number || "?"}`
+          const roundLabel = `Round ${t.round || t.round_number || "?"} ${t.type ? `(${t.type.replace(/_/g, " ")})` : ""}`
 
           return (
             <ContentCard
@@ -114,41 +123,48 @@ export function AnalysisProgressView({
               status="done"
             >
               {position && (
-                <div className="text-sm text-gray-800 mb-2">{position}</div>
+                <div className="text-sm text-gray-800 mb-2 leading-relaxed">{position}</div>
               )}
               {evidence.length > 0 && (
                 <div className="space-y-1 mb-2">
-                  {evidence.slice(0, 3).map((e: any, j: number) => (
+                  <div className="text-xs font-medium text-blue-700 mb-0.5">Evidence</div>
+                  {evidence.map((e: any, j: number) => (
                     <div key={j} className="flex gap-1.5 text-xs">
-                      <span className="text-blue-500 shrink-0">&#9679;</span>
-                      <span className="text-gray-600">{typeof e === "string" ? e : e.point || e.claim || JSON.stringify(e)}</span>
+                      <span className="text-blue-400 shrink-0 mt-0.5">&#8226;</span>
+                      <span className="text-gray-700">{typeof e === "string" ? e : e.point || e.claim || JSON.stringify(e)}</span>
                     </div>
                   ))}
-                  {evidence.length > 3 && <div className="text-xs text-gray-400">+{evidence.length - 3} more</div>}
                 </div>
               )}
               {challenges.length > 0 && (
-                <div className="space-y-1">
-                  {challenges.slice(0, 2).map((c: any, j: number) => (
+                <div className="space-y-1 mb-2">
+                  <div className="text-xs font-medium text-red-700 mb-0.5">Challenges</div>
+                  {challenges.map((c: any, j: number) => (
                     <div key={j} className="flex gap-1.5 text-xs">
-                      <span className="text-red-400 shrink-0">&#9650;</span>
-                      <span className="text-gray-600">{typeof c === "string" ? c : c.point || c.challenge || JSON.stringify(c)}</span>
+                      <span className="text-red-400 shrink-0 mt-0.5">&#9650;</span>
+                      <span className="text-gray-700">{typeof c === "string" ? c : c.point || c.challenge || JSON.stringify(c)}</span>
                     </div>
                   ))}
                 </div>
               )}
               {concessions.length > 0 && (
-                <div className="space-y-1 mt-1">
-                  {concessions.slice(0, 2).map((c: any, j: number) => (
+                <div className="space-y-1 mb-2">
+                  <div className="text-xs font-medium text-amber-700 mb-0.5">Concessions</div>
+                  {concessions.map((c: any, j: number) => (
                     <div key={j} className="flex gap-1.5 text-xs">
-                      <span className="text-amber-400 shrink-0">&#9671;</span>
-                      <span className="text-gray-600">{typeof c === "string" ? c : c.point || JSON.stringify(c)}</span>
+                      <span className="text-amber-400 shrink-0 mt-0.5">&#9671;</span>
+                      <span className="text-gray-700">{typeof c === "string" ? c : c.point || JSON.stringify(c)}</span>
                     </div>
                   ))}
                 </div>
               )}
+              {t.scenario_endorsement && (
+                <div className="text-xs bg-purple-50 rounded px-2 py-1 text-purple-800">
+                  <span className="font-medium">Endorses: </span>{t.scenario_endorsement}
+                </div>
+              )}
               {!position && !evidence.length && t.content && (
-                <div className="text-xs text-gray-600 line-clamp-4">{t.content.slice(0, 400)}</div>
+                <div className="text-xs text-gray-600 leading-relaxed">{t.content}</div>
               )}
             </ContentCard>
           )
