@@ -1,5 +1,5 @@
 # Dana — Specification Document
-**Version:** 0.3 | **Date:** 2026-03-22
+**Version:** 0.5 | **Date:** 2026-03-22
 
 ---
 
@@ -10,6 +10,8 @@
 | 0.1 | 2026-03-22 | Initial spec |
 | 0.2 | 2026-03-22 | Bun/Elysia runtime; live forum conversation UI; versioned knowledge states with incremental forum updates |
 | 0.3 | 2026-03-22 | Task-based model assignment (Haiku/Sonnet/Opus per task type) with per-topic settings; GitHub Pages static export per version |
+| 0.4 | 2026-03-22 | Tool-pull context model (agents fetch on demand via tools, not full context dumps); dynamic context injection pattern; artifact file outputs per agent; ClueProcessor merges BiasCorrector+SourceSummarizer; expert isolation via structured scenario summary; per-topic write queue |
+| 0.5 | 2026-03-22 | Citation chain collapse rule: independent source count based on origin_source, not outlet count; origin_source field added to clue schema and ClueProcessor output; weight challenge acceptance rule defined; contested clue classification moved to ForumOrchestrator write time |
 
 ---
 
@@ -28,6 +30,7 @@
 11. [Topic Lifecycle](#11-topic-lifecycle)
 12. [Bias Correction & Reasoning Protocol](#12-bias-correction--reasoning-protocol)
 13. [Build Roadmap](#13-build-roadmap)
+14. [GitHub Pages Static Export](#14-github-pages-static-export)
 14. [GitHub Pages Static Export](#14-github-pages-static-export)
 
 ---
@@ -187,12 +190,13 @@ Default expert pool structure:
 │                             │                                       │
 │  ┌──────────────────────────▼─────────────────────────────────┐    │
 │  │                    Tool Layer                               │    │
-│  │  WebSearch │ HttpFetch │ SourceSummarizer │ TimelineLookup  │    │
+│  │  WebSearch │ HttpFetch │ ClueProcessor │ TimelineLookup     │    │
 │  └──────────────────────────┬───────────────────────────────--┘    │
 │                             │                                       │
 │  ┌──────────────────────────▼─────────────────────────────────┐    │
 │  │              LLM Proxy Client                               │    │
-│  │         (local claudeapiproxy — model selectable)          │    │
+│  │   local claudeapiproxy (OpenAI-compatible /v1/* API)       │    │
+│  │   retry policy · per-model rate limiting · direct fallback │    │
 │  └──────────────────────────┬───────────────────────────────--┘    │
 └────────────────────────────-│───────────────────────────────────────┘
                              │
@@ -239,7 +243,7 @@ All data is stored as JSON files under `/data/topics/<topic-slug>/`.
     // Each key is a task category. Values come from the available model list
     // fetched live from the local claudeapiproxy at startup.
     "data_gathering":    "claude-haiku-4-5",    // web_search, http_fetch, cache lookups
-    "extraction":        "claude-haiku-4-5",    // source_summarize, bias correction, timeline_lookup
+    "extraction":        "claude-haiku-4-5",    // clue_processor (single-pass extraction + bias correction)
     "enrichment":        "claude-sonnet-4-6",   // EnrichmentAgent, WeightCalculator, DiscoveryAgent
     "delta_updates":     "claude-sonnet-4-6",   // DeltaRepresentativeAgent, delta expert review
     "forum_reasoning":   "claude-opus-4-6",     // RepresentativeAgent, ForumOrchestrator, DevilsAdvocate
@@ -315,7 +319,12 @@ Each clue carries its full version history inline. The `current` field always po
         "source_credibility": {
           "score": 72,
           "notes": "Independent news outlet, minor pro-opposition lean, cross-referenced with Reuters",
-          "bias_flags": ["mild_opposition_lean"]
+          "bias_flags": ["mild_opposition_lean"],
+          "origin_source": {
+            "url": "https://axios.com/...",   // first publisher of this claim; may equal raw_source.url if not a republication
+            "outlet": "Axios",
+            "is_republication": false          // true if raw_source is citing/attributing origin_source
+          }
         },
         "bias_corrected_summary": "A senior IRGC regional commander was replaced in Sistan-Baluchestan province in February 2026. Multiple independent sources confirm; motivations remain officially unstated.",
         "relevance_score": 85,
@@ -696,24 +705,32 @@ Stage 3: WEIGHT CALCULATION
   - Representative personas auto-generated
 
 Stage 4: GENERAL FORUM
-  Input:  parties.json (weighted), clues.json, representatives.json
-  Output: forum_session_v<N>.json
+  Input:  parties.json (weighted), clues.json (index), representatives.json
+  Output: forum_session_v<N>.json, logs/run-<id>/representative_<party>_r<N>.json (per rep per round)
   Agent:  ForumOrchestrator + RepresentativeAgents
+  - Each RepresentativeAgent receives: lean context snapshot (party index + clue index + injected role prompt)
+  - Representatives pull full clue detail via get_clue, prior turns via get_prior_turns as needed
+  - Each representative writes turn artifact via write_artifact before next rep begins
+  - ForumOrchestrator reads completed turn artifacts via read_artifact to sequence rounds
   - Round 1: Opening statements (weighted order)
-  - Round 2: Rebuttals (reverse weight order — smaller parties get last word)
+  - Round 2: Rebuttals — each rep calls get_prior_turns(round=1) to read others before responding
   - Round 3: Closings + scenario proposals
-  - Devil's Advocate pass on most probable scenario
-  - Scenario consolidation and deduplication
-  - All turns stream to UI in real-time via SSE
+  - Devil's Advocate pass: reads scenario list via get_scenario_list, stress-tests leading scenario
+  - ForumOrchestrator reads all round artifacts and writes consolidated forum_session_v<N>.json
+  - ForumOrchestrator computes contested/uncontested clue classification and writes pre-computed scenario_summary field into forum_session_v<N>.json — this is the only point where this classification is made
+  - All turns stream to UI in real-time via SSE as artifact writes complete
 
 Stage 5: EXPERT COUNCIL
-  Input:  forum_session_v<N>.json, clues.json, parties.json
-  Output: expert_council_v<N>.json (deliberations)
-  Agent:  ExpertAgents (parallel per expert)
-  - Each expert reviews all forum content independently
-  - Experts can trigger additional tool searches for historic data
-  - Cross-expert deliberation round (experts respond to each other)
-  - Probability estimates aggregated
+  Input:  forum_session_v<N>.json (structured summary only), clues.json (index), parties.json
+  Output: expert_council_v<N>.json (deliberations), logs/run-<id>/expert_<domain>.json (per expert)
+  Agent:  ExpertAgents (parallel, isolated subagents)
+  - Each expert receives: lean context snapshot + structured scenario summary via get_scenario_summary
+  - Experts do NOT receive raw forum transcript — only scenario definitions + contested/uncontested clue lists
+  - Experts pull full clue detail via get_clue for any clue they wish to assess
+  - Experts can trigger additional web searches for historic analogues
+  - Each expert writes artifact via write_artifact (includes scenario assessments + weight_challenges)
+  - Cross-expert deliberation round: experts read each other's artifacts via read_artifact
+  - VerdictSynthesizer reads all expert artifacts and applies accepted weight_challenges
 
 Stage 6: VERDICT SYNTHESIS
   Input:  expert_council_v<N>.json (deliberations)
@@ -739,17 +756,21 @@ Step 1: CLUE DELTA SUMMARY
   - Generate change narrative for agent briefings
 
 Step 2: DELTA FORUM SESSION
-  Input:  delta_context, prior forum session, representatives.json
-  Output: forum_session_v<N+1>.json (type: delta)
-  Agent:  RepresentativeAgents + ForumOrchestrator
-  - Each representative: position update turn (3-5 paragraphs)
-  - Orchestrator: scenario update summary
+  Input:  delta_context, representatives.json
+  Output: forum_session_v<N+1>.json (type: delta), logs/run-<id>/delta_representative_<party>.json (per rep)
+  Agent:  DeltaRepresentativeAgents + ForumOrchestrator
+  - Each DeltaRepresentativeAgent receives: lean context snapshot + delta_context summary
+  - Agent calls get_prior_turns to read its own prior position, get_clue for new/updated clues
+  - Writes position_update artifact via write_artifact
+  - ForumOrchestrator reads all delta artifacts via read_artifact, writes scenario_updates
 
 Step 3: DELTA EXPERT REVIEW
-  Input:  delta forum session, prior expert council
-  Output: expert_council_v<N+1>.json (partial — delta only)
-  Agent:  ExpertAgents (parallel)
-  - Each expert: revised probability estimate with reasoning
+  Input:  delta forum session (structured scenario update summary), clues.json (index)
+  Output: expert_council_v<N+1>.json (partial — delta only), logs/run-<id>/delta_expert_<domain>.json
+  Agent:  ExpertAgents (parallel, isolated)
+  - Each expert receives: prior verdict summary + scenario update summary (not raw delta forum)
+  - Expert pulls updated clue versions via get_clue as needed
+  - Writes revised probability estimate artifact via write_artifact
 
 Step 4: VERDICT UPDATE
   Input:  all delta outputs
@@ -768,10 +789,9 @@ All agents share a common base structure and communicate through the local claud
 ### 7.1 Agent Base Contract
 
 Every agent receives:
-- **System prompt**: role definition, constraints, output format instructions
-- **Context pack**: relevant JSON data (parties, clues, prior outputs)
-- **Tool access**: subset of available tools appropriate to that agent's role
-- **Output schema**: strict JSON schema the agent must conform to
+- **System prompt**: static base (role, constraints, output format) + **dynamically injected context snapshot** at call time
+- **Tool access**: narrow subset of tools appropriate to that agent's role — agents pull full data on demand, they are not pre-loaded with it
+- **Output contract**: agent writes a structured artifact JSON file; orchestrator reads it — no inline context accumulation
 
 Every agent must:
 1. Reason step-by-step before producing output (Chain-of-Thought in system prompt)
@@ -779,64 +799,276 @@ Every agent must:
 3. Assign a self-assessed confidence level to each conclusion
 4. Flag any gaps in evidence that affected its reasoning
 
-### 7.2 Agent Definitions
+### 7.2 Dynamic Context Injection
+
+Context is injected at call time via a `buildAgentContext()` function, not stored statically. The injected snapshot is deliberately lean — agents pull full detail via tools when they need it.
+
+```typescript
+// backend/src/agents/contextBuilder.ts
+
+interface AgentContextSnapshot {
+  current_version: number
+  party_index: { id: string; name: string; weight: number }[]   // index only — no full profiles
+  clue_index: { id: string; title: string; timeline_date: string; party_relevance: string[] }[]  // titles only
+  forum_summary?: string    // condensed paragraph, not full transcript
+  prior_verdict_summary?: string
+}
+
+function buildAgentContext(agentType: AgentType, topicId: string): AgentContextSnapshot {
+  return {
+    current_version: stateManager.getCurrentVersion(topicId),
+    party_index: partyStore.getIndex(topicId),          // ~10 tokens per party
+    clue_index: clueStore.getIndex(topicId),            // ~15 tokens per clue
+    forum_summary: agentType !== 'forum' 
+      ? forumStore.getCondensedSummary(topicId)         // ~200 tokens total
+      : undefined,
+    prior_verdict_summary: agentType === 'delta'
+      ? verdictStore.getSummary(topicId)
+      : undefined,
+  }
+}
+```
+
+**Key principle**: The clue index costs ~15 tokens per clue. An agent that needs 5 clues fetches them via `get_clue` — paying for only those 5 in full, not all 30. This mirrors how a good engineer reads code: `Grep` and `Read` specific files rather than loading the entire repo into context.
+
+### 7.3 Artifact File Outputs
+
+Every agent writes a structured JSON artifact file instead of returning data inline to the orchestrator. The orchestrator reads artifact files via `read_artifact`. This eliminates context accumulation across agent calls.
+
+```
+logs/run-<run-id>/
+  discovery_output.json
+  enrichment_output.json
+  weight_calculation.json
+  representative_<party-id>_r<round>.json    ← one file per rep per round
+  forum_orchestrator_r<round>.json
+  expert_<domain>.json                        ← one file per expert
+  verdict_synthesis.json
+  delta_representative_<party-id>.json
+  delta_expert_<domain>.json
+  delta_verdict.json
+```
+
+ForumOrchestrator does not receive all representative outputs as context — it calls `read_artifact("representative_irgc_r1")`, `read_artifact("representative_opposition_r1")`, etc. and reads them sequentially. The orchestrator's context at synthesis time is: its own artifact reader calls + the scenario consolidation it is currently writing.
+
+### 7.4 Agent Definitions
 
 | Agent | Role | Task Category | Default Model | Tools | Key Constraints |
 |---|---|---|---|---|---|
-| `DiscoveryAgent` | Identify parties and seed clues | `enrichment` | Sonnet | WebSearch, HttpFetch | Must generate ≥5 parties; no assumed facts |
-| `EnrichmentAgent` | Deepen profiles, expand clues | `enrichment` | Sonnet | WebSearch, HttpFetch, TimelineLookup | Bias correction on every clue |
-| `BiasCorrector` | Bias-correct a single clue | `extraction` | Haiku | none | Must output structured flags + neutral summary |
-| `SourceSummarizer` | Extract relevant content from raw HTML | `extraction` | Haiku | none | Context-aware; no invention |
-| `WeightCalculator` | Score party influence | `enrichment` | Sonnet | none | Must show working per dimension |
-| `RepresentativeAgent` | Argue for one party | `forum_reasoning` | Opus | none | Steelman; cite clues; acknowledge counter-evidence |
-| `DeltaRepresentativeAgent` | Update position given new clues | `delta_updates` | Sonnet | none | Must reference prior position; explain what changed and why |
-| `ForumOrchestrator` | Sequence forum, generate scenarios | `forum_reasoning` | Opus | none | Deduplicate scenarios; all parties addressed |
-| `DevilsAdvocate` | Stress-test leading scenario | `forum_reasoning` | Opus | none | Must produce ≥3 genuine falsification arguments |
-| `ExpertAgent` | Domain analysis, probabilities | `expert_council` | Opus | WebSearch, HttpFetch | No allegiance; must cite historic analogues |
-| `VerdictSynthesizer` | Final report | `verdict` | Opus | none | Probabilities sum ≤1.0; confidence-flagged |
+| `DiscoveryAgent` | Identify parties and seed clues | `enrichment` | Sonnet | WebSearch, HttpFetch, WriteArtifact | Must generate ≥5 parties; no assumed facts |
+| `EnrichmentAgent` | Deepen profiles, expand clues | `enrichment` | Sonnet | WebSearch, HttpFetch, TimelineLookup, GetClue, WriteArtifact | Runs ClueProcessor on every clue |
+| `ClueProcessor` | Extract + bias-correct a single clue from raw HTML | `extraction` | Haiku | none | Single-pass: extraction + bias correction together; no invention |
+| `WeightCalculator` | Score party influence | `enrichment` | Sonnet | GetPartyProfile, WriteArtifact | Must show working per dimension |
+| `RepresentativeAgent` | Argue for one party | `forum_reasoning` | Opus | GetClue, GetPartyProfile, GetPriorTurns, GetScenarioList, WriteArtifact | Steelman; cite clues; acknowledge counter-evidence |
+| `DeltaRepresentativeAgent` | Update position given new clues | `delta_updates` | Sonnet | GetClue, GetPriorTurns, ReadArtifact, WriteArtifact | Must reference prior position; explain what changed and why |
+| `ForumOrchestrator` | Sequence forum, synthesize scenarios | `forum_reasoning` | Opus | ReadArtifact, WriteArtifact | Reads rep artifacts; deduplicates scenarios; all parties addressed |
+| `DevilsAdvocate` | Stress-test leading scenario | `forum_reasoning` | Opus | GetClue, GetScenarioList, WriteArtifact | Must produce ≥3 genuine falsification arguments |
+| `ExpertAgent` | Domain analysis, probabilities | `expert_council` | Opus | GetClue, GetScenarioSummary, WebSearch, HttpFetch, WriteArtifact | Receives scenario list + clue index only — not raw forum; must cite historic analogues |
+| `VerdictSynthesizer` | Final report | `verdict` | Opus | ReadArtifact, WriteArtifact | Reads all expert artifacts; probabilities sum ≤1.0; applies weight challenges |
 
-### 7.3 Anti-Bias Mechanisms
+### 7.5 Expert Isolation
+
+Experts receive a **structured scenario summary**, not the raw forum transcript. This prevents anchoring on representative rhetoric.
+
+The scenario summary is computed and written by `ForumOrchestrator` at the end of Stage 4 — it is a pre-computed field in the forum session file, not derived at read time. This ensures all experts see an identical, stable snapshot regardless of when they call `get_scenario_summary`.
+
+```jsonc
+// Stored in forum_session_vN.json by ForumOrchestrator — read by get_scenario_summary
+"scenario_summary": {
+  "scenarios": [
+    {
+      "id": "scenario-a",
+      "title": "Controlled transition via elite split",
+      "key_clues": ["clue-001", "clue-012"],
+      "required_conditions": ["IRGC fracture along Sepah/Basij lines"],
+      "falsification_conditions": ["IRGC conducts coordinated crackdown without internal resistance"]
+    }
+  ],
+  "contested_clues": [
+    {
+      "clue_id": "clue-001",
+      "cited_by": ["rep-irgc", "rep-opposition"],
+      "conflict": "IRGC rep cited as evidence of stability; opposition rep cited as evidence of fracture"
+    }
+  ],
+  "uncontested_clues": ["clue-007", "clue-019"]
+}
+```
+
+**Contested clue definition**: A clue is contested if it was cited by ≥2 different parties **with conflicting interpretations** in the forum session. ForumOrchestrator determines this when consolidating scenarios after Round 3 — it is the only agent with full visibility of how each party used each clue across all turns. `get_scenario_summary` simply reads the pre-computed `scenario_summary` field; it performs no classification logic.
+
+The expert then uses `get_clue` to read the full detail of any clue they want to assess. They derive probabilities from clues + scenario definitions — not from who argued what in the forum.
+
+**Weight challenges**: Expert artifacts may include a `weight_challenges` array where experts flag party weight scores they consider miscalibrated based on clue evidence. `VerdictSynthesizer` applies challenges according to a defined acceptance rule (see below) and logs every decision in the verdict artifact for traceability.
+
+```jsonc
+// expert_geopolitics.json — weight_challenges section
+"weight_challenges": [
+  {
+    "party_id": "irgc",
+    "dimension": "economic_control",
+    "original_score": 75,
+    "suggested_score": 55,
+    "reasoning": "Bonyad revenues fell 40% since 2024 sanctions",
+    "clues_cited": ["clue-015"]
+  }
+]
+```
+
+**Weight challenge acceptance rule**: A challenge is accepted if:
+- ≥2 experts flag the same party + dimension, OR
+- 1 expert flags it AND no expert explicitly defends the original score
+
+A challenge is rejected if any expert explicitly argues the original score is correct. VerdictSynthesizer records each challenge decision in `verdict_synthesis.json`:
+
+```jsonc
+"weight_challenge_decisions": [
+  {
+    "party_id": "irgc",
+    "dimension": "economic_control",
+    "original_score": 75,
+    "applied_score": 55,
+    "status": "accepted",       // accepted | rejected
+    "reason": "2 experts flagged (exp-economics, exp-geopolitics); none defended original",
+    "flagged_by": ["exp-economics", "exp-geopolitics"],
+    "defended_by": []
+  }
+]
+```
+
+This makes weight adjustments fully traceable in the final report.
+
+### 7.6 Anti-Bias Mechanisms
 
 1. **Devil's Advocate Pass**: Before forum closes, dedicated agent attempts to falsify the most probable scenario
-2. **Source Diversity Check**: No single source or political viewpoint accounts for >30% of clue weight
+2. **Source Diversity Check**: No single **origin source** or political viewpoint accounts for >30% of clue weight. Outlet count is irrelevant — diversity is measured by distinct `origin_source` values. A claim reported by 10 outlets all tracing back to one wire report counts as 1 origin source.
 3. **Steelman Protocol**: Every representative articulates the strongest opposing view before refuting it
-4. **Expert Independence**: Experts run in parallel without seeing each other's outputs until cross-deliberation
-5. **Confidence Calibration**: Probability estimates flagged if aggregate confidence exceeds what evidence warrants
+4. **Expert Isolation**: Experts receive a structured scenario summary, not raw forum arguments — preventing anchoring on representative rhetoric
+5. **Weight Challenges**: Experts can formally challenge party weight scores with clue-backed reasoning
+6. **Confidence Calibration**: Probability estimates flagged if aggregate confidence exceeds what evidence warrants
+
+### 7.7 LLM Proxy Client Resilience
+
+The proxy client (`proxyClient.ts`) is the single point of LLM access. It must be robust since forum sessions are long-running.
+
+```typescript
+interface LLMClientConfig {
+  primary: { baseUrl: string; type: "proxy" }       // local claudeapiproxy (OpenAI-compatible)
+  fallback?: { baseUrl: string; apiKey: string; type: "direct" }  // direct Anthropic API
+  retryPolicy: { maxAttempts: 3; backoffMs: [1000, 5000, 15000] }
+  timeoutMs: 120_000
+}
+```
+
+Rate limiting is applied per model tier using a token bucket, since Opus has tighter rate limits than Haiku:
+
+```typescript
+const rateLimiters = {
+  "claude-opus-4-6":   new TokenBucket({ rps: 2,  burst: 5  }),
+  "claude-sonnet-4-6": new TokenBucket({ rps: 5,  burst: 10 }),
+  "claude-haiku-4-5":  new TokenBucket({ rps: 20, burst: 40 }),
+}
+```
+
+The proxy contract is OpenAI-compatible (`/v1/chat/completions`, `/v1/models`), making the direct API a drop-in fallback with no code changes in agents.
 
 ---
 
 ## 8. Tool System
 
-### 8.1 `web_search`
+Tools fall into two categories: **external tools** (web/network access, used by discovery/enrichment agents) and **internal tools** (data access within a topic, used by reasoning agents). Reasoning agents (Representatives, Experts, Orchestrators) only have access to internal tools — they never call the web directly.
+
+### 8.1 External Tools
+
+#### `web_search`
 - **Input**: `query: string`, `num_results: number (1-10)`, `date_filter?: string`
-- **Implementation**: HTTP request to search endpoint (no API key required); parse HTML results for titles, snippets, URLs
+- **Implementation**: HTTP request to search endpoint; parse HTML results for titles, snippets, URLs
 - **Output**: `[{ title, url, snippet, date }]`
 
-### 8.2 `http_fetch`
-- **Input**: `url: string`, `extract_mode: "full" | "article" | "summary"`
-- **Implementation**: Fetch URL, strip HTML/JS, extract main content body using readability heuristics; optionally call LLM to summarize
-- **Output**: `{ url, title, content, fetched_at, cached: boolean }`
+#### `http_fetch`
+- **Input**: `url: string`
+- **Implementation**: Fetch URL, strip HTML/JS, extract main content body using readability heuristics
+- **Output**: `{ url, title, raw_content, fetched_at, cached: boolean }`
 - **Caching**: Results cached to `sources/cache/<url-hash>.json`; cache TTL configurable (default 48h)
+- **Note**: Returns raw extracted content only. Summarization and bias correction are handled by `ClueProcessor`.
 
-### 8.3 `source_summarize`
-- **Input**: `text: string`, `context: string`, `max_length: number`
-- **Implementation**: LLM call to extract relevant content from raw text with respect to context
-- **Output**: `{ summary, key_points: string[], date_references: string[] }`
-
-### 8.4 `timeline_lookup`
+#### `timeline_lookup`
 - **Input**: `entity: string`, `event_type: string`, `date_range: { from, to }`
 - **Implementation**: Combines web_search with date filters, orders results chronologically
 - **Output**: `[{ date, event, source_url, relevance }]`
 
-### 8.5 `store_clue`
-- **Input**: `topic_id`, clue data (conforms to clue schema)
-- **Implementation**: Appends to `clues.json` with deduplication check (URL + timeline_date)
-- **Output**: `{ clue_id, version, status }`
+### 8.2 Internal Tools (Agent Data Access)
 
-### 8.6 `read_topic_data`
-- **Input**: `topic_id`, `data_type: "parties" | "clues" | "forum" | "experts" | "states"`
-- **Implementation**: Read and return the relevant JSON file
-- **Output**: parsed JSON
+These tools give reasoning agents on-demand access to topic data without pre-loading full context. They are the mechanism behind the tool-pull context model (§7.2).
+
+#### `get_clue`
+- **Input**: `clue_id: string`, `version?: number` (defaults to current)
+- **Implementation**: Read `clues.json`, return full clue object at requested version
+- **Output**: full clue object including bias_corrected_summary, source_credibility, bias_flags, versions
+- **Usage**: Representatives and Experts call this for each clue they want to cite. They receive the clue index (~15 tokens/clue) upfront and fetch full detail only for clues they actually use.
+
+#### `get_party_profile`
+- **Input**: `party_id: string`
+- **Implementation**: Read `parties.json`, return full party object
+- **Output**: full party object including weight_factors, circle, vulnerabilities
+
+#### `get_prior_turns`
+- **Input**: `round?: number`, `party_id?: string`, `session_id?: string`
+- **Implementation**: Read forum session file, filter and return matching turns
+- **Output**: `[{ id, representative_id, party_name, statement, clues_cited, round, type }]`
+- **Usage**: Representatives use this to read what others have said before constructing their own turn. Keeps each agent's context to only the turns they actually need.
+
+#### `get_scenario_list`
+- **Input**: `session_id: string`
+- **Implementation**: Read forum session file, return scenarios array only
+- **Output**: `[{ id, title, required_conditions, falsification_conditions, key_clues }]`
+- **Usage**: Used by DevilsAdvocate and ExpertAgents. Experts receive scenario definitions without representative arguments.
+
+#### `get_scenario_summary`
+- **Input**: `topic_id: string`, `version: number`
+- **Implementation**: Reads the pre-computed `scenario_summary` field from `forum_session_vN.json`. Does NOT compute or classify anything at read time — the summary is written by `ForumOrchestrator` at the end of Stage 4 and is immutable thereafter.
+- **Output**: structured scenario summary object (scenarios, contested_clues, uncontested_clues — see §7.5)
+- **Usage**: ExpertAgent entry point. All parallel expert subagents read the same pre-computed snapshot; no race condition risk. Ensures experts derive probabilities from clues, not from forum rhetoric.
+
+#### `write_artifact`
+- **Input**: `run_id: string`, `artifact_name: string`, `data: object`
+- **Implementation**: Write JSON to `logs/run-<run-id>/<artifact_name>.json`; per-topic write queue ensures no concurrent write conflicts
+- **Output**: `{ path, written_at }`
+
+#### `read_artifact`
+- **Input**: `run_id: string`, `artifact_name: string`
+- **Implementation**: Read JSON from `logs/run-<run-id>/<artifact_name>.json`
+- **Output**: parsed artifact object
+
+### 8.3 Processing Tools
+
+#### `clue_processor`
+- **Input**: `raw_html: string`, `source_url: string`, `topic_context: string`
+- **Implementation**: Single LLM call (Haiku) that performs extraction + bias correction in one pass. Replaces the former separate `source_summarize` + `BiasCorrector` pipeline.
+- **Output**:
+  ```jsonc
+  {
+    "extracted_content": "...",
+    "bias_corrected_summary": "...",
+    "bias_flags": ["mild_opposition_lean"],
+    "source_credibility_score": 72,
+    "credibility_notes": "...",
+    "origin_source": {
+      "url": "https://...",       // first publisher of the claim; may equal input URL if not a republication
+      "outlet": "Axios",
+      "is_republication": false   // true if the fetched page is citing/attributing another outlet as origin
+    },
+    "key_points": ["..."],
+    "date_references": ["2026-02-15"],
+    "relevance_score": 85
+  }
+  ```
+- **Rationale**: Bias correction has full access to raw content — not a pre-summarized version. One LLM call instead of two. Origin source is identified here so the citation chain collapse rule (§12.1) can be applied at corroboration-check time.
+
+#### `store_clue`
+- **Input**: `topic_id`, clue data (conforms to clue schema)
+- **Implementation**: Appends to `clues.json` via per-topic write queue; deduplication check (URL + timeline_date)
+- **Output**: `{ clue_id, version, status }`
 
 ---
 
@@ -1000,7 +1232,7 @@ Models are assigned **per task category**, not per stage. This is the key effici
 | Task Category | What runs in it | Default Model | Rationale |
 |---|---|---|---|
 | `data_gathering` | `web_search`, `http_fetch`, cache reads | `claude-haiku-4-5` | Pure retrieval; no reasoning needed |
-| `extraction` | `source_summarize`, `BiasCorrector`, `SourceSummarizer` | `claude-haiku-4-5` | Structured extraction; high volume; Haiku is fast and cheap |
+| `extraction` | `ClueProcessor` (single-pass extraction + bias correction) | `claude-haiku-4-5` | Structured extraction; high volume; Haiku is fast and cheap |
 | `enrichment` | `DiscoveryAgent`, `EnrichmentAgent`, `WeightCalculator` | `claude-sonnet-4-6` | Needs context understanding; not full reasoning |
 | `delta_updates` | `DeltaRepresentativeAgent`, delta expert review | `claude-sonnet-4-6` | Incremental reasoning; Sonnet is sufficient for position deltas |
 | `forum_reasoning` | `RepresentativeAgent`, `ForumOrchestrator`, `DevilsAdvocate` | `claude-opus-4-6` | Adversarial multi-party reasoning; needs the best model |
@@ -1065,6 +1297,18 @@ All dropdowns are populated from the live model list. Settings are saved to `top
       logs/
         pipeline.log                # full pipeline execution log
         agent_<run-id>.jsonl        # per-run agent input/output traces
+        run-<run-id>/
+          checkpoint.json           # resume state: { stage, step, completed_turn_ids }
+          discovery_output.json
+          enrichment_output.json
+          weight_calculation.json
+          representative_<party-id>_r<round>.json   # one per rep per round
+          forum_orchestrator_r<round>.json
+          expert_<domain>.json                       # one per expert
+          verdict_synthesis.json
+          delta_representative_<party-id>.json       # delta runs only
+          delta_expert_<domain>.json
+          delta_verdict.json
       exports/
         v1/
           index.html                # self-contained static report for state v1
@@ -1105,21 +1349,36 @@ All dropdowns are populated from the live model list. Settings are saved to `top
         DiscoveryAgent.ts
         EnrichmentAgent.ts
         RepresentativeAgent.ts
+        DeltaRepresentativeAgent.ts
         ForumOrchestrator.ts
+        DevilsAdvocate.ts
         ExpertAgent.ts
         VerdictSynthesizer.ts
-        DeltaForumAgent.ts
+        contextBuilder.ts           # buildAgentContext() — dynamic context injection
       tools/
-        webSearch.ts
-        httpFetch.ts
-        sourceSummarize.ts
-        timelineLookup.ts
+        external/
+          webSearch.ts
+          httpFetch.ts
+          timelineLookup.ts
+        internal/
+          getClue.ts                # on-demand clue fetch by id+version
+          getPartyProfile.ts
+          getPriorTurns.ts
+          getScenarioList.ts
+          getScenarioSummary.ts     # structured scenario summary for experts
+          writeArtifact.ts          # per-topic write queue + artifact file write
+          readArtifact.ts
+        processing/
+          clueProcessor.ts          # single-pass extraction + bias correction (Haiku)
+          storeClue.ts
       pipeline/
         initialPipeline.ts
         deltaUpdatePipeline.ts
         stateManager.ts             # version/state management logic
+        writeQueue.ts               # per-topic serialized write queue
+        checkpointManager.ts        # resume logic: read/write checkpoint.json per run
       llm/
-        proxyClient.ts              # wraps local claudeapiproxy
+        proxyClient.ts              # wraps local claudeapiproxy; retry + rate limiting per model tier
 ```
 
 ---
@@ -1157,13 +1416,16 @@ Every stage is:
 
 For every raw clue fetched:
 
-1. **Provenance check**: Publisher's known political affiliation/funding?
-2. **Corroboration check**: Reported by ≥1 independent source of different political lean?
-3. **Language bias scan**: Loaded language present? If yes, rewrite neutrally.
-4. **Temporal context**: Recent? Potentially outdated?
-5. **Selectivity check**: Cherry-picked data point or part of a broader pattern?
+1. **Origin source identification**: Who first published this claim? If the fetched outlet is republishing, attributing, or citing another source, trace to the originating report. Record as `origin_source` in the clue's credibility metadata. All downstream outlets citing that same origin count as **one independent source**, not many.
+2. **Provenance check**: Origin source's known political affiliation/funding?
+3. **Corroboration check**: Reported by ≥1 **independent** origin source of different political lean? Two outlets both citing the same wire report or original story do not count as independent corroboration.
+4. **Language bias scan**: Loaded language present? If yes, rewrite neutrally.
+5. **Temporal context**: Recent? Potentially outdated?
+6. **Selectivity check**: Cherry-picked data point or part of a broader pattern?
 
-Output: `bias_corrected_summary` + `bias_flags[]`.
+Output: `bias_corrected_summary` + `bias_flags[]` + `origin_source`.
+
+**Citation chain collapse rule**: The independent source count for any claim is the number of distinct `origin_source` values across all clues that report it — not the number of outlets. Example: BBC citing Axios, Guardian citing BBC, and The Atlantic citing Axios all trace to Axios as origin. Independent source count = 1.
 
 ### 12.2 Forum Reasoning Rules
 
@@ -1189,66 +1451,69 @@ Built into all representative system prompts:
 ### Phase 1 — Foundation
 1. Initialize project: `bun create` for backend (Elysia), Vite for frontend
 2. Implement `TopicManager`: CRUD topics, JSON file operations with Bun file APIs
-3. Implement LLM proxy client: wraps local claudeapiproxy, model selection, streaming
-4. Implement Tool Layer: `web_search`, `http_fetch`, `source_summarize`, `store_clue`
-5. Implement `DiscoveryAgent`: topic → initial parties + seed clues
-6. Wire SSE streaming endpoint (Elysia `streamSSE`)
-7. Build Dashboard UI: topic card grid, new topic dialog
-8. Build basic Topic View skeleton with stage navigator
+3. Implement LLM proxy client: wraps local claudeapiproxy, model selection, streaming; retry policy + per-model-tier rate limiting
+4. Implement external tool layer: `web_search`, `http_fetch`, `timeline_lookup`
+5. Implement `ClueProcessor`: single-pass extraction + bias correction (Haiku); replaces separate SourceSummarizer + BiasCorrector
+6. Implement `store_clue` with per-topic write queue (`writeQueue.ts`)
+7. Implement `DiscoveryAgent`: topic → initial parties + seed clues; writes discovery artifact
+8. Wire SSE streaming endpoint (Elysia `streamSSE`)
+9. Build Dashboard UI: topic card grid, new topic dialog
+10. Build basic Topic View skeleton with stage navigator
 
 ### Phase 2 — Clue Pipeline & Versioning
-9. Implement `EnrichmentAgent`: party deepening + clue expansion
-10. Implement bias correction pipeline
-11. Implement `WeightCalculator` agent
-12. Implement `timeline_lookup` tool
-13. Implement `StateManager`: states.json, version snapshot logic, staleness detection
-14. Build Clues Panel UI: list, filter, bias flags, version history button, diff badges
-15. Build Party Editor UI: full CRUD, weight visualization
-16. Build staleness banner + "View Changes" diff modal
+11. Implement internal tool layer: `get_clue`, `get_party_profile`, `write_artifact`, `read_artifact`
+12. Implement `buildAgentContext()`: dynamic lean context injection for all agent calls
+13. Implement `EnrichmentAgent`: party deepening + clue expansion via ClueProcessor; writes enrichment artifact
+14. Implement `WeightCalculator` agent; writes weight_calculation artifact
+15. Implement `StateManager`: states.json, version snapshot logic, staleness detection
+16. Implement `checkpointManager`: write/read checkpoint.json per run; pipeline resume on interruption
+17. Build Clues Panel UI: list, filter, bias flags, version history button, diff badges
+18. Build Party Editor UI: full CRUD, weight visualization
+19. Build staleness banner + "View Changes" diff modal
 
 ### Phase 3 — Forum as Live Conversation
-17. Generate representative personas from parties
-18. Implement `RepresentativeAgent` with steelman protocol
-19. Implement `ForumOrchestrator`: round sequencing, weighted speaking order
-20. Implement `DevilsAdvocate` pass
-21. Build Forum Conversation View: streaming turns, round separators, scenario cards
-22. Implement SSE forum turn events; frontend `useSSE` hook
-23. Add clue inline links (click → clue detail sidebar)
-24. Add replay scrub bar for completed sessions
-25. Add delta turn rendering with position diff badges
+20. Implement `get_prior_turns` and `get_scenario_list` internal tools
+21. Implement `RepresentativeAgent` with steelman protocol; tool-pull context model; writes turn artifact per round
+22. Implement `ForumOrchestrator`: reads rep artifacts via read_artifact; round sequencing; writes consolidated forum session
+23. Implement `DevilsAdvocate` pass; writes falsification artifact
+24. Build Forum Conversation View: streaming turns, round separators, scenario cards
+25. Implement SSE forum turn events; frontend `useSSE` hook (stream as artifact writes complete)
+26. Add clue inline links (click → clue detail sidebar)
+27. Add replay scrub bar for completed sessions
+28. Add delta turn rendering with position diff badges
 
 ### Phase 4 — Expert Council & Verdict
-26. Implement `ExpertAgent` (parallel per expert, tool-capable)
-27. Implement cross-expert deliberation round
-28. Implement `VerdictSynthesizer`
-29. Build Expert Council Panel: tabs per expert, cross-deliberation thread
-30. Build Verdict Panel: probability bars, watch indicators, trajectories
+29. Implement `get_scenario_summary` internal tool: structured scenario summary (no raw forum rhetoric)
+30. Implement `ExpertAgent` as isolated parallel subagents; tool-pull model; writes expert artifact including weight_challenges
+31. Implement cross-expert deliberation round via read_artifact
+32. Implement `VerdictSynthesizer`: reads all expert artifacts; applies weight challenges; writes verdict artifact
+33. Build Expert Council Panel: tabs per expert, cross-deliberation thread, weight challenge indicators
+34. Build Verdict Panel: probability bars, watch indicators, trajectories
 
 ### Phase 5 — Incremental Updates
-31. Implement `DeltaForumAgent`: delta session orchestration
-32. Implement delta expert review
-33. Implement delta verdict synthesis
-34. Wire full incremental update pipeline
-35. Build version picker + compare mode in topic header
-36. Build version diff views (clues, scenarios, probabilities, verdict)
+35. Implement `DeltaRepresentativeAgent`: tool-pull delta position update; writes delta rep artifact
+36. Implement delta expert review with get_scenario_summary (delta variant)
+37. Implement delta verdict synthesis
+38. Wire full incremental update pipeline
+39. Build version picker + compare mode in topic header
+40. Build version diff views (clues, scenarios, probabilities, verdict)
 
 ### Phase 6 — Model Assignment & Settings
-37. Query claudeapiproxy `/v1/models` on startup; expose as `/api/models` to frontend
-38. Build per-task model assignment UI (7 dropdowns populated from live model list)
-39. Wire task category → model lookup in `proxyClient.ts`; all agents read model from topic config
-40. Add global default model profile in app settings; new topics inherit it
-41. Pipeline resume logic for interrupted runs
+41. Query claudeapiproxy `/v1/models` on startup; expose as `/api/models` to frontend
+42. Build per-task model assignment UI (7 dropdowns populated from live model list)
+43. Wire task category → model lookup in `proxyClient.ts`; all agents read model from topic config
+44. Add global default model profile in app settings; new topics inherit it
 
 ### Phase 7 — Static Export & GitHub Pages
-42. Build `data.json` assembler: snapshot all topic data for a given version
-43. Build static HTML template + vanilla JS renderer (~200 lines)
-44. Wire "Export as Static Page" button in Verdict Panel
-45. Build version index page template
-46. Build root topic index page template
-47. Implement GitHub API publisher: push files to gh-pages branch
-48. Add GitHub Pages config to topic settings (repo, branch, base path, token)
-49. Add "Publish to GitHub Pages" button with confirmation + published URL display
-50. Build compare view on version index page (side-by-side two versions)
+45. Build `data.json` assembler: snapshot all topic data for a given version
+46. Build static HTML template + vanilla JS renderer (expect ~600 lines for full forum + diff + tabs)
+47. Wire "Export as Static Page" button in Verdict Panel
+48. Build version index page template
+49. Build root topic index page template
+50. Implement GitHub API publisher: push files to gh-pages branch
+51. Add GitHub Pages config to topic settings (repo, branch, base path, token)
+52. Add "Publish to GitHub Pages" button with confirmation + published URL display
+53. Build compare view on version index page (side-by-side two versions)
 
 ---
 
