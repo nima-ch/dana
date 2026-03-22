@@ -12,11 +12,11 @@ async function readParties(topicId: string): Promise<Party[]> {
   return f.json()
 }
 
-export const partiesRouter = new Elysia({ prefix: "/api/topics/:topicId/parties" })
-  .get("/", async ({ params }) => readParties(params.topicId))
+export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
+  .get("/", async ({ params }) => readParties(params.id))
 
   .get("/:partyId", async ({ params, error }) => {
-    const parties = await readParties(params.topicId)
+    const parties = await readParties(params.id)
     const party = parties.find(p => p.id === params.partyId)
     return party ?? error(404, { message: "Party not found" })
   })
@@ -35,7 +35,7 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:topicId/parties"
         stance: b.stance ?? "passive", vulnerabilities: b.vulnerabilities ?? [],
         auto_discovered: false, user_verified: true,
       }
-      await queuedWrite<Party[]>(params.topicId, partiesPath(params.topicId),
+      await queuedWrite<Party[]>(params.id, partiesPath(params.id),
         (parties) => [...parties, party], [])
       return party
     } catch (e) {
@@ -46,7 +46,7 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:topicId/parties"
   .put("/:partyId", async ({ params, body, error }) => {
     try {
       let updated: Party | null = null
-      await queuedWrite<Party[]>(params.topicId, partiesPath(params.topicId), (parties) => {
+      await queuedWrite<Party[]>(params.id, partiesPath(params.id), (parties) => {
         return parties.map(p => {
           if (p.id !== params.partyId) return p
           updated = { ...p, ...(body as Partial<Party>), id: p.id }
@@ -60,7 +60,7 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:topicId/parties"
   }, { body: t.Record(t.String(), t.Any()) })
 
   .delete("/:partyId", async ({ params }) => {
-    await queuedWrite<Party[]>(params.topicId, partiesPath(params.topicId),
+    await queuedWrite<Party[]>(params.id, partiesPath(params.id),
       (parties) => parties.filter(p => p.id !== params.partyId), [])
     return { success: true }
   })

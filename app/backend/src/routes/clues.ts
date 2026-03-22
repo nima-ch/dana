@@ -13,18 +13,18 @@ async function readClues(topicId: string): Promise<Clue[]> {
   return f.json()
 }
 
-export const cluesRouter = new Elysia({ prefix: "/api/topics/:topicId/clues" })
-  .get("/", async ({ params }) => readClues(params.topicId))
+export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
+  .get("/", async ({ params }) => readClues(params.id))
 
   .get("/:clueId", async ({ params, error }) => {
-    const clues = await readClues(params.topicId)
+    const clues = await readClues(params.id)
     const clue = clues.find(c => c.id === params.clueId)
     return clue ?? error(404, { message: "Clue not found" })
   })
 
   .post("/", async ({ params, body, error }) => {
     try {
-      const topicId = params.topicId
+      const topicId = params.id
       let newClue: Clue | null = null
 
       await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (clues) => {
@@ -64,8 +64,8 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:topicId/clues" })
   }, { body: t.Record(t.String(), t.Any()) })
 
   .delete("/:clueId", async ({ params }) => {
-    await queuedWrite<Clue[]>(params.topicId, cluesPath(params.topicId),
+    await queuedWrite<Clue[]>(params.id, cluesPath(params.id),
       (clues) => clues.filter(c => c.id !== params.clueId), [])
-    await markStale(params.topicId)
+    await markStale(params.id)
     return { success: true }
   })
