@@ -157,7 +157,7 @@ export function AnalysisProgressView({
                       <div key={j} className="bg-blue-50 rounded px-2.5 py-1.5">
                         <div className="text-xs font-medium text-gray-800">{typeof e === "string" ? e : e.claim || e.point || ""}</div>
                         {e.interpretation && <div className="text-xs text-gray-600 mt-0.5">{e.interpretation}</div>}
-                        {e.clue_id && <span className="text-[10px] text-blue-500 font-mono">[{e.clue_id}]</span>}
+                        {e.clue_id && <span className="text-[10px] text-blue-500 font-mono">[{e.clue_id.replace(/^clue-0*/, "")}]</span>}
                       </div>
                     ))}
                   </div>

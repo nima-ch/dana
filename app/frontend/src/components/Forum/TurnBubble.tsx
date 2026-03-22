@@ -54,7 +54,7 @@ function ClueChip({ clueId, onClick }: { clueId: string; onClick?: (id: string) 
       className="inline-flex items-center px-1.5 py-0.5 text-xs bg-blue-50 text-blue-700 rounded hover:bg-blue-100 font-mono border border-blue-200"
       onClick={() => onClick?.(clueId.split("@")[0])}
     >
-      {clueId}
+      {clueId.replace(/^clue-0*/, "")}
     </button>
   )
 }
