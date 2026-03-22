@@ -244,7 +244,7 @@ export function TopicView() {
               Start Discovery
             </button>
           )}
-          {(topic.status === "complete" || topic.status === "stale") && !pipelineRunning && (
+          {!["draft", "review_parties"].includes(topic.status) && !pipelineRunning && (
             <button onClick={handleReanalyze}
               className="px-3 py-1.5 bg-purple-600 text-white text-xs font-medium rounded-lg hover:bg-purple-700">
               Re-analyze

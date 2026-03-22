@@ -379,7 +379,7 @@ export function CluesPanel({ topicId, status, onApprove, onReanalyze, approveLoa
           loading={approveLoading}
         />
       )}
-      {(status === "complete" || status === "stale") && onReanalyze && (
+      {!["draft", "review_parties"].includes(status) && onReanalyze && (
         <ConfirmationBanner
           message={`${clues.length} clues available. You can run a fresh analysis with the current data.`}
           detail="This will create a new forum session, expert council, and verdict. Previous analysis is preserved."

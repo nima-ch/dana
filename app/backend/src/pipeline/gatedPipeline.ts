@@ -230,6 +230,8 @@ export async function runAnalyzeStages(topicId: string): Promise<{ run_id: strin
     return { run_id: runId, status: "complete" }
   } catch (e) {
     log.error("PIPELINE", "Analysis FAILED", e)
+    // Reset to review_enrichment so user can retry
+    await updateTopicStatus(topicId, "review_enrichment")
     emit(topicId, { type: "error", message: String(e) })
     return { run_id: runId, status: `error: ${e}` }
   }
@@ -363,6 +365,8 @@ export async function runReanalysis(topicId: string): Promise<{ run_id: string; 
     return { run_id: runId, status: "complete" }
   } catch (e) {
     log.error("PIPELINE", "Re-analysis FAILED", e)
+    // Reset status to stale so user can retry
+    await updateTopicStatus(topicId, "stale")
     emit(topicId, { type: "error", message: String(e) })
     return { run_id: runId, status: `error: ${e}` }
   }
