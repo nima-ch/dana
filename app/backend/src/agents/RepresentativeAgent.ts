@@ -142,7 +142,9 @@ Argue with conviction from ${party.name}'s perspective. Cite clues by ID from th
   let concessions: string[] | undefined
   let scenario_endorsement: string | undefined
 
-  const jsonMatch = raw.match(/\{[\s\S]+\}/)
+  // Strip markdown code fences before parsing
+  const cleaned = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "")
+  const jsonMatch = cleaned.match(/\{[\s\S]+\}/)
   if (jsonMatch) {
     try {
       const parsed = JSON.parse(jsonMatch[0])
@@ -154,7 +156,27 @@ Argue with conviction from ${party.name}'s perspective. Cite clues by ID from th
       challenges = parsed.challenges
       concessions = parsed.concessions
       scenario_endorsement = parsed.scenario_endorsement
-    } catch { /* use raw */ }
+    } catch {
+      // JSON may be truncated - extract fields individually
+      try {
+        const posMatch = cleaned.match(/"position"\s*:\s*"((?:[^"\\]|\\.)*)"/s)
+        if (posMatch) position = posMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
+
+        const evMatch = cleaned.match(/"evidence"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"challenges)/s)
+        if (evMatch) try { evidence = JSON.parse(evMatch[1]) } catch {}
+
+        const chMatch = cleaned.match(/"challenges"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"concessions)/s)
+        if (chMatch) try { challenges = JSON.parse(chMatch[0].match(/\[[\s\S]*\]/)?.[0] || "[]") } catch {}
+
+        const coMatch = cleaned.match(/"concessions"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"(?:statement|scenario))/s)
+        if (coMatch) try { concessions = JSON.parse(coMatch[1]) } catch {}
+
+        const stmtMatch = cleaned.match(/"statement"\s*:\s*"((?:[^"\\]|\\.)*)/)
+        if (stmtMatch) statement = stmtMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
+
+        if (position) word_count = countWords(position + (statement || ""))
+      } catch { /* use raw */ }
+    }
   }
 
   // Extract clue citations from text if not in structured output

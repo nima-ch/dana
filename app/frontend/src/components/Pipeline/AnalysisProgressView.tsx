@@ -115,10 +115,13 @@ export function AnalysisProgressView({
           let scenario_endorsement = t.scenario_endorsement || ""
           let rawStatement = t.statement || t.content || ""
 
-          // If statement is a JSON string, try parsing it to extract structured fields
+          // If statement looks like JSON (raw or in markdown fences), parse structured fields
           if (typeof rawStatement === "string" && (!position || !evidence.length)) {
+            // Strip markdown code fences
+            let cleaned = rawStatement.replace(/```json\s*/gi, "").replace(/```\s*/g, "")
             try {
-              const jsonMatch = rawStatement.match(/\{[\s\S]+\}/)
+              // Try full JSON parse first
+              const jsonMatch = cleaned.match(/\{[\s\S]+\}/)
               if (jsonMatch) {
                 const parsed = JSON.parse(jsonMatch[0])
                 position = position || parsed.position || ""
@@ -128,11 +131,36 @@ export function AnalysisProgressView({
                 scenario_endorsement = scenario_endorsement || parsed.scenario_endorsement || ""
                 rawStatement = parsed.statement || ""
               }
-            } catch { /* not JSON, use as-is */ }
+            } catch {
+              // JSON truncated — extract fields with regex
+              try {
+                if (!position) {
+                  const posMatch = cleaned.match(/"position"\s*:\s*"((?:[^"\\]|\\.)*)"/s)
+                  if (posMatch) position = posMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
+                }
+                if (!evidence.length) {
+                  const evMatch = cleaned.match(/"evidence"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"challenges|$)/s)
+                  if (evMatch) try { evidence = JSON.parse(evMatch[1]) } catch {}
+                }
+                if (!challenges.length) {
+                  const chMatch = cleaned.match(/"challenges"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"concessions|$)/s)
+                  if (chMatch) try { challenges = JSON.parse(chMatch[1]) } catch {}
+                }
+                if (!concessions.length) {
+                  const coMatch = cleaned.match(/"concessions"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"statement|$)/s)
+                  if (coMatch) try { concessions = JSON.parse(coMatch[1]) } catch {}
+                }
+                const stmtMatch = cleaned.match(/"statement"\s*:\s*"((?:[^"\\]|\\.)*)/)
+                if (stmtMatch) rawStatement = stmtMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
+                else rawStatement = ""
+              } catch { /* give up */ }
+            }
           }
 
-          // Clean up statement - strip JSON artifacts
-          if (typeof rawStatement === "string" && rawStatement.trim().startsWith("{")) rawStatement = ""
+          // Clean up statement - strip any remaining JSON/markdown artifacts
+          if (typeof rawStatement === "string") {
+            if (rawStatement.trim().startsWith("{") || rawStatement.trim().startsWith("```")) rawStatement = ""
+          }
 
           const hasStructured = !!(position || evidence.length || challenges.length)
           const personaTitle = t.persona_title || t.party_name || t.party_id || "Representative"
