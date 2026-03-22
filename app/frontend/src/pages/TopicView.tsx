@@ -325,6 +325,7 @@ export function TopicView() {
               topicId={topic.id}
               status={topic.status}
               onApprove={handleApproveClues}
+              onReanalyze={handleReanalyze}
               approveLoading={approveLoading}
             />
           )}

@@ -183,3 +183,90 @@ ${chunks[i]}`,
   onProgress?.(`Extracted ${deduped.length} clues`)
   return deduped
 }
+
+// Smart edit a single clue based on user feedback
+export async function smartEditClue(
+  topicId: string,
+  topicTitle: string,
+  currentClue: {
+    title: string
+    summary: string
+    credibility: number
+    bias_flags: string[]
+    relevance: number
+    parties: string[]
+    source_url: string
+    source_outlet: string
+    date: string
+    clue_type: string
+  },
+  feedback: string,
+  model: string,
+): Promise<{
+  title: string
+  summary: string
+  credibility: number
+  bias_flags: string[]
+  relevance: number
+  parties: string[]
+  date: string
+  clue_type: string
+  domain_tags: string[]
+}> {
+  log.enrichment(`Smart clue edit: researching feedback for "${currentClue.title}"`)
+
+  // Research based on feedback
+  const research = await gatherResearch([
+    `${currentClue.title} ${feedback.slice(0, 60)}`,
+    `${topicTitle} ${feedback.slice(0, 80)}`,
+  ], topicId)
+
+  const raw = await chatCompletionText({
+    model,
+    messages: [
+      {
+        role: "system",
+        content: `You are an intelligence analyst updating a clue/evidence item based on user feedback and research.
+
+Output ONLY a valid JSON object:
+{
+  "title": "<updated title>",
+  "summary": "<updated bias-corrected summary>",
+  "credibility": <0-100>,
+  "bias_flags": ["<flag>"],
+  "relevance": <0-100>,
+  "parties": ["<party_id>"],
+  "date": "<YYYY-MM-DD>",
+  "clue_type": "<event|statement|military_action|intelligence|economic|diplomatic>",
+  "domain_tags": ["<tag>"]
+}
+
+Preserve accurate information. Only change what the feedback and research warrant. Be specific and fact-based.`,
+      },
+      {
+        role: "user",
+        content: `TOPIC: ${topicTitle}
+
+CURRENT CLUE:
+${JSON.stringify(currentClue, null, 2)}
+
+USER FEEDBACK:
+${feedback}
+
+RESEARCH:
+${research}
+
+Update the clue. Output ONLY valid JSON.`,
+      },
+    ],
+    temperature: 0.2,
+    max_tokens: 2000,
+  })
+
+  const match = raw.match(/\{[\s\S]+\}/)
+  if (!match) throw new Error("Failed to parse clue JSON from LLM response")
+  const updated = JSON.parse(match[0])
+
+  log.enrichment(`Smart clue edit complete: "${updated.title}"`)
+  return updated
+}

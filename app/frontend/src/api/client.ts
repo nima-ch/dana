@@ -106,6 +106,10 @@ export const api = {
       request<any>(`/topics/${topicId}/clues/${clueId}`, { method: "PUT", body: JSON.stringify(data) }),
     delete: (topicId: string, clueId: string) =>
       request<{ success: boolean }>(`/topics/${topicId}/clues/${clueId}`, { method: "DELETE" }),
+    smartEdit: (topicId: string, clueId: string, feedback: string) =>
+      request<any>(`/topics/${topicId}/clues/${clueId}/smart-edit`, {
+        method: "POST", body: JSON.stringify({ feedback }),
+      }),
     bulkImport: (topicId: string, content: string) =>
       request<{ imported: number; clues: any[] }>(`/topics/${topicId}/clues/bulk`, {
         method: "POST", body: JSON.stringify({ content }),

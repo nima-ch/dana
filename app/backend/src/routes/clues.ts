@@ -109,6 +109,69 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     return { success: true }
   })
 
+  // Smart edit: user feedback → LLM + research → updated clue
+  .post("/:clueId/smart-edit", async ({ params, body, error }) => {
+    const b = body as { feedback: string }
+    if (!b.feedback?.trim()) return error(400, { message: "feedback is required" })
+
+    const { getTopic } = await import("../pipeline/topicManager")
+    const { smartEditClue } = await import("../agents/SmartClueExtractor")
+
+    const topicId = params.id
+    const topic = await getTopic(topicId)
+    const clues = await readClues(topicId)
+    const clue = clues.find(c => c.id === params.clueId)
+    if (!clue) return error(404, { message: "Clue not found" })
+
+    const cur = clue.versions.find(v => v.v === clue.current)!
+    const currentData = {
+      title: cur.title,
+      summary: cur.bias_corrected_summary,
+      credibility: cur.source_credibility.score,
+      bias_flags: cur.source_credibility.bias_flags,
+      relevance: cur.relevance_score,
+      parties: cur.party_relevance,
+      source_url: cur.raw_source?.url || "",
+      source_outlet: cur.source_credibility.origin_source?.outlet || "",
+      date: cur.timeline_date,
+      clue_type: cur.clue_type,
+    }
+
+    try {
+      const updated = await smartEditClue(topicId, topic.title, currentData, b.feedback.trim(), topic.models.enrichment)
+
+      let result: Clue | null = null
+      await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (allClues) => {
+        return allClues.map(c => {
+          if (c.id !== params.clueId) return c
+          const curIdx = c.versions.findIndex(v => v.v === c.current)
+          if (curIdx === -1) return c
+          const v = { ...c.versions[curIdx] }
+          v.title = updated.title
+          v.bias_corrected_summary = updated.summary
+          v.relevance_score = updated.relevance
+          v.party_relevance = updated.parties
+          v.timeline_date = updated.date
+          v.clue_type = updated.clue_type
+          v.domain_tags = updated.domain_tags ?? v.domain_tags
+          v.source_credibility = {
+            ...v.source_credibility,
+            score: updated.credibility,
+            bias_flags: updated.bias_flags,
+          }
+          const versions = [...c.versions]
+          versions[curIdx] = v
+          result = { ...c, versions, last_updated_at: new Date().toISOString() }
+          return result
+        })
+      }, [])
+
+      return result ?? error(500, { message: "Failed to update clue" })
+    } catch (e) {
+      return error(500, { message: `Smart edit failed: ${e}` })
+    }
+  }, { body: t.Record(t.String(), t.Any()) })
+
   // Smart bulk import: mixed text with embedded URLs → extract + fetch + structured clues
   .post("/bulk", async ({ params, body, error }) => {
     const { getTopic } = await import("../pipeline/topicManager")

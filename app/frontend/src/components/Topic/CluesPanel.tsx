@@ -39,13 +39,18 @@ function credColor(score: number) {
   return "text-red-700 bg-red-50 border-red-200"
 }
 
-function ClueCard({ clue, onUpdate, onDelete }: {
+function ClueCard({ clue, topicId, onUpdate, onDelete, onReload }: {
   clue: Clue
+  topicId: string
   onUpdate: (id: string, data: Record<string, unknown>) => void
   onDelete: (id: string) => void
+  onReload: () => void
 }) {
   const [showHistory, setShowHistory] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [smartEditing, setSmartEditing] = useState(false)
+  const [feedback, setFeedback] = useState("")
+  const [busy, setBusy] = useState("")
   const cur = clue.versions.find(v => v.v === clue.current)!
 
   const [draft, setDraft] = useState({
@@ -69,8 +74,28 @@ function ClueCard({ clue, onUpdate, onDelete }: {
     }))
   }
 
+  const handleSmartEdit = async () => {
+    if (!feedback.trim()) return
+    setBusy("Researching...")
+    try {
+      await api.clues.smartEdit(topicId, clue.id, feedback)
+      setFeedback("")
+      setSmartEditing(false)
+      onReload()
+    } catch (e) {
+      alert(`Smart edit failed: ${e}`)
+    }
+    setBusy("")
+  }
+
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-4 space-y-2">
+      {busy && (
+        <div className="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 rounded px-3 py-1.5">
+          <div className="animate-spin w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full" />
+          {busy}
+        </div>
+      )}
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1">
           <div className="flex items-center gap-2 flex-wrap">
@@ -85,13 +110,17 @@ function ClueCard({ clue, onUpdate, onDelete }: {
             ))}
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           <span className={`text-xs border px-1.5 py-0.5 rounded ${credColor(cur.source_credibility.score)}`}>
             {cur.source_credibility.score}
           </span>
           <span className="text-xs text-gray-400">v{clue.current}</span>
           {!editing && (
             <button className="text-xs text-blue-400 hover:text-blue-600" onClick={() => setEditing(true)}>edit</button>
+          )}
+          {!editing && (
+            <button className="text-xs text-purple-400 hover:text-purple-600" onClick={() => setSmartEditing(s => !s)}
+              title="AI-assisted edit with feedback">smart</button>
           )}
           <button className="text-xs text-red-400 hover:text-red-600" onClick={() => onDelete(clue.id)}>✕</button>
           {clue.versions.length > 1 && (
@@ -101,6 +130,23 @@ function ClueCard({ clue, onUpdate, onDelete }: {
           )}
         </div>
       </div>
+
+      {/* Smart edit feedback area */}
+      {smartEditing && !editing && (
+        <div className="border-t border-gray-100 pt-2 space-y-2">
+          <p className="text-xs text-gray-500">Describe what needs to change. The system will research and update automatically.</p>
+          <textarea className="w-full text-xs border border-gray-300 rounded px-2 py-1 h-16"
+            placeholder="e.g. 'This credibility is too high, the source is known for propaganda...' or 'The date is wrong, this happened on March 10...'"
+            value={feedback} onChange={e => setFeedback(e.target.value)} />
+          <div className="flex gap-2">
+            <button className="text-xs px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
+              onClick={handleSmartEdit} disabled={!!busy || !feedback.trim()}>
+              {busy ? "Researching..." : "Research & Update"}
+            </button>
+            <button className="text-xs text-gray-400" onClick={() => { setSmartEditing(false); setFeedback("") }}>Cancel</button>
+          </div>
+        </div>
+      )}
 
       {editing ? (
         <div className="space-y-3 border-t border-gray-100 pt-2">
@@ -260,10 +306,11 @@ interface CluesPanelProps {
   topicId: string
   status: string
   onApprove?: () => void
+  onReanalyze?: () => void
   approveLoading?: boolean
 }
 
-export function CluesPanel({ topicId, status, onApprove, approveLoading }: CluesPanelProps) {
+export function CluesPanel({ topicId, status, onApprove, onReanalyze, approveLoading }: CluesPanelProps) {
   const [clues, setClues] = useState<Clue[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState({ party: "", domain: "", type: "" })
@@ -314,6 +361,15 @@ export function CluesPanel({ topicId, status, onApprove, approveLoading }: Clues
           loading={approveLoading}
         />
       )}
+      {(status === "complete" || status === "stale") && onReanalyze && (
+        <ConfirmationBanner
+          message={`${clues.length} clues available. You can run a fresh analysis with the current data.`}
+          detail="This will create a new forum session, expert council, and verdict. Previous analysis is preserved."
+          actionLabel="Re-analyze with Current Data"
+          onConfirm={onReanalyze}
+          loading={approveLoading}
+        />
+      )}
 
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-gray-700">Clues ({filtered.length})</h2>
@@ -355,7 +411,7 @@ export function CluesPanel({ topicId, status, onApprove, approveLoading }: Clues
       ) : (
         <div className="space-y-3">
           {filtered.map(clue => (
-            <ClueCard key={clue.id} clue={clue} onUpdate={handleUpdate} onDelete={handleDelete} />
+            <ClueCard key={clue.id} clue={clue} topicId={topicId} onUpdate={handleUpdate} onDelete={handleDelete} onReload={load} />
           ))}
         </div>
       )}
