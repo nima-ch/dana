@@ -2,6 +2,9 @@ import { useEffect, useState } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import { api, type Topic } from "../api/client"
 import { StatusBadge } from "../components/Dashboard/StatusBadge"
+import { CluesPanel } from "../components/Topic/CluesPanel"
+import { PartiesPanel } from "../components/Topic/PartiesPanel"
+import { StalenessBanner } from "../components/Topic/StalenessBanner"
 
 type Stage = "discovery" | "enrichment" | "forum" | "expert_council" | "verdict"
 
@@ -97,10 +100,20 @@ export function TopicView() {
         </aside>
 
         {/* Main content area */}
-        <main className="flex-1 overflow-auto p-6">
-          <div className="text-gray-400 text-sm text-center py-12">
-            {activeStage} panel — coming soon
-          </div>
+        <main className="flex-1 overflow-auto p-6 space-y-4">
+          <StalenessBanner
+            topicId={topic.id}
+            status={topic.status}
+            onUpdate={() => console.log("Update triggered — delta pipeline coming in Phase 5")}
+          />
+
+          {activeStage === "discovery" && <PartiesPanel topicId={topic.id} />}
+          {activeStage === "enrichment" && <CluesPanel topicId={topic.id} />}
+          {(activeStage === "forum" || activeStage === "expert_council" || activeStage === "verdict") && (
+            <div className="text-gray-400 text-sm text-center py-12">
+              {activeStage} panel — Phase 3
+            </div>
+          )}
         </main>
       </div>
     </div>

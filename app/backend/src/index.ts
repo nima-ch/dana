@@ -3,6 +3,8 @@ import { cors } from "@elysiajs/cors"
 import { swagger } from "@elysiajs/swagger"
 import { topicsRouter } from "./routes/topics"
 import { streamRouter } from "./routes/stream"
+import { cluesRouter } from "./routes/clues"
+import { partiesRouter } from "./routes/parties"
 import { fetchAvailableModels } from "./llm/proxyClient"
 
 const app = new Elysia()
@@ -10,6 +12,8 @@ const app = new Elysia()
   .use(swagger({ path: "/docs" }))
   .use(topicsRouter)
   .use(streamRouter)
+  .use(cluesRouter)
+  .use(partiesRouter)
   .get("/health", () => ({ status: "ok" }))
   .get("/api/models", async () => {
     return fetchAvailableModels()

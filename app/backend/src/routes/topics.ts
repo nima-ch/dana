@@ -1,5 +1,6 @@
 import { Elysia, t } from "elysia"
 import { listTopics, getTopic, createTopic, updateTopic, deleteTopic } from "../pipeline/topicManager"
+import { getAllVersions } from "../pipeline/stateManager"
 
 export const topicsRouter = new Elysia({ prefix: "/api/topics" })
   .get("/", async () => {
@@ -41,6 +42,8 @@ export const topicsRouter = new Elysia({ prefix: "/api/topics" })
       settings: t.Record(t.String(), t.Any()),
     }))
   })
+  .get("/:id/states", async ({ params }) => getAllVersions(params.id))
+
   .delete("/:id", async ({ params, error }) => {
     try {
       await deleteTopic(params.id)
