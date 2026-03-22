@@ -99,9 +99,9 @@ export const api = {
       request<any>(`/topics/${topicId}/clues/${clueId}`, { method: "PUT", body: JSON.stringify(data) }),
     delete: (topicId: string, clueId: string) =>
       request<{ success: boolean }>(`/topics/${topicId}/clues/${clueId}`, { method: "DELETE" }),
-    bulkImport: (topicId: string, type: "text" | "urls", content: string) =>
+    bulkImport: (topicId: string, content: string) =>
       request<{ imported: number; clues: any[] }>(`/topics/${topicId}/clues/bulk`, {
-        method: "POST", body: JSON.stringify({ type, content }),
+        method: "POST", body: JSON.stringify({ content }),
       }),
   },
   settings: {

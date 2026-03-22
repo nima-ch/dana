@@ -177,25 +177,26 @@ function ClueCard({ clue, onUpdate, onDelete }: {
   )
 }
 
-// Bulk import modal
+// Smart bulk import modal
 function BulkImportModal({ topicId, onClose, onImported }: {
   topicId: string
   onClose: () => void
   onImported: () => void
 }) {
-  const [tab, setTab] = useState<"text" | "urls">("text")
   const [content, setContent] = useState("")
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<{ imported: number } | null>(null)
+
+  const urlCount = (content.match(/https?:\/\/[^\s<>")\]]+/g) || []).length
 
   const handleImport = async () => {
     if (!content.trim()) return
     setLoading(true)
     try {
-      const res = await api.clues.bulkImport(topicId, tab, content)
+      const res = await api.clues.bulkImport(topicId, content)
       setResult(res)
       onImported()
-    } catch (e) {
+    } catch {
       setResult({ imported: -1 })
     }
     setLoading(false)
@@ -203,41 +204,41 @@ function BulkImportModal({ topicId, onClose, onImported }: {
 
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg mx-4 p-5 space-y-4" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 p-5 space-y-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-gray-800">Bulk Import Clues</h3>
+          <h3 className="text-sm font-semibold text-gray-800">Smart Import</h3>
           <button className="text-gray-400 hover:text-gray-600" onClick={onClose}>✕</button>
         </div>
 
-        <div className="flex gap-1 border-b border-gray-200">
-          <button
-            className={`text-xs px-3 py-2 ${tab === "text" ? "border-b-2 border-blue-600 text-blue-600" : "text-gray-500"}`}
-            onClick={() => setTab("text")}
-          >
-            Paste Text
-          </button>
-          <button
-            className={`text-xs px-3 py-2 ${tab === "urls" ? "border-b-2 border-blue-600 text-blue-600" : "text-gray-500"}`}
-            onClick={() => setTab("urls")}
-          >
-            Paste URLs
-          </button>
-        </div>
+        <p className="text-xs text-gray-500">
+          Paste any intelligence brief, news compilation, analysis, or mixed content.
+          The system will extract URLs and fetch accessible sources, then extract every distinct factual claim as a structured clue with source attribution, dates, credibility, and party relevance.
+        </p>
 
         <textarea
-          className="w-full text-xs border border-gray-300 rounded px-3 py-2 h-40 font-mono"
-          placeholder={tab === "text"
-            ? "Paste a news article, report, or any text. The system will extract factual claims as clues..."
-            : "Paste one URL per line. Each will be fetched and processed as a clue..."
-          }
+          className="w-full text-xs border border-gray-300 rounded px-3 py-2 h-64 font-mono"
+          placeholder="Paste your intelligence brief, news articles, analysis, or mixed content with embedded URLs..."
           value={content}
           onChange={e => setContent(e.target.value)}
         />
+
+        {content.trim() && (
+          <p className="text-xs text-gray-400">
+            {content.length.toLocaleString()} chars · {urlCount} URL{urlCount !== 1 ? "s" : ""} detected
+          </p>
+        )}
 
         {result && (
           <p className={`text-xs ${result.imported >= 0 ? "text-green-600" : "text-red-600"}`}>
             {result.imported >= 0 ? `Imported ${result.imported} clue(s)` : "Import failed — check content and try again"}
           </p>
+        )}
+
+        {loading && (
+          <div className="flex items-center gap-2 text-xs text-blue-600">
+            <div className="animate-spin w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full" />
+            Processing... This may take a few minutes for large documents with many URLs.
+          </div>
         )}
 
         <div className="flex justify-end gap-2">
@@ -247,7 +248,7 @@ function BulkImportModal({ topicId, onClose, onImported }: {
             onClick={handleImport}
             disabled={loading || !content.trim()}
           >
-            {loading ? "Processing..." : tab === "text" ? "Extract Clues" : "Fetch & Process"}
+            {loading ? "Extracting..." : "Extract Clues"}
           </button>
         </div>
       </div>

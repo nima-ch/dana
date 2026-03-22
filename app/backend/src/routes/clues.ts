@@ -109,97 +109,63 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     return { success: true }
   })
 
-  // Bulk import: text → extract clues, or urls → fetch+process
+  // Smart bulk import: mixed text with embedded URLs → extract + fetch + structured clues
   .post("/bulk", async ({ params, body, error }) => {
-    const { processClue } = await import("../tools/processing/clueProcessor")
-    const { httpFetch } = await import("../tools/external/httpFetch")
-    const { storeClue } = await import("../tools/processing/storeClue")
     const { getTopic } = await import("../pipeline/topicManager")
+    const { smartExtractClues } = await import("../agents/SmartClueExtractor")
 
-    const b = body as { type: "text" | "urls"; content: string }
+    const b = body as { content: string; type?: string }
     if (!b.content?.trim()) return error(400, { message: "content is required" })
 
     const topicId = params.id
     const topic = await getTopic(topicId)
-    const topicContext = `${topic.title}: ${topic.description}`
+
+    // Load parties for context
+    const partiesFile = Bun.file(join(getDataDir(), "topics", topicId, "parties.json"))
+    const parties = await partiesFile.exists() ? await partiesFile.json() : []
+
+    // Use enrichment model for better extraction quality
+    const extracted = await smartExtractClues(
+      topicId, topic.title, topic.description,
+      b.content, parties, topic.models.enrichment,
+    )
+
+    // Store each extracted clue
     const created: Clue[] = []
-
-    if (b.type === "urls") {
-      const urls = b.content.split("\n").map(u => u.trim()).filter(Boolean)
-      for (const url of urls.slice(0, 20)) {
-        try {
-          const fetched = await httpFetch(url, topicId)
-          const processed = await processClue(fetched.raw_content, url, topicContext)
-          if (processed.relevance_score < 20) continue
-          const stored = await storeClue({
-            topicId, title: fetched.title || url,
-            sourceUrl: url, fetchedAt: fetched.fetched_at,
-            processed, addedBy: "user",
-          })
-          if (stored.status === "created") {
-            const clues = await readClues(topicId)
-            const c = clues.find(cl => cl.id === stored.clue_id)
-            if (c) created.push(c)
-          }
-        } catch { /* skip failures */ }
-      }
-    } else if (b.type === "text") {
-      // Single LLM call to extract clues from pasted text
-      const { chatCompletionText } = await import("../llm/proxyClient")
-      const extractPrompt = `Extract distinct factual claims/events from this text as structured clues.
-
-TEXT:
-${b.content.slice(0, 10000)}
-
-TOPIC: ${topicContext}
-
-Output ONLY a JSON array:
-[{"title":"<title>","summary":"<bias-corrected summary>","date":"<YYYY-MM-DD or unknown>","relevance":50-100,"parties":["<party_id>"]}]
-
-Rules: each clue must be a distinct fact/event. Skip opinions without factual basis. Max 15 clues.`
-
-      const raw = await chatCompletionText({
-        model: topic.models.extraction,
-        messages: [
-          { role: "system", content: "You extract structured factual claims from text. Output ONLY valid JSON array." },
-          { role: "user", content: extractPrompt },
-        ],
-        temperature: 0.2,
-        max_tokens: 4000,
-      })
-
-      try {
-        const match = raw.match(/\[[\s\S]+\]/)
-        if (!match) throw new Error("No JSON array")
-        const extracted = JSON.parse(match[0]) as { title: string; summary: string; date: string; relevance: number; parties: string[] }[]
-
-        for (const item of extracted) {
-          const now = new Date().toISOString()
-          let newClue: Clue | null = null
-          await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (clues) => {
-            const id = `clue-${String(clues.length + 1).padStart(3, "0")}`
-            newClue = {
-              id, current: 1, added_at: now, last_updated_at: now,
-              added_by: "user", status: "verified",
-              versions: [{
-                v: 1, date: now, title: item.title,
-                raw_source: { url: "", fetched_at: now },
-                source_credibility: { score: 50, notes: "User-submitted bulk text", bias_flags: [], origin_source: { url: "", outlet: "user", is_republication: false } },
-                bias_corrected_summary: item.summary,
-                relevance_score: item.relevance,
-                party_relevance: item.parties,
-                domain_tags: [],
-                timeline_date: item.date || now.slice(0, 10),
-                clue_type: "event",
-                change_note: "Bulk text import",
-                key_points: [],
-              }],
-            }
-            return [...clues, newClue!]
-          }, [])
-          if (newClue) created.push(newClue)
+    for (const item of extracted) {
+      const now = new Date().toISOString()
+      let newClue: Clue | null = null
+      await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (clues) => {
+        const id = `clue-${String(clues.length + 1).padStart(3, "0")}`
+        newClue = {
+          id, current: 1, added_at: now, last_updated_at: now,
+          added_by: "user", status: "verified",
+          versions: [{
+            v: 1, date: now, title: item.title,
+            raw_source: { url: item.source_url || "", fetched_at: now },
+            source_credibility: {
+              score: item.credibility ?? 50,
+              notes: `Source: ${item.source_outlet || "user-submitted"}`,
+              bias_flags: item.bias_flags ?? [],
+              origin_source: {
+                url: item.source_url || "",
+                outlet: item.source_outlet || "user",
+                is_republication: false,
+              },
+            },
+            bias_corrected_summary: item.summary,
+            relevance_score: item.relevance ?? 70,
+            party_relevance: item.parties ?? [],
+            domain_tags: item.domain_tags ?? [],
+            timeline_date: item.date || now.slice(0, 10),
+            clue_type: item.clue_type || "event",
+            change_note: "Smart bulk import",
+            key_points: item.key_points ?? [],
+          }],
         }
-      } catch { /* extraction failed */ }
+        return [...clues, newClue!]
+      }, [])
+      if (newClue) created.push(newClue)
     }
 
     if (created.length > 0) await markStale(topicId)
