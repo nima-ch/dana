@@ -15,8 +15,10 @@ describe("ProxyClient", () => {
       return
     }
 
-    // use the first available haiku/fast model
-    const model = models.find(m => m.id.includes("haiku")) ?? models[0]
+    // prefer haiku-4-5 (confirmed available), fall back to first model
+    const model = models.find(m => m.id === "claude-haiku-4-5-20251001")
+      ?? models.find(m => m.id.includes("haiku-4-5"))
+      ?? models[0]
 
     const res = await chatCompletion({
       model: model.id,
