@@ -110,9 +110,12 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
   })
 
   // Smart edit: user feedback → LLM + research → updated clue
-  .post("/:clueId/smart-edit", async ({ params, body, error }) => {
+  .post("/smart-edit/:clueId", async ({ params, body, set }) => {
     const b = body as { feedback: string }
-    if (!b.feedback?.trim()) return error(400, { message: "feedback is required" })
+    if (!b.feedback?.trim()) {
+      set.status = 400
+      return { message: "feedback is required" }
+    }
 
     const { getTopic } = await import("../pipeline/topicManager")
     const { smartEditClue } = await import("../agents/SmartClueExtractor")
@@ -121,7 +124,10 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     const topic = await getTopic(topicId)
     const clues = await readClues(topicId)
     const clue = clues.find(c => c.id === params.clueId)
-    if (!clue) return error(404, { message: "Clue not found" })
+    if (!clue) {
+      set.status = 404
+      return { message: "Clue not found" }
+    }
 
     const cur = clue.versions.find(v => v.v === clue.current)!
     const currentData = {
@@ -166,9 +172,14 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
         })
       }, [])
 
-      return result ?? error(500, { message: "Failed to update clue" })
+      if (!result) {
+        set.status = 500
+        return { message: "Failed to update clue" }
+      }
+      return result
     } catch (e) {
-      return error(500, { message: `Smart edit failed: ${e}` })
+      set.status = 500
+      return { message: `Smart edit failed: ${e}` }
     }
   }, { body: t.Record(t.String(), t.Any()) })
 

@@ -1,4 +1,5 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { log } from "../utils/logger"
 import type { Party } from "./DiscoveryAgent"
@@ -42,6 +43,24 @@ function chunkText(text: string, maxChars: number = 12000): string[] {
   }
   if (current.length > 0) chunks.push(current)
   return chunks
+}
+
+async function gatherResearch(queries: string[], topicId: string): Promise<string> {
+  const snippets: string[] = []
+  for (const query of queries.slice(0, 3)) {
+    try {
+      const results = await webSearch(query, 3)
+      for (const r of results.slice(0, 2)) {
+        try {
+          const fetched = await httpFetch(r.url, topicId)
+          snippets.push(`[${r.title}]\n${fetched.raw_content.slice(0, 2000)}`)
+        } catch {
+          if (r.snippet) snippets.push(`[${r.title}] ${r.snippet}`)
+        }
+      }
+    } catch { /* skip */ }
+  }
+  return snippets.join("\n\n---\n\n").slice(0, 12000)
 }
 
 // Fetch URLs that are likely to succeed (skip social media that needs auth)

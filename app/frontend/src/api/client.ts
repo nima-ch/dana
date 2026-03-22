@@ -107,7 +107,7 @@ export const api = {
     delete: (topicId: string, clueId: string) =>
       request<{ success: boolean }>(`/topics/${topicId}/clues/${clueId}`, { method: "DELETE" }),
     smartEdit: (topicId: string, clueId: string, feedback: string) =>
-      request<any>(`/topics/${topicId}/clues/${clueId}/smart-edit`, {
+      request<any>(`/topics/${topicId}/clues/smart-edit/${clueId}`, {
         method: "POST", body: JSON.stringify({ feedback }),
       }),
     bulkImport: (topicId: string, content: string) =>
