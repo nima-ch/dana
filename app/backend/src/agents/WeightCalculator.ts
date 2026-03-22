@@ -149,46 +149,54 @@ export async function runWeightCalculator(
     }
   }
 
-  // Generate representative personas
-  onProgress?.("WeightCalculator: generating representative personas")
+  // Generate representative personas (batched for speed)
+  onProgress?.(`WeightCalculator: generating ${parties.length} representative personas`)
   const representatives: Representative[] = []
 
-  for (const party of parties) {
-    const personaInput = `PARTY: ${party.name}\nTYPE: ${party.type}\nAGENDA: ${party.agenda}\nMEANS: ${party.means.join(", ")}\nSTANCE: ${party.stance}\nTOPIC: ${title}`
-    const personaRaw = await chatCompletionText({
-      model,
-      messages: [
-        { role: "system", content: PERSONA_SYSTEM },
-        { role: "user", content: personaInput },
-      ],
-      temperature: 0.4,
-      max_tokens: 400,
-    })
+  const PERSONA_BATCH = 4
+  for (let bi = 0; bi < parties.length; bi += PERSONA_BATCH) {
+    const batch = parties.slice(bi, bi + PERSONA_BATCH)
+    onProgress?.(`WeightCalculator: personas ${bi + 1}-${Math.min(bi + PERSONA_BATCH, parties.length)} of ${parties.length}`)
 
-    let personaTitle = party.name + " Representative"
-    let personaPrompt = personaRaw.trim()
+    const batchResults = await Promise.all(batch.map(async (party) => {
+      const personaInput = `PARTY: ${party.name}\nTYPE: ${party.type}\nAGENDA: ${party.agenda}\nMEANS: ${party.means.join(", ")}\nSTANCE: ${party.stance}\nTOPIC: ${title}`
+      const personaRaw = await chatCompletionText({
+        model,
+        messages: [
+          { role: "system", content: PERSONA_SYSTEM },
+          { role: "user", content: personaInput },
+        ],
+        temperature: 0.4,
+        max_tokens: 400,
+      })
 
-    try {
-      const match = personaRaw.match(/\{[\s\S]+\}/)
-      if (match) {
-        const parsed = JSON.parse(match[0])
-        personaTitle = parsed.title || personaTitle
-        personaPrompt = parsed.prompt || personaPrompt
-      }
-    } catch { /* use raw */ }
+      let personaTitle = party.name + " Representative"
+      let personaPrompt = personaRaw.trim()
 
-    const isLowWeight = party.weight < LOW_WEIGHT_THRESHOLD
-    const budget = computeSpeakingBudget(party.weight, totalWeight, isLowWeight)
+      try {
+        const match = personaRaw.match(/\{[\s\S]+\}/)
+        if (match) {
+          const parsed = JSON.parse(match[0])
+          personaTitle = parsed.title || personaTitle
+          personaPrompt = parsed.prompt || personaPrompt
+        }
+      } catch { /* use raw */ }
 
-    representatives.push({
-      id: `rep-${party.id}`,
-      party_id: party.id,
-      persona_prompt: personaPrompt,
-      persona_title: personaTitle,
-      speaking_weight: party.weight,
-      speaking_budget: budget,
-      auto_generated: true,
-    })
+      const isLowWeight = party.weight < LOW_WEIGHT_THRESHOLD
+      const budget = computeSpeakingBudget(party.weight, totalWeight, isLowWeight)
+
+      return {
+        id: `rep-${party.id}`,
+        party_id: party.id,
+        persona_prompt: personaPrompt,
+        persona_title: personaTitle,
+        speaking_weight: party.weight,
+        speaking_budget: budget,
+        auto_generated: true,
+      } as Representative
+    }))
+
+    representatives.push(...batchResults)
   }
 
   // Write updated parties and representatives
