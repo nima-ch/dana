@@ -121,11 +121,10 @@ export const api = {
         method: "POST", body: JSON.stringify({ query }),
         signal: AbortSignal.timeout(600_000),
       }),
-    cleanupPropose: (topicId: string) =>
-      request<{ groups: any[]; original_count: number }>(`/topics/${topicId}/clues/cleanup/propose`, {
-        method: "POST",
-        signal: AbortSignal.timeout(600_000), // 10 min — LLM categorization can take a while
-      }),
+    cleanupStart: (topicId: string) =>
+      request<{ status: string }>(`/topics/${topicId}/clues/cleanup/propose`, { method: "POST" }),
+    cleanupStatus: (topicId: string) =>
+      request<{ status: string; groups?: any[]; original_count?: number; error?: string }>(`/topics/${topicId}/clues/cleanup/status`),
     cleanupApply: (topicId: string, groups: any[]) =>
       request<{ original_count: number; merged: number; deleted: number; final_count: number }>(
         `/topics/${topicId}/clues/cleanup/apply`,

@@ -7,6 +7,8 @@ import type { Clue } from "../tools/processing/storeClue"
 function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
 function cluesPath(topicId: string) { return join(getDataDir(), "topics", topicId, "clues.json") }
 
+const cleanupJobs = new Map<string, { status: string; groups: any[] | null; original_count: number; error?: string }>()
+
 async function readClues(topicId: string): Promise<Clue[]> {
   const f = Bun.file(cluesPath(topicId))
   if (!(await f.exists())) return []
@@ -302,32 +304,53 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     return { imported: created.length, clues: created, query: b.query }
   }, { body: t.Record(t.String(), t.Any()) })
 
-  // Cleanup: categorize and propose consolidation groups
-  .post("/cleanup/propose", async ({ params, set }) => {
-    const { getTopic } = await import("../pipeline/topicManager")
-    const { categorizeAndCleanup } = await import("../agents/SmartClueExtractor")
-
+  // Cleanup: categorize and propose consolidation groups (fire-and-forget + poll)
+  .post("/cleanup/propose", async ({ params }) => {
     const topicId = params.id
-    const topic = await getTopic(topicId)
-    const clues = await readClues(topicId)
-    if (clues.length < 3) { set.status = 400; return { message: "Too few clues to cleanup" } }
 
-    const partiesFile = Bun.file(join(getDataDir(), "topics", topicId, "parties.json"))
-    const parties = await partiesFile.exists() ? await partiesFile.json() : []
+    // Start background job
+    if (!cleanupJobs.has(topicId) || cleanupJobs.get(topicId)!.status === "done" || cleanupJobs.get(topicId)!.status === "error") {
+      cleanupJobs.set(topicId, { status: "running", groups: null, original_count: 0 })
 
-    const clueData = clues.map(c => {
-      const cur = c.versions.find(v => v.v === c.current)!
-      return {
-        id: c.id, title: cur.title, summary: cur.bias_corrected_summary,
-        date: cur.timeline_date, credibility: cur.source_credibility.score,
-        relevance: cur.relevance_score, parties: cur.party_relevance,
-        clue_type: cur.clue_type, bias_flags: cur.source_credibility.bias_flags,
-        domain_tags: cur.domain_tags,
-      }
-    })
+      ;(async () => {
+        try {
+          const { getTopic } = await import("../pipeline/topicManager")
+          const { categorizeAndCleanup } = await import("../agents/SmartClueExtractor")
+          const topic = await getTopic(topicId)
+          const clues = await readClues(topicId)
+          const partiesFile = Bun.file(join(getDataDir(), "topics", topicId, "parties.json"))
+          const parties = await partiesFile.exists() ? await partiesFile.json() : []
 
-    const groups = await categorizeAndCleanup(topicId, topic.title, clueData, parties, topic.models.enrichment)
-    return { groups, original_count: clues.length }
+          const clueData = clues.map(c => {
+            const cur = c.versions.find(v => v.v === c.current)!
+            return {
+              id: c.id, title: cur.title, summary: cur.bias_corrected_summary,
+              date: cur.timeline_date, credibility: cur.source_credibility.score,
+              relevance: cur.relevance_score, parties: cur.party_relevance,
+              clue_type: cur.clue_type, bias_flags: cur.source_credibility.bias_flags,
+              domain_tags: cur.domain_tags,
+            }
+          })
+
+          const groups = await categorizeAndCleanup(topicId, topic.title, clueData, parties, topic.models.enrichment)
+          cleanupJobs.set(topicId, { status: "done", groups, original_count: clues.length })
+        } catch (e) {
+          cleanupJobs.set(topicId, { status: "error", groups: null, original_count: 0, error: String(e) })
+        }
+      })()
+    }
+
+    return { status: cleanupJobs.get(topicId)!.status }
+  })
+
+  .get("/cleanup/status", async ({ params }) => {
+    const job = cleanupJobs.get(params.id)
+    if (!job) return { status: "none" }
+    if (job.status === "done") {
+      const result = { status: "done", groups: job.groups, original_count: job.original_count }
+      return result
+    }
+    return { status: job.status, error: (job as any).error }
   })
 
   // Cleanup: apply approved groups (merge/delete)

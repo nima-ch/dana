@@ -363,10 +363,28 @@ export function CluesPanel({ topicId, status, onApprove, onReanalyze, approveLoa
     setCleanupBusy(true)
     setCleanupResult(null)
     try {
-      const res = await api.clues.cleanupPropose(topicId)
-      setCleanupGroups(res.groups)
-    } catch { setCleanupGroups(null) }
-    setCleanupBusy(false)
+      await api.clues.cleanupStart(topicId)
+      // Poll for results
+      const poll = async () => {
+        for (let i = 0; i < 120; i++) { // up to 10 minutes
+          await new Promise(r => setTimeout(r, 5000))
+          const res = await api.clues.cleanupStatus(topicId)
+          if (res.status === "done" && res.groups) {
+            setCleanupGroups(res.groups)
+            setCleanupBusy(false)
+            return
+          }
+          if (res.status === "error") {
+            setCleanupBusy(false)
+            return
+          }
+        }
+        setCleanupBusy(false)
+      }
+      poll()
+    } catch {
+      setCleanupBusy(false)
+    }
   }
 
   const handleCleanupApply = async (groups: any[]) => {
