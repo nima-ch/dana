@@ -114,13 +114,18 @@ export const api = {
     bulkImport: (topicId: string, content: string) =>
       request<{ imported: number; clues: any[] }>(`/topics/${topicId}/clues/bulk`, {
         method: "POST", body: JSON.stringify({ content }),
+        signal: AbortSignal.timeout(600_000),
       }),
     research: (topicId: string, query: string) =>
       request<{ imported: number; clues: any[]; query: string }>(`/topics/${topicId}/clues/research`, {
         method: "POST", body: JSON.stringify({ query }),
+        signal: AbortSignal.timeout(600_000),
       }),
     cleanupPropose: (topicId: string) =>
-      request<{ groups: any[]; original_count: number }>(`/topics/${topicId}/clues/cleanup/propose`, { method: "POST" }),
+      request<{ groups: any[]; original_count: number }>(`/topics/${topicId}/clues/cleanup/propose`, {
+        method: "POST",
+        signal: AbortSignal.timeout(600_000), // 10 min — LLM categorization can take a while
+      }),
     cleanupApply: (topicId: string, groups: any[]) =>
       request<{ original_count: number; merged: number; deleted: number; final_count: number }>(
         `/topics/${topicId}/clues/cleanup/apply`,
