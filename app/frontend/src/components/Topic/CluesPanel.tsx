@@ -354,6 +354,32 @@ export function CluesPanel({ topicId, status, onApprove, onReanalyze, approveLoa
     setResearching(false)
   }
 
+  // Cleanup & Categorize
+  const [cleanupGroups, setCleanupGroups] = useState<any[] | null>(null)
+  const [cleanupBusy, setCleanupBusy] = useState(false)
+  const [cleanupResult, setCleanupResult] = useState<{ merged: number; deleted: number; final_count: number } | null>(null)
+
+  const handleCleanupPropose = async () => {
+    setCleanupBusy(true)
+    setCleanupResult(null)
+    try {
+      const res = await api.clues.cleanupPropose(topicId)
+      setCleanupGroups(res.groups)
+    } catch { setCleanupGroups(null) }
+    setCleanupBusy(false)
+  }
+
+  const handleCleanupApply = async (groups: any[]) => {
+    setCleanupBusy(true)
+    try {
+      const res = await api.clues.cleanupApply(topicId, groups)
+      setCleanupResult(res)
+      setCleanupGroups(null)
+      load()
+    } catch { /* */ }
+    setCleanupBusy(false)
+  }
+
   const filtered = clues.filter(clue => {
     const cur = clue.versions.find(v => v.v === clue.current)!
     if (filter.party && !cur.party_relevance.includes(filter.party)) return false
@@ -391,12 +417,23 @@ export function CluesPanel({ topicId, status, onApprove, onReanalyze, approveLoa
 
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-semibold text-gray-700">Clues ({filtered.length})</h2>
-        <button
-          className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
-          onClick={() => setShowBulkImport(true)}
-        >
-          + Bulk Import
-        </button>
+        <div className="flex gap-2">
+          {clues.length >= 10 && (
+            <button
+              className="text-xs px-3 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50"
+              onClick={handleCleanupPropose}
+              disabled={cleanupBusy}
+            >
+              {cleanupBusy ? "Analyzing..." : "Cleanup & Categorize"}
+            </button>
+          )}
+          <button
+            className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+            onClick={() => setShowBulkImport(true)}
+          >
+            + Bulk Import
+          </button>
+        </div>
       </div>
 
       {/* Research bar */}
@@ -475,6 +512,159 @@ export function CluesPanel({ topicId, status, onApprove, onReanalyze, approveLoa
           onClose={() => setShowBulkImport(false)}
           onImported={load}
         />
+      )}
+
+      {cleanupResult && (
+        <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm text-green-800">
+          Cleanup complete: {cleanupResult.merged} merged, {cleanupResult.deleted} removed. {cleanupResult.final_count} clues remaining.
+          <button className="text-xs text-green-600 underline ml-2" onClick={() => setCleanupResult(null)}>dismiss</button>
+        </div>
+      )}
+
+      {cleanupGroups && (
+        <CleanupReviewModal
+          groups={cleanupGroups}
+          onApply={handleCleanupApply}
+          onCancel={() => setCleanupGroups(null)}
+          loading={cleanupBusy}
+        />
+      )}
+    </div>
+  )
+}
+
+const CATEGORY_COLORS: Record<string, string> = {
+  military_operations: "bg-red-100 text-red-700",
+  nuclear_program: "bg-orange-100 text-orange-700",
+  protest_movement: "bg-green-100 text-green-700",
+  leadership_succession: "bg-purple-100 text-purple-700",
+  international_response: "bg-blue-100 text-blue-700",
+  economic_impact: "bg-yellow-100 text-yellow-700",
+  intelligence: "bg-gray-100 text-gray-700",
+  diplomatic: "bg-cyan-100 text-cyan-700",
+  internal_politics: "bg-pink-100 text-pink-700",
+}
+
+function CleanupReviewModal({ groups, onApply, onCancel, loading }: {
+  groups: any[]
+  onApply: (groups: any[]) => void
+  onCancel: () => void
+  loading: boolean
+}) {
+  const [editedGroups, setEditedGroups] = useState(groups)
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
+
+  const mergeGroups = editedGroups.filter(g => g.action === "merge")
+  const keepGroups = editedGroups.filter(g => g.action === "keep")
+  const deleteGroups = editedGroups.filter(g => g.action === "delete")
+  const totalSource = editedGroups.reduce((s: number, g: any) => s + (g.source_clue_ids?.length || 0), 0)
+  const resultCount = mergeGroups.length + keepGroups.length
+
+  const toggleAction = (groupId: string) => {
+    setEditedGroups(gs => gs.map(g => {
+      if (g.group_id !== groupId) return g
+      const next = g.action === "merge" ? "keep" : g.action === "keep" ? "delete" : "merge"
+      return { ...g, action: next }
+    }))
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[85vh] flex flex-col">
+        <div className="px-5 py-4 border-b border-gray-200">
+          <h3 className="font-semibold text-gray-900">Cleanup & Categorize</h3>
+          <p className="text-xs text-gray-500 mt-1">
+            {totalSource} clues → {resultCount} after cleanup ({mergeGroups.length} merged, {keepGroups.length} kept, {deleteGroups.reduce((s: number, g: any) => s + (g.source_clue_ids?.length || 0), 0)} removed)
+          </p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
+          {/* Merge groups first */}
+          {mergeGroups.length > 0 && (
+            <div className="mb-3">
+              <h4 className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-2">Merge ({mergeGroups.length})</h4>
+              {mergeGroups.map(g => (
+                <GroupCard key={g.group_id} group={g} expanded={expandedGroup === g.group_id}
+                  onToggle={() => setExpandedGroup(e => e === g.group_id ? null : g.group_id)}
+                  onChangeAction={() => toggleAction(g.group_id)} />
+              ))}
+            </div>
+          )}
+
+          {keepGroups.length > 0 && (
+            <div className="mb-3">
+              <h4 className="text-xs font-semibold text-green-700 uppercase tracking-wide mb-2">Keep as-is ({keepGroups.length})</h4>
+              {keepGroups.map(g => (
+                <GroupCard key={g.group_id} group={g} expanded={expandedGroup === g.group_id}
+                  onToggle={() => setExpandedGroup(e => e === g.group_id ? null : g.group_id)}
+                  onChangeAction={() => toggleAction(g.group_id)} />
+              ))}
+            </div>
+          )}
+
+          {deleteGroups.length > 0 && (
+            <div className="mb-3">
+              <h4 className="text-xs font-semibold text-red-700 uppercase tracking-wide mb-2">Delete ({deleteGroups.reduce((s: number, g: any) => s + (g.source_clue_ids?.length || 0), 0)} clues)</h4>
+              {deleteGroups.map(g => (
+                <GroupCard key={g.group_id} group={g} expanded={expandedGroup === g.group_id}
+                  onToggle={() => setExpandedGroup(e => e === g.group_id ? null : g.group_id)}
+                  onChangeAction={() => toggleAction(g.group_id)} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="px-5 py-3 border-t border-gray-200 flex justify-between items-center">
+          <span className="text-xs text-gray-400">Click action badges to change merge/keep/delete</span>
+          <div className="flex gap-2">
+            <button className="text-xs px-4 py-1.5 text-gray-500 hover:text-gray-700" onClick={onCancel}>Cancel</button>
+            <button className="text-xs px-4 py-1.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50"
+              onClick={() => onApply(editedGroups)} disabled={loading}>
+              {loading ? "Applying..." : `Apply Cleanup (${totalSource} → ${resultCount})`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function GroupCard({ group, expanded, onToggle, onChangeAction }: {
+  group: any; expanded: boolean; onToggle: () => void; onChangeAction: () => void
+}) {
+  const catColor = CATEGORY_COLORS[group.category] || "bg-gray-100 text-gray-700"
+  const actionColor = group.action === "merge" ? "bg-amber-100 text-amber-700 hover:bg-amber-200"
+    : group.action === "keep" ? "bg-green-100 text-green-700 hover:bg-green-200"
+    : "bg-red-100 text-red-700 hover:bg-red-200"
+
+  return (
+    <div className="border border-gray-200 rounded-lg mb-1.5 overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-50" onClick={onToggle}>
+        <button className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${actionColor}`}
+          onClick={e => { e.stopPropagation(); onChangeAction() }}>
+          {group.action}
+        </button>
+        <span className={`text-[10px] px-1.5 py-0.5 rounded ${catColor}`}>{group.category}</span>
+        <span className="text-xs text-gray-800 flex-1 truncate font-medium">{group.merged_title}</span>
+        <span className="text-[10px] text-gray-400 shrink-0">{group.source_clue_ids?.length || 0} clues</span>
+        <span className="text-gray-300 text-xs">{expanded ? "\u25B2" : "\u25BC"}</span>
+      </div>
+      {expanded && (
+        <div className="px-3 pb-3 pt-1 bg-gray-50 border-t border-gray-100 space-y-2">
+          <p className="text-xs text-gray-700 leading-relaxed">{group.merged_summary}</p>
+          <div className="flex flex-wrap gap-1">
+            {(group.source_clue_ids || []).map((id: string) => (
+              <span key={id} className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-mono">{id}</span>
+            ))}
+          </div>
+          {group.reason && <p className="text-[10px] text-gray-400 italic">{group.reason}</p>}
+          <div className="flex gap-2 text-[10px] text-gray-400">
+            <span>cred: {group.merged_credibility}</span>
+            <span>rel: {group.merged_relevance}</span>
+            <span>{group.merged_date}</span>
+            {(group.merged_parties || []).length > 0 && <span>parties: {group.merged_parties.join(", ")}</span>}
+          </div>
+        </div>
       )}
     </div>
   )

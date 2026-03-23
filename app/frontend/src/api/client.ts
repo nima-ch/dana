@@ -119,6 +119,13 @@ export const api = {
       request<{ imported: number; clues: any[]; query: string }>(`/topics/${topicId}/clues/research`, {
         method: "POST", body: JSON.stringify({ query }),
       }),
+    cleanupPropose: (topicId: string) =>
+      request<{ groups: any[]; original_count: number }>(`/topics/${topicId}/clues/cleanup/propose`, { method: "POST" }),
+    cleanupApply: (topicId: string, groups: any[]) =>
+      request<{ original_count: number; merged: number; deleted: number; final_count: number }>(
+        `/topics/${topicId}/clues/cleanup/apply`,
+        { method: "POST", body: JSON.stringify({ groups }) },
+      ),
   },
   settings: {
     get: () => request<{ default_models: Record<string, string> }>("/settings"),

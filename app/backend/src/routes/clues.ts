@@ -301,3 +301,106 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     if (created.length > 0) await markStale(topicId)
     return { imported: created.length, clues: created, query: b.query }
   }, { body: t.Record(t.String(), t.Any()) })
+
+  // Cleanup: categorize and propose consolidation groups
+  .post("/cleanup/propose", async ({ params, set }) => {
+    const { getTopic } = await import("../pipeline/topicManager")
+    const { categorizeAndCleanup } = await import("../agents/SmartClueExtractor")
+
+    const topicId = params.id
+    const topic = await getTopic(topicId)
+    const clues = await readClues(topicId)
+    if (clues.length < 3) { set.status = 400; return { message: "Too few clues to cleanup" } }
+
+    const partiesFile = Bun.file(join(getDataDir(), "topics", topicId, "parties.json"))
+    const parties = await partiesFile.exists() ? await partiesFile.json() : []
+
+    const clueData = clues.map(c => {
+      const cur = c.versions.find(v => v.v === c.current)!
+      return {
+        id: c.id, title: cur.title, summary: cur.bias_corrected_summary,
+        date: cur.timeline_date, credibility: cur.source_credibility.score,
+        relevance: cur.relevance_score, parties: cur.party_relevance,
+        clue_type: cur.clue_type, bias_flags: cur.source_credibility.bias_flags,
+        domain_tags: cur.domain_tags,
+      }
+    })
+
+    const groups = await categorizeAndCleanup(topicId, topic.title, clueData, parties, topic.models.enrichment)
+    return { groups, original_count: clues.length }
+  })
+
+  // Cleanup: apply approved groups (merge/delete)
+  .post("/cleanup/apply", async ({ params, body, set }) => {
+    const b = body as { groups: any[] }
+    if (!b.groups?.length) { set.status = 400; return { message: "No groups provided" } }
+
+    const topicId = params.id
+    const groups = b.groups
+    const now = new Date().toISOString()
+
+    // Collect IDs to delete (from merge and delete groups)
+    const idsToDelete = new Set<string>()
+    const newClues: Clue[] = []
+
+    for (const g of groups) {
+      if (g.action === "keep") continue
+      if (g.action === "delete") {
+        for (const id of g.source_clue_ids) idsToDelete.add(id)
+        continue
+      }
+      if (g.action === "merge") {
+        for (const id of g.source_clue_ids) idsToDelete.add(id)
+        newClues.push({
+          id: `clue-${g.group_id}`,
+          current: 1,
+          added_at: now,
+          last_updated_at: now,
+          added_by: "cleanup",
+          status: "verified",
+          versions: [{
+            v: 1, date: now, title: g.merged_title,
+            raw_source: { url: "", fetched_at: now },
+            source_credibility: {
+              score: g.merged_credibility ?? 60,
+              notes: `Merged from ${g.source_clue_ids.length} clues`,
+              bias_flags: g.merged_bias_flags ?? [],
+              origin_source: { url: "", outlet: "consolidated", is_republication: false },
+            },
+            bias_corrected_summary: g.merged_summary,
+            relevance_score: g.merged_relevance ?? 70,
+            party_relevance: g.merged_parties ?? [],
+            domain_tags: g.merged_domain_tags ?? [],
+            timeline_date: g.merged_date || now.slice(0, 10),
+            clue_type: g.merged_clue_type || "event",
+            change_note: `Cleanup merge: ${g.reason}`,
+            key_points: [],
+          }],
+        })
+      }
+    }
+
+    // Apply: remove old clues, add new merged ones
+    await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (allClues) => {
+      const filtered = allClues.filter(c => !idsToDelete.has(c.id))
+      return [...filtered, ...newClues]
+    }, [])
+
+    // Re-number clue IDs for consistency
+    await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (allClues) => {
+      return allClues.map((c, i) => ({
+        ...c,
+        id: `clue-${String(i + 1).padStart(3, "0")}`,
+      }))
+    }, [])
+
+    await markStale(topicId)
+
+    const finalClues = await readClues(topicId)
+    return {
+      original_count: groups.reduce((sum: number, g: any) => sum + (g.source_clue_ids?.length || 0), 0),
+      merged: newClues.length,
+      deleted: idsToDelete.size - newClues.length,
+      final_count: finalClues.length,
+    }
+  }, { body: t.Record(t.String(), t.Any()) })

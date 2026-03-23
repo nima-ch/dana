@@ -425,3 +425,116 @@ Extract all relevant factual claims as structured clues.`,
     return []
   }
 }
+
+// Categorize and propose cleanup groups
+export interface ClueGroup {
+  group_id: string
+  category: string
+  merged_title: string
+  merged_summary: string
+  merged_credibility: number
+  merged_bias_flags: string[]
+  merged_relevance: number
+  merged_date: string
+  merged_clue_type: string
+  merged_domain_tags: string[]
+  merged_parties: string[]
+  source_clue_ids: string[]
+  action: "merge" | "keep" | "delete"
+  reason: string
+}
+
+export async function categorizeAndCleanup(
+  topicId: string,
+  topicTitle: string,
+  clues: { id: string; title: string; summary: string; date: string; credibility: number; relevance: number; parties: string[]; clue_type: string; bias_flags: string[]; domain_tags: string[] }[],
+  parties: { id: string; name: string }[],
+  model: string,
+): Promise<ClueGroup[]> {
+  const partyList = parties.map(p => `${p.id}: ${p.name}`).join("\n")
+
+  log.enrichment(`Cleanup: categorizing ${clues.length} clues`)
+
+  // Build a compact clue list for the LLM
+  const clueList = clues.map(c =>
+    `[${c.id}] "${c.title}" (${c.date}, cred=${c.credibility}, rel=${c.relevance}, type=${c.clue_type}, parties=[${c.parties.join(",")}]) — ${c.summary.slice(0, 150)}`
+  ).join("\n")
+
+  // May need to chunk if too large
+  const inputSize = clueList.length + partyList.length + 2000
+  const maxInput = 60000 // chars, ~17k tokens
+  let clueInput = clueList
+  if (inputSize > maxInput) {
+    // Truncate summaries more aggressively
+    clueInput = clues.map(c =>
+      `[${c.id}] "${c.title}" (${c.date}, cred=${c.credibility}, type=${c.clue_type}) — ${c.summary.slice(0, 60)}`
+    ).join("\n")
+  }
+
+  const raw = await chatCompletionText({
+    model,
+    messages: [
+      {
+        role: "system",
+        content: `You are an intelligence analyst organizing and consolidating a large set of clues/evidence items. Your job is to:
+
+1. GROUP related clues — events that are about the same thing, updates on the same development, or overlapping information
+2. For each group, produce a MERGED clue that synthesizes all the information into one comprehensive, up-to-date item
+3. Mark standalone clues that are unique and should be KEPT as-is
+4. Mark truly redundant or low-value clues for DELETION
+
+KNOWN PARTIES:
+${partyList}
+
+Output ONLY a valid JSON array of group objects:
+[{
+  "group_id": "<short slug>",
+  "category": "<thematic category: military_operations, nuclear_program, protest_movement, leadership_succession, international_response, economic_impact, intelligence, diplomatic, internal_politics>",
+  "merged_title": "<comprehensive title for the merged clue>",
+  "merged_summary": "<synthesized summary combining all source clues, 2-4 sentences, factual and up-to-date>",
+  "merged_credibility": <0-100, weighted average>,
+  "merged_bias_flags": ["<flags from sources>"],
+  "merged_relevance": <0-100>,
+  "merged_date": "<most recent date from source clues>",
+  "merged_clue_type": "<event|statement|military_action|intelligence|economic|diplomatic>",
+  "merged_domain_tags": ["<tags>"],
+  "merged_parties": ["<party_id>"],
+  "source_clue_ids": ["<clue-xxx>", "<clue-yyy>"],
+  "action": "merge",
+  "reason": "<why these clues should be merged>"
+}]
+
+Rules:
+- Groups with only 1 source clue should have action="keep" (standalone, unique info)
+- Groups can have action="delete" if ALL source clues are truly redundant or garbage
+- EVERY clue ID must appear in exactly one group
+- Aim to reduce clue count by 40-60% through merging related items
+- Preserve ALL unique factual information in merged summaries
+- Keep the most recent date and highest credibility among source clues
+- Be aggressive about merging — if two clues are about the same event/topic, merge them`,
+      },
+      {
+        role: "user",
+        content: `TOPIC: ${topicTitle}
+
+CLUES TO ORGANIZE (${clues.length} total):
+${clueInput}
+
+Categorize and group these clues. Every clue ID must appear in exactly one group.`,
+      },
+    ],
+    temperature: 0.2,
+    max_tokens: budgetOutput(model, clueInput + partyList, { min: 8000, max: 16000 }),
+  })
+
+  try {
+    const match = raw.match(/\[[\s\S]+\]/)
+    if (!match) throw new Error("No JSON array")
+    const groups = JSON.parse(match[0]) as ClueGroup[]
+    log.enrichment(`Cleanup: ${groups.length} groups proposed (${groups.filter(g => g.action === "merge").length} merge, ${groups.filter(g => g.action === "keep").length} keep, ${groups.filter(g => g.action === "delete").length} delete)`)
+    return groups
+  } catch (e) {
+    log.error("CLEANUP", "Failed to parse cleanup groups", e)
+    throw new Error("Failed to categorize clues")
+  }
+}
