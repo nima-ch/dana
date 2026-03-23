@@ -80,14 +80,14 @@ function TagListEditor({ label, tags, onChange }: { label: string; tags: string[
 }
 
 function PartyCard({
-  party, topicId, onDelete, onUpdate, onReload, reviewMode, selected, onToggleSelect,
+  party, topicId, onDelete, onUpdate, onReload, selected, onToggleSelect,
 }: {
   party: Party
   topicId: string
   onDelete: (id: string) => void
   onUpdate: (id: string, data: Partial<Party>) => void
   onReload: () => void
-  reviewMode: boolean
+  reviewMode?: boolean
   selected: boolean
   onToggleSelect: (id: string) => void
 }) {
@@ -152,10 +152,8 @@ function PartyCard({
 
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-2 flex-1 min-w-0">
-          {reviewMode && (
-            <input type="checkbox" className="mt-1 shrink-0" checked={selected}
-              onChange={() => onToggleSelect(party.id)} />
-          )}
+          <input type="checkbox" className="mt-1 shrink-0" checked={selected}
+            onChange={() => onToggleSelect(party.id)} />
           <div className="flex-1 min-w-0">
             {editing ? (
               <div className="space-y-3">
