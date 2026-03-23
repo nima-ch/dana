@@ -36,20 +36,24 @@ const DOMAIN_COLORS: Record<string, string> = {
   media: "bg-cyan-100 text-cyan-700",
 }
 
-export function ExpertCouncilPanel({ topicId }: { topicId: string }) {
+export function ExpertCouncilPanel({ topicId, version }: { topicId: string; version?: number }) {
   const [council, setCouncil] = useState<ExpertCouncil | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<string | null>(null)
 
   useEffect(() => {
-    api.expertCouncil.get(topicId)
+    setLoading(true)
+    const fetcher = version
+      ? api.expertCouncil.getVersion(topicId, version)
+      : api.expertCouncil.get(topicId)
+    fetcher
       .then(data => {
         setCouncil(data)
         if (data?.deliberations?.length) setActiveTab(data.deliberations[0].expert_id)
       })
-      .catch(() => {})
+      .catch(() => setCouncil(null))
       .finally(() => setLoading(false))
-  }, [topicId])
+  }, [topicId, version])
 
   if (loading) return <div className="text-gray-400 text-sm text-center py-12">Loading expert council...</div>
   if (!council || !council.deliberations?.length) {

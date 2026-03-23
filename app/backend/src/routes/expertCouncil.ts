@@ -32,3 +32,9 @@ export const expertCouncilRouter = new Elysia({ prefix: "/api/topics/:id" })
     const council = await loadCouncil(params.id, latest.version) as any
     return council?.final_verdict ?? null
   })
+  .get("/verdict/:version", async ({ params }) => {
+    const v = parseInt(params.version)
+    if (isNaN(v)) return null
+    const council = await loadCouncil(params.id, v) as any
+    return council?.final_verdict ?? null
+  })

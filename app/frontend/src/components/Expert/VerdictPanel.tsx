@@ -38,18 +38,22 @@ const CONFIDENCE_COLORS = {
   low: "bg-red-100 text-red-700",
 }
 
-export function VerdictPanel({ topicId }: { topicId: string }) {
+export function VerdictPanel({ topicId, version }: { topicId: string; version?: number }) {
   const [verdict, setVerdict] = useState<FinalVerdict | null>(null)
   const [loading, setLoading] = useState(true)
   const [expandedScenario, setExpandedScenario] = useState<string | null>(null)
   const [showChallenges, setShowChallenges] = useState(false)
 
   useEffect(() => {
-    api.verdict.get(topicId)
+    setLoading(true)
+    const fetcher = version
+      ? api.verdict.getVersion(topicId, version)
+      : api.verdict.get(topicId)
+    fetcher
       .then(setVerdict)
-      .catch(() => {})
+      .catch(() => setVerdict(null))
       .finally(() => setLoading(false))
-  }, [topicId])
+  }, [topicId, version])
 
   if (loading) return <div className="text-gray-400 text-sm text-center py-12">Loading verdict...</div>
   if (!verdict) return <div className="text-gray-400 text-sm text-center py-12">No verdict available yet.</div>

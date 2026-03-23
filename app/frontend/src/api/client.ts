@@ -41,6 +41,7 @@ export const api = {
   },
   verdict: {
     get: (topicId: string) => request<any>(`/topics/${topicId}/verdict`),
+    getVersion: (topicId: string, version: number) => request<any>(`/topics/${topicId}/verdict/${version}`),
   },
   pipeline: {
     discover: (topicId: string) =>

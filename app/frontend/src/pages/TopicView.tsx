@@ -229,7 +229,7 @@ export function TopicView() {
             >
               {states.map(s => (
                 <option key={s.version} value={s.version}>
-                  v{s.version} — {s.label} ({new Date(s.created_at).toLocaleDateString()})
+                  v{s.version} — {s.label} ({new Date(s.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })})
                 </option>
               ))}
             </select>
@@ -380,8 +380,8 @@ export function TopicView() {
                   isLive={topic.status === "forum" || (pipelineRunning && liveStage === "forum")}
                 />
               )}
-              {activeStage === "expert_council" && <ExpertCouncilPanel topicId={topic.id} />}
-              {activeStage === "verdict" && <VerdictPanel topicId={topic.id} />}
+              {activeStage === "expert_council" && <ExpertCouncilPanel topicId={topic.id} version={selectedVersion ?? undefined} />}
+              {activeStage === "verdict" && <VerdictPanel topicId={topic.id} version={selectedVersion ?? undefined} />}
             </>
           )}
         </main>

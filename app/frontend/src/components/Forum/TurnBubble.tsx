@@ -1,4 +1,68 @@
-import { useState } from "react"
+import { useState, useMemo } from "react"
+
+// Parse structured fields from a raw JSON statement (handles markdown fences + truncation)
+function parseStructuredFromStatement(turn: Turn): Turn {
+  const hasStructured = turn.position || (turn.evidence && turn.evidence.length > 0)
+  if (hasStructured) return turn
+
+  const raw = turn.statement
+  if (!raw || typeof raw !== "string") return turn
+  if (!raw.includes('"position"') && !raw.includes('"evidence"')) return turn
+
+  const cleaned = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "")
+  let position: string | undefined
+  let evidence: EvidenceItem[] | undefined
+  let challenges: ChallengeItem[] | undefined
+  let concessions: string[] | undefined
+  let scenario_endorsement: string | undefined
+  let statement = ""
+
+  try {
+    const jsonMatch = cleaned.match(/\{[\s\S]+\}/)
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0])
+      position = parsed.position
+      evidence = parsed.evidence
+      challenges = parsed.challenges
+      concessions = parsed.concessions
+      scenario_endorsement = parsed.scenario_endorsement
+      statement = parsed.statement || ""
+    }
+  } catch {
+    // Truncated JSON — extract fields individually
+    try {
+      const posMatch = cleaned.match(/"position"\s*:\s*"((?:[^"\\]|\\.)*)"/s)
+      if (posMatch) position = posMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
+
+      const evMatch = cleaned.match(/"evidence"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"challenges)/s)
+      if (evMatch) try { evidence = JSON.parse(evMatch[1]) } catch {}
+
+      const chMatch = cleaned.match(/"challenges"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"concessions)/s)
+      if (chMatch) try { challenges = JSON.parse(chMatch[1]) } catch {}
+
+      const coMatch = cleaned.match(/"concessions"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"(?:statement|scenario))/s)
+      if (coMatch) try { concessions = JSON.parse(coMatch[1]) } catch {}
+
+      const seMatch = cleaned.match(/"scenario_endorsement"\s*:\s*"((?:[^"\\]|\\.)*)"/s)
+      if (seMatch) scenario_endorsement = seMatch[1].replace(/\\"/g, '"')
+
+      const stmtMatch = cleaned.match(/"statement"\s*:\s*"((?:[^"\\]|\\.)*)/)
+      if (stmtMatch) statement = stmtMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
+    } catch { return turn }
+  }
+
+  if (!position && !evidence?.length) return turn
+
+  return {
+    ...turn,
+    position,
+    evidence,
+    challenges,
+    concessions,
+    scenario_endorsement,
+    statement: statement || turn.statement,
+  }
+}
 
 interface EvidenceItem {
   claim: string
@@ -153,7 +217,8 @@ function StructuredView({ turn, onClueClick }: { turn: Turn; onClueClick?: (id: 
   )
 }
 
-export function TurnBubble({ turn, isDelta, onClueClick }: Props) {
+export function TurnBubble({ turn: rawTurn, isDelta, onClueClick }: Props) {
+  const turn = useMemo(() => parseStructuredFromStatement(rawTurn), [rawTurn])
   const color = turn.party_color ?? partyColor(turn.party_name)
   const time = new Date(turn.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
   const hasStructured = turn.position || (turn.evidence && turn.evidence.length > 0)
