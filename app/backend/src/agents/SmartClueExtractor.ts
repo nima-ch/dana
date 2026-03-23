@@ -177,12 +177,34 @@ ${chunks[i]}`,
     })
 
     try {
-      const match = raw.match(/\[[\s\S]+\]/)
+      const match = raw.match(/\[[\s\S]+/)
       if (!match) {
         log.error("SMART_EXTRACT", `No JSON array in chunk ${i + 1} response`)
         continue
       }
-      const extracted = JSON.parse(match[0]) as ExtractedClue[]
+      let jsonStr = match[0]
+      let extracted: ExtractedClue[]
+      try {
+        extracted = JSON.parse(jsonStr)
+      } catch {
+        // Truncated JSON — salvage complete objects by finding last complete }, then close the array
+        const lastComplete = jsonStr.lastIndexOf("},")
+        const lastObj = jsonStr.lastIndexOf("}")
+        const cutPoint = lastComplete > 0 ? lastComplete + 1 : lastObj > 0 ? lastObj + 1 : -1
+        if (cutPoint > 0) {
+          const salvaged = jsonStr.slice(0, cutPoint) + "]"
+          try {
+            extracted = JSON.parse(salvaged)
+            log.enrichment(`Chunk ${i + 1}: salvaged ${extracted.length} clues from truncated JSON`)
+          } catch {
+            log.error("SMART_EXTRACT", `Parse error chunk ${i + 1} (salvage failed)`)
+            continue
+          }
+        } else {
+          log.error("SMART_EXTRACT", `Parse error chunk ${i + 1} (no salvageable objects)`)
+          continue
+        }
+      }
       allClues.push(...extracted)
       log.enrichment(`Chunk ${i + 1}: extracted ${extracted.length} clues`)
     } catch (e) {

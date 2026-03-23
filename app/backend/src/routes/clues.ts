@@ -8,6 +8,7 @@ function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
 function cluesPath(topicId: string) { return join(getDataDir(), "topics", topicId, "clues.json") }
 
 const cleanupJobs = new Map<string, { status: string; groups: any[] | null; original_count: number; error?: string }>()
+const bulkImportJobs = new Map<string, { status: string; imported: number; error?: string }>()
 
 async function readClues(topicId: string): Promise<Clue[]> {
   const f = Bun.file(cluesPath(topicId))
@@ -185,68 +186,77 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     }
   }, { body: t.Record(t.String(), t.Any()) })
 
-  // Smart bulk import: mixed text with embedded URLs → extract + fetch + structured clues
+  // Smart bulk import: fire-and-forget + poll
   .post("/bulk", async ({ params, body, error }) => {
-    const { getTopic } = await import("../pipeline/topicManager")
-    const { smartExtractClues } = await import("../agents/SmartClueExtractor")
-
     const b = body as { content: string; type?: string }
     if (!b.content?.trim()) return error(400, { message: "content is required" })
-
     const topicId = params.id
-    const topic = await getTopic(topicId)
 
-    // Load parties for context
-    const partiesFile = Bun.file(join(getDataDir(), "topics", topicId, "parties.json"))
-    const parties = await partiesFile.exists() ? await partiesFile.json() : []
+    if (!bulkImportJobs.has(topicId) || bulkImportJobs.get(topicId)!.status === "done" || bulkImportJobs.get(topicId)!.status === "error") {
+      bulkImportJobs.set(topicId, { status: "running", imported: 0 })
 
-    // Use enrichment model for better extraction quality
-    const extracted = await smartExtractClues(
-      topicId, topic.title, topic.description,
-      b.content, parties, topic.models.enrichment,
-    )
+      ;(async () => {
+        try {
+          const { getTopic } = await import("../pipeline/topicManager")
+          const { smartExtractClues } = await import("../agents/SmartClueExtractor")
+          const topic = await getTopic(topicId)
+          const partiesFile = Bun.file(join(getDataDir(), "topics", topicId, "parties.json"))
+          const parties = await partiesFile.exists() ? await partiesFile.json() : []
 
-    // Store each extracted clue
-    const created: Clue[] = []
-    for (const item of extracted) {
-      const now = new Date().toISOString()
-      let newClue: Clue | null = null
-      await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (clues) => {
-        const id = `clue-${String(clues.length + 1).padStart(3, "0")}`
-        newClue = {
-          id, current: 1, added_at: now, last_updated_at: now,
-          added_by: "user", status: "verified",
-          versions: [{
-            v: 1, date: now, title: item.title,
-            raw_source: { url: item.source_url || "", fetched_at: now },
-            source_credibility: {
-              score: item.credibility ?? 50,
-              notes: `Source: ${item.source_outlet || "user-submitted"}`,
-              bias_flags: item.bias_flags ?? [],
-              origin_source: {
-                url: item.source_url || "",
-                outlet: item.source_outlet || "user",
-                is_republication: false,
-              },
-            },
-            bias_corrected_summary: item.summary,
-            relevance_score: item.relevance ?? 70,
-            party_relevance: item.parties ?? [],
-            domain_tags: item.domain_tags ?? [],
-            timeline_date: item.date || now.slice(0, 10),
-            clue_type: item.clue_type || "event",
-            change_note: "Smart bulk import",
-            key_points: item.key_points ?? [],
-          }],
+          const extracted = await smartExtractClues(
+            topicId, topic.title, topic.description,
+            b.content, parties, topic.models.enrichment,
+          )
+
+          let count = 0
+          for (const item of extracted) {
+            const now = new Date().toISOString()
+            let newClue: Clue | null = null
+            await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (clues) => {
+              const id = `clue-${String(clues.length + 1).padStart(3, "0")}`
+              newClue = {
+                id, current: 1, added_at: now, last_updated_at: now,
+                added_by: "user", status: "verified",
+                versions: [{
+                  v: 1, date: now, title: item.title,
+                  raw_source: { url: item.source_url || "", fetched_at: now },
+                  source_credibility: {
+                    score: item.credibility ?? 50,
+                    notes: `Source: ${item.source_outlet || "user-submitted"}`,
+                    bias_flags: item.bias_flags ?? [],
+                    origin_source: { url: item.source_url || "", outlet: item.source_outlet || "user", is_republication: false },
+                  },
+                  bias_corrected_summary: item.summary,
+                  relevance_score: item.relevance ?? 70,
+                  party_relevance: item.parties ?? [],
+                  domain_tags: item.domain_tags ?? [],
+                  timeline_date: item.date || now.slice(0, 10),
+                  clue_type: item.clue_type || "event",
+                  change_note: "Smart bulk import",
+                  key_points: item.key_points ?? [],
+                }],
+              }
+              return [...clues, newClue!]
+            }, [])
+            if (newClue) count++
+          }
+
+          if (count > 0) await markStale(topicId)
+          bulkImportJobs.set(topicId, { status: "done", imported: count })
+        } catch (e) {
+          bulkImportJobs.set(topicId, { status: "error", imported: 0, error: String(e) })
         }
-        return [...clues, newClue!]
-      }, [])
-      if (newClue) created.push(newClue)
+      })()
     }
 
-    if (created.length > 0) await markStale(topicId)
-    return { imported: created.length, clues: created }
+    return { status: bulkImportJobs.get(topicId)!.status }
   }, { body: t.Record(t.String(), t.Any()) })
+
+  .get("/bulk/status", async ({ params }) => {
+    const job = bulkImportJobs.get(params.id)
+    if (!job) return { status: "none" }
+    return job
+  })
 
   // Research: user gives a direction → system searches, fetches, extracts clues
   .post("/research", async ({ params, body, error }) => {

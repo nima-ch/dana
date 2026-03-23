@@ -111,11 +111,12 @@ export const api = {
       request<any>(`/topics/${topicId}/clues/smart-edit/${clueId}`, {
         method: "POST", body: JSON.stringify({ feedback }),
       }),
-    bulkImport: (topicId: string, content: string) =>
-      request<{ imported: number; clues: any[] }>(`/topics/${topicId}/clues/bulk`, {
+    bulkImportStart: (topicId: string, content: string) =>
+      request<{ status: string }>(`/topics/${topicId}/clues/bulk`, {
         method: "POST", body: JSON.stringify({ content }),
-        signal: AbortSignal.timeout(600_000),
       }),
+    bulkImportStatus: (topicId: string) =>
+      request<{ status: string; imported?: number; error?: string }>(`/topics/${topicId}/clues/bulk/status`),
     research: (topicId: string, query: string) =>
       request<{ imported: number; clues: any[]; query: string }>(`/topics/${topicId}/clues/research`, {
         method: "POST", body: JSON.stringify({ query }),

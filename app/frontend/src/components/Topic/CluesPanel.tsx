@@ -238,10 +238,26 @@ function BulkImportModal({ topicId, onClose, onImported }: {
   const handleImport = async () => {
     if (!content.trim()) return
     setLoading(true)
+    setResult(null)
     try {
-      const res = await api.clues.bulkImport(topicId, content)
-      setResult(res)
-      onImported()
+      await api.clues.bulkImportStart(topicId, content)
+      // Poll for completion
+      for (let i = 0; i < 240; i++) { // up to 20 minutes
+        await new Promise(r => setTimeout(r, 5000))
+        const res = await api.clues.bulkImportStatus(topicId)
+        if (res.status === "done") {
+          setResult({ imported: res.imported ?? 0 })
+          onImported()
+          setLoading(false)
+          return
+        }
+        if (res.status === "error") {
+          setResult({ imported: -1 })
+          setLoading(false)
+          return
+        }
+      }
+      setResult({ imported: -1 })
     } catch {
       setResult({ imported: -1 })
     }
