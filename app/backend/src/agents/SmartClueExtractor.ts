@@ -550,9 +550,25 @@ Categorize and group these clues. Every clue ID must appear in exactly one group
   })
 
   try {
-    const match = raw.match(/\[[\s\S]+\]/)
+    const match = raw.match(/\[[\s\S]+/)
     if (!match) throw new Error("No JSON array")
-    const groups = JSON.parse(match[0]) as ClueGroup[]
+    let jsonStr = match[0]
+    let groups: ClueGroup[]
+    try {
+      groups = JSON.parse(jsonStr)
+    } catch {
+      // Truncated JSON — salvage complete group objects
+      const lastComplete = jsonStr.lastIndexOf("},")
+      const lastObj = jsonStr.lastIndexOf("}")
+      const cutPoint = lastComplete > 0 ? lastComplete + 1 : lastObj > 0 ? lastObj + 1 : -1
+      if (cutPoint > 0) {
+        const salvaged = jsonStr.slice(0, cutPoint) + "]"
+        groups = JSON.parse(salvaged)
+        log.enrichment(`Cleanup: salvaged ${groups.length} groups from truncated JSON`)
+      } else {
+        throw new Error("No salvageable groups in truncated JSON")
+      }
+    }
     log.enrichment(`Cleanup: ${groups.length} groups proposed (${groups.filter(g => g.action === "merge").length} merge, ${groups.filter(g => g.action === "keep").length} keep, ${groups.filter(g => g.action === "delete").length} delete)`)
     return groups
   } catch (e) {
