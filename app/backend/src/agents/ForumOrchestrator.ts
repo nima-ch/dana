@@ -1,16 +1,17 @@
 import { log } from "../utils/logger"
 import { budgetOutput, fitContext } from "../llm/tokenBudget"
+import { loadPrompt } from "../llm/promptLoader"
 import { runRepresentativeAgent } from "./RepresentativeAgent"
 import { runDevilsAdvocate } from "./DevilsAdvocate"
 import { readArtifact, writeArtifact } from "../tools/internal/artifactStore"
 import { writeForumSession, getForumSession } from "../tools/internal/getForumData"
 import { markTurnComplete, isTurnComplete, writeCheckpoint } from "../pipeline/checkpointManager"
-import { emit } from "../routes/stream"
-import { join } from "path"
+import { emit, emitThink } from "../routes/stream"
 import type { ForumSession, ForumTurn, ForumScenario, ScenarioSummary } from "../tools/internal/getForumData"
 import type { Representative } from "./WeightCalculator"
 import { chatCompletionText } from "../llm/proxyClient"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
+import { dbGetRepresentatives } from "../db/queries/forum"
 
 export interface ForumOrchestratorOutput {
   session_id: string
@@ -19,37 +20,10 @@ export interface ForumOrchestratorOutput {
   contested_clue_count: number
 }
 
-const SCENARIO_SYSTEM = `You are synthesizing forum debate into structured scenarios.
-
-Given all forum turns, produce a list of distinct scenarios.
-
-Output ONLY valid JSON array:
-[
-  {
-    "id": "scenario-a",
-    "title": "<concise title>",
-    "description": "<2-3 sentence description>",
-    "proposed_by": "<representative_id>",
-    "supported_by": ["<rep_id>", ...],
-    "contested_by": ["<rep_id>", ...],
-    "clues_cited": ["clue-id", ...],
-    "benefiting_parties": ["<party_id>", ...],
-    "required_conditions": ["<condition>", ...],
-    "falsification_conditions": ["<condition>", ...]
-  }
-]
-
-Rules:
-- Deduplicate similar scenarios — merge overlapping ones
-- Each scenario must have ≥1 required_condition and ≥1 falsification_condition
-- Output ONLY the JSON array`
-
-function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
+const SCENARIO_SYSTEM = loadPrompt("forum/scenario-synthesis")
 
 async function loadRepresentatives(topicId: string): Promise<Representative[]> {
-  const f = Bun.file(join(getDataDir(), "topics", topicId, "representatives.json"))
-  if (!(await f.exists())) return []
-  return f.json()
+  return dbGetRepresentatives(topicId) as unknown as Representative[]
 }
 
 function sortByWeight(reps: Representative[], ascending = false): Representative[] {
@@ -143,6 +117,7 @@ export async function runForumOrchestrator(
       const budgetWords = type === "opening_statements" ? rep.speaking_budget.opening_statement : type === "rebuttals" ? rep.speaking_budget.rebuttal : rep.speaking_budget.closing
       log.forum(`Round ${round} (${type}): ${rep.party_id} speaking`, `budget=${budgetWords}w`)
       onProgress?.(`Forum Round ${round}: ${rep.party_id} speaking`)
+      emitThink(topicId, "🗣", `${rep.party_id} speaking`, `Round ${round} · ${type.replace(/_/g, " ")}`)
 
       const { turn } = await runRepresentativeAgent({
         topicId, runId, sessionId,
@@ -171,6 +146,7 @@ export async function runForumOrchestrator(
 
   log.forum("Synthesizing scenarios from all turns")
   onProgress?.("Forum: synthesizing scenarios")
+  emitThink(topicId, "🧠", "Synthesizing scenarios from all turns")
 
   // Synthesize scenarios from all turns
   const allTurns = session.rounds.flatMap(r => r.turns)

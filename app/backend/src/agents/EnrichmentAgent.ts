@@ -1,4 +1,5 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { loadPrompt } from "../llm/promptLoader"
 import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { processClue } from "../tools/processing/clueProcessor"
@@ -6,7 +7,9 @@ import { storeClue } from "../tools/processing/storeClue"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
 import { log } from "../utils/logger"
-import { join } from "path"
+import { dbGetParties, dbSetParties } from "../db/queries/parties"
+import { dbCountClues } from "../db/queries/clues"
+import { emitThink } from "../routes/stream"
 import type { Party } from "./DiscoveryAgent"
 
 export interface EnrichmentOutput {
@@ -17,32 +20,7 @@ export interface EnrichmentOutput {
   total_clues_after: number
 }
 
-const ENRICH_PARTY_SYSTEM = `You are enriching a party profile for geopolitical analysis.
 
-Given a party and existing context, return a JSON object with updated/enriched fields:
-{
-  "description": "<improved 2-3 sentence description with specific details>",
-  "means": ["<specific lever of power>", ...],
-  "circle": {
-    "visible": ["<specific named ally/proxy/outlet>", ...],
-    "shadow": ["<inferred hidden actor with brief reason>", ...]
-  },
-  "vulnerabilities": ["<specific documented weak point>", ...]
-}
-
-Be specific and factual. No invention. Output ONLY the JSON object.`
-
-function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
-
-async function readJSON<T>(path: string): Promise<T> {
-  const f = Bun.file(path)
-  if (!(await f.exists())) throw new Error(`File not found: ${path}`)
-  return f.json() as Promise<T>
-}
-
-async function writeJSON(path: string, data: unknown): Promise<void> {
-  await Bun.write(path, JSON.stringify(data, null, 2))
-}
 
 export async function runEnrichmentAgent(
   topicId: string,
@@ -52,9 +30,9 @@ export async function runEnrichmentAgent(
   runId: string,
   onProgress?: (msg: string) => void
 ): Promise<EnrichmentOutput> {
+  const ENRICH_PARTY_SYSTEM = loadPrompt("enrichment/enrich-party")
   const topicContext = `${title}: ${description}`
-  const partiesPath = join(getDataDir(), "topics", topicId, "parties.json")
-  const parties = await readJSON<Party[]>(partiesPath)
+  const parties = dbGetParties(topicId)
   const ctx = await buildAgentContext("enrichment", topicId)
   const contextStr = serializeContext(ctx)
 
@@ -71,9 +49,10 @@ export async function runEnrichmentAgent(
       try {
         log.enrichment(`Enriching party: ${party.name}`)
         onProgress?.(`Enrichment: enriching party "${party.name}"`)
+        emitThink(topicId, "🔬", `Enriching party · ${party.name}`)
 
-        // Step A: Deepen party profile via LLM
         const prompt = `CONTEXT:\n${contextStr}\n\nPARTY TO ENRICH:\n${JSON.stringify({ id: party.id, name: party.name, type: party.type, description: party.description, agenda: party.agenda }, null, 2)}`
+        emitThink(topicId, "🧠", `Deepening profile · ${party.name}`)
         const raw = await chatCompletionText({
           model: models.enrichment,
           messages: [
@@ -93,11 +72,13 @@ export async function runEnrichmentAgent(
           }
         } catch { /* keep original if parse fails */ }
 
-        // Step B: Search for 2 recent clues about this party
         const query = `${party.name} ${title} recent news 2025 2026`
+        emitThink(topicId, "🔎", `Searching · ${party.name}`, query)
         const results = await webSearch(query, 3)
         for (const result of results.slice(0, 2)) {
           try {
+            const domain = (() => { try { return new URL(result.url).hostname.replace(/^www\./, "") } catch { return result.url } })()
+            emitThink(topicId, "📄", `Reading · ${domain}`, result.title || "")
             const fetched = await httpFetch(result.url, topicId)
             const processed = await processClue(fetched.raw_content, result.url, topicContext, models.extraction)
             if (processed.relevance_score < 45) continue
@@ -110,27 +91,28 @@ export async function runEnrichmentAgent(
               partyRelevance: [party.id],
               addedBy: "auto",
             })
-            if (stored.status === "created") newClueIds.push(stored.clue_id)
+            if (stored.status === "created") {
+              newClueIds.push(stored.clue_id)
+              emitThink(topicId, "📌", `Clue stored · ${result.title || fetched.title || "Untitled"}`, `relevance ${processed.relevance_score}`)
+            }
           } catch { /* skip */ }
         }
       } catch { /* skip failed party enrichment */ }
     }))
   }
 
-  // Write enriched parties back
-  await writeJSON(partiesPath, parties)
+  // Write enriched parties back to DB
+  dbSetParties(topicId, parties)
   onProgress?.(`Enrichment: enriched ${enrichedIds.length} parties, added ${newClueIds.length} new clues`)
 
-  // Count total clues
-  const cluesPath = join(getDataDir(), "topics", topicId, "clues.json")
-  const allClues = await readJSON<unknown[]>(cluesPath)
+  const totalCluesAfter = dbCountClues(topicId)
 
   const output: EnrichmentOutput = {
     topic_id: topicId,
     run_id: runId,
     enriched_party_ids: enrichedIds,
     new_clue_ids: newClueIds,
-    total_clues_after: allClues.length,
+    total_clues_after: totalCluesAfter,
   }
 
   await writeArtifact(topicId, runId, "enrichment_output", output)

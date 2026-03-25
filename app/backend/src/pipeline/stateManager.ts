@@ -1,81 +1,41 @@
-import { join } from "path"
-import { queuedWrite } from "./writeQueue"
-import type { Clue } from "../tools/processing/storeClue"
+import { dbGetAllStates, dbGetLatestState, dbInsertState } from "../db/queries/states"
+import { dbGetClues } from "../db/queries/clues"
+import { dbUpdateTopic } from "../db/queries/topics"
 
-function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
+// Re-export types for compatibility
+export type { KnowledgeState, ClueSnapshot, DeltaSummary } from "../db/queries/states"
 
-export interface ClueSnapshot {
-  count: number
-  ids_and_versions: Record<string, number>
-}
-
-export interface DeltaSummary {
-  new_clues: string[]
-  updated_clues: string[]
-  affected_parties: string[]
-  key_change: string
-}
-
-export interface KnowledgeState {
-  version: number
-  label: string
-  created_at: string
-  trigger: "initial_run" | "user_add_clue" | "user_edit_clue" | "auto_refresh" | "user_manual"
-  clue_snapshot: ClueSnapshot
-  forum_session_id: string | null
-  verdict_id: string | null
-  delta_from: number | null
-  delta_summary: DeltaSummary | null
-}
-
-function statesPath(topicId: string): string {
-  return join(getDataDir(), "topics", topicId, "states.json")
-}
-
-function topicPath(topicId: string): string {
-  return join(getDataDir(), "topics", topicId, "topic.json")
-}
-
-async function readJSON<T>(path: string, fallback: T): Promise<T> {
-  const f = Bun.file(path)
-  if (!(await f.exists())) return fallback
-  return f.json() as Promise<T>
-}
-
-export async function getCurrentClueSnapshot(topicId: string): Promise<ClueSnapshot> {
-  const clues = await readJSON<Clue[]>(
-    join(getDataDir(), "topics", topicId, "clues.json"), []
-  )
+export async function getCurrentClueSnapshot(topicId: string) {
+  const clues = dbGetClues(topicId)
   const ids_and_versions: Record<string, number> = {}
   for (const clue of clues) ids_and_versions[clue.id] = clue.current
   return { count: clues.length, ids_and_versions }
 }
 
-export async function getLatestVersion(topicId: string): Promise<KnowledgeState | null> {
-  const states = await readJSON<KnowledgeState[]>(statesPath(topicId), [])
-  return states.length ? states[states.length - 1] : null
+export async function getLatestVersion(topicId: string) {
+  return dbGetLatestState(topicId)
 }
 
-export async function getAllVersions(topicId: string): Promise<KnowledgeState[]> {
-  return readJSON<KnowledgeState[]>(statesPath(topicId), [])
+export async function getAllVersions(topicId: string) {
+  return dbGetAllStates(topicId)
 }
 
 export async function createVersion(
   topicId: string,
   opts: {
     label: string
-    trigger: KnowledgeState["trigger"]
+    trigger: "initial_run" | "user_add_clue" | "user_edit_clue" | "auto_refresh" | "user_manual"
     forum_session_id?: string
     verdict_id?: string
     delta_from?: number
-    delta_summary?: DeltaSummary
+    delta_summary?: import("../db/queries/states").DeltaSummary
   }
-): Promise<KnowledgeState> {
+) {
   const clue_snapshot = await getCurrentClueSnapshot(topicId)
-  const states = await readJSON<KnowledgeState[]>(statesPath(topicId), [])
+  const states = dbGetAllStates(topicId)
   const version = states.length + 1
 
-  const state: KnowledgeState = {
+  const state = {
     version,
     label: opts.label,
     created_at: new Date().toISOString(),
@@ -87,28 +47,19 @@ export async function createVersion(
     delta_summary: opts.delta_summary ?? null,
   }
 
-  await queuedWrite<KnowledgeState[]>(topicId, statesPath(topicId), (s) => [...s, state], [])
+  dbInsertState(topicId, state)
 
-  // Update topic.json current_version and status
-  await queuedWrite<Record<string, unknown>>(topicId, topicPath(topicId), (t) => ({
-    ...t,
-    current_version: version,
-    status: "complete",
-    updated_at: new Date().toISOString(),
-  }), {})
+  // Update topic current_version and status
+  dbUpdateTopic(topicId, { current_version: version, status: "complete" })
 
   return state
 }
 
 export async function markStale(topicId: string): Promise<void> {
-  await queuedWrite<Record<string, unknown>>(topicId, topicPath(topicId), (t) => ({
-    ...t,
-    status: "stale",
-    updated_at: new Date().toISOString(),
-  }), {})
+  dbUpdateTopic(topicId, { status: "stale" })
 }
 
-export async function computeDelta(topicId: string): Promise<DeltaSummary | null> {
+export async function computeDelta(topicId: string) {
   const latest = await getLatestVersion(topicId)
   if (!latest) return null
 
@@ -128,9 +79,7 @@ export async function computeDelta(topicId: string): Promise<DeltaSummary | null
   }
 
   // Collect affected parties from new/updated clues
-  const clues = await readJSON<Clue[]>(
-    join(getDataDir(), "topics", topicId, "clues.json"), []
-  )
+  const clues = dbGetClues(topicId)
   for (const id of [...newClues, ...updatedClues]) {
     const clue = clues.find(c => c.id === id)
     if (clue) {

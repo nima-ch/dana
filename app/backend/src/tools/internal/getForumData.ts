@@ -1,97 +1,16 @@
-import { join } from "path"
+import { dbGetForumSession, dbUpsertForumSession } from "../../db/queries/forum"
 
-function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
-
-export interface EvidenceItem {
-  claim: string
-  clue_id: string
-  interpretation: string
-}
-
-export interface ChallengeItem {
-  target_party: string
-  challenge: string
-  clue_id?: string
-}
-
-export interface ForumTurn {
-  id: string
-  representative_id: string
-  party_name: string
-  persona_title?: string
-  party_color?: string
-  statement: string
-  position?: string
-  evidence?: EvidenceItem[]
-  challenges?: ChallengeItem[]
-  concessions?: string[]
-  scenario_endorsement?: string
-  clues_cited: string[]
-  timestamp: string
-  round: number
-  type: string
-  word_count: number
-}
-
-export interface ForumScenario {
-  id: string
-  title: string
-  description: string
-  proposed_by: string
-  supported_by: string[]
-  contested_by: string[]
-  clues_cited: string[]
-  benefiting_parties: string[]
-  required_conditions: string[]
-  falsification_conditions: string[]
-}
-
-export interface ScenarioSummary {
-  scenarios: {
-    id: string
-    title: string
-    key_clues: string[]
-    required_conditions: string[]
-    falsification_conditions: string[]
-  }[]
-  contested_clues: {
-    clue_id: string
-    cited_by: string[]
-    conflict: string
-  }[]
-  uncontested_clues: string[]
-}
-
-export interface ForumSession {
-  session_id: string
-  version: number
-  type: "full" | "delta"
-  status: "running" | "complete" | "error"
-  started_at: string
-  completed_at?: string
-  rounds: { round: number; type: string; turns: ForumTurn[] }[]
-  scenarios: ForumScenario[]
-  scenario_summary?: ScenarioSummary
-}
-
-function sessionPath(topicId: string, sessionId: string): string {
-  return join(getDataDir(), "topics", topicId, `${sessionId}.json`)
-}
-
-async function loadSession(topicId: string, sessionId: string): Promise<ForumSession> {
-  const file = Bun.file(sessionPath(topicId, sessionId))
-  if (!(await file.exists())) throw new Error(`Forum session not found: ${sessionId}`)
-  return file.json()
-}
+// Re-export types for compatibility
+export type { ForumTurn, ForumScenario, ForumSession, ScenarioSummary, EvidenceItem, ChallengeItem } from "../../db/queries/forum"
 
 export async function getPriorTurns(
   topicId: string,
   sessionId: string,
   opts: { round?: number; party_id?: string } = {}
-): Promise<ForumTurn[]> {
-  const session = await loadSession(topicId, sessionId)
+): Promise<import("../../db/queries/forum").ForumTurn[]> {
+  const session = dbGetForumSession(topicId, sessionId)
+  if (!session) return []
   const allTurns = session.rounds.flatMap(r => r.turns)
-
   return allTurns.filter(t => {
     if (opts.round !== undefined && t.round !== opts.round) return false
     if (opts.party_id !== undefined && t.representative_id !== `rep-${opts.party_id}`) return false
@@ -99,21 +18,22 @@ export async function getPriorTurns(
   })
 }
 
-export async function getScenarioList(topicId: string, sessionId: string): Promise<ForumScenario[]> {
-  const session = await loadSession(topicId, sessionId)
-  return session.scenarios
+export async function getScenarioList(topicId: string, sessionId: string): Promise<import("../../db/queries/forum").ForumScenario[]> {
+  const session = dbGetForumSession(topicId, sessionId)
+  return session?.scenarios ?? []
 }
 
-export async function getScenarioSummary(topicId: string, sessionId: string): Promise<ScenarioSummary | null> {
-  const session = await loadSession(topicId, sessionId)
-  return session.scenario_summary ?? null
+export async function getScenarioSummary(topicId: string, sessionId: string): Promise<import("../../db/queries/forum").ScenarioSummary | null> {
+  const session = dbGetForumSession(topicId, sessionId)
+  return session?.scenario_summary ?? null
 }
 
-export async function getForumSession(topicId: string, sessionId: string): Promise<ForumSession> {
-  return loadSession(topicId, sessionId)
+export async function getForumSession(topicId: string, sessionId: string): Promise<import("../../db/queries/forum").ForumSession> {
+  const session = dbGetForumSession(topicId, sessionId)
+  if (!session) throw new Error(`Forum session not found: ${sessionId}`)
+  return session
 }
 
-export async function writeForumSession(topicId: string, session: ForumSession): Promise<void> {
-  const path = sessionPath(topicId, session.session_id)
-  await Bun.write(path, JSON.stringify(session, null, 2))
+export async function writeForumSession(topicId: string, session: import("../../db/queries/forum").ForumSession): Promise<void> {
+  dbUpsertForumSession(topicId, session)
 }

@@ -1,4 +1,3 @@
-import { join } from "path"
 import { computeDelta, createVersion, getLatestVersion } from "./stateManager"
 import { runDeltaRepresentativeAgent, type DeltaContext } from "../agents/DeltaRepresentativeAgent"
 import { generateExpertPersonas, runExpertAgent, runCrossDeliberation } from "../agents/ExpertAgent"
@@ -6,23 +5,21 @@ import { runVerdictSynthesizer } from "../agents/VerdictSynthesizer"
 import { writeForumSession, type ForumSession } from "../tools/internal/getForumData"
 import { readArtifact, writeArtifact } from "../tools/internal/artifactStore"
 import { chatCompletionText } from "../llm/proxyClient"
+import { loadPrompt } from "../llm/promptLoader"
 import { writeCheckpoint } from "./checkpointManager"
 import { emit } from "../routes/stream"
+import { getTopic, updateTopic } from "./topicManager"
+import { dbGetRepresentatives } from "../db/queries/forum"
+import { dbSaveExpertCouncil } from "../db/queries/expert"
 import type { Topic } from "./topicManager"
 import type { DeltaTurn } from "../agents/DeltaRepresentativeAgent"
 
-function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
-
 async function loadTopic(topicId: string): Promise<Topic> {
-  return Bun.file(join(getDataDir(), "topics", topicId, "topic.json")).json()
+  return getTopic(topicId)
 }
 
 async function updateTopicStatus(topicId: string, status: Topic["status"]) {
-  const path = join(getDataDir(), "topics", topicId, "topic.json")
-  const topic = await Bun.file(path).json() as Topic
-  topic.status = status
-  topic.updated_at = new Date().toISOString()
-  await Bun.write(path, JSON.stringify(topic, null, 2))
+  await updateTopic(topicId, { status })
 }
 
 export async function runDeltaPipeline(topicId: string, runId?: string): Promise<{ run_id: string; status: string }> {
@@ -54,8 +51,7 @@ export async function runDeltaPipeline(topicId: string, runId?: string): Promise
     emit(topicId, { type: "progress", stage: "forum", pct: 0, msg: "Running delta forum..." })
 
     // Load representatives
-    const repsFile = Bun.file(join(getDataDir(), "topics", topicId, "representatives.json"))
-    const reps = await repsFile.json() as { party_id: string }[]
+    const reps = dbGetRepresentatives(topicId)
 
     const deltaTurns: DeltaTurn[] = []
     for (const rep of reps) {
@@ -86,7 +82,7 @@ Output JSON array:
       const raw = await chatCompletionText({
         model: topic.models.delta_updates,
         messages: [
-          { role: "system", content: "You synthesize forum position updates into scenario impact assessments. Output ONLY valid JSON array." },
+          { role: "system", content: loadPrompt("forum/delta-scenario-impact") },
           { role: "user", content: scenarioUpdatePrompt },
         ],
         temperature: 0.3,
@@ -171,11 +167,10 @@ Output JSON array:
       (msg) => emit(topicId, { type: "progress", stage: "verdict", pct: 0.5, msg })
     )
 
-    // Update the council output version
-    const councilPath = join(getDataDir(), "topics", topicId, `expert_council_v${newVersion}.json`)
+    // Council is already saved by runVerdictSynthesizer; just update version fields
     councilOutput.version = newVersion
     councilOutput.verdict_id = `verdict-v${newVersion}`
-    await Bun.write(councilPath, JSON.stringify(councilOutput, null, 2))
+    dbSaveExpertCouncil(topicId, councilOutput)
 
     // Create new state version
     await createVersion(topicId, {

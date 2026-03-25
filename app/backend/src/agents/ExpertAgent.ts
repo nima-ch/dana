@@ -1,14 +1,14 @@
 import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput, fitContext } from "../llm/tokenBudget"
+import { loadPrompt } from "../llm/promptLoader"
 import { log } from "../utils/logger"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
 import { getClue } from "../tools/internal/getClue"
 import { getScenarioSummary } from "../tools/internal/getForumData"
 import { writeArtifact, readArtifact, artifactExists } from "../tools/internal/artifactStore"
 import { webSearch } from "../tools/external/webSearch"
-import { join } from "path"
-
-function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
+import { emit, emitThink } from "../routes/stream"
+import { dbGetParties } from "../db/queries/parties"
 
 export interface ExpertPersona {
   id: string
@@ -111,49 +111,7 @@ export function generateExpertPersonas(topicTitle: string, count: number): Exper
   return selected.map(d => buildExpertPersona(d.domain, d.name, topicTitle))
 }
 
-const EXPERT_SYSTEM = `You are a domain expert conducting independent scenario analysis.
-
-You will receive:
-1. A lean context snapshot (parties and clue titles)
-2. A structured scenario summary from a completed forum debate (NOT raw arguments)
-3. Full details of specific clues you choose to examine
-
-Your task:
-- Assess each scenario independently using your domain expertise
-- Cite specific clues (by ID) for every factual claim
-- Identify historic analogues relevant to each scenario
-- Find weak points and unsupported assumptions
-- Assign a probability contribution (0.0-1.0) to each scenario. All probabilities must sum to ≤ 1.0
-- If any party's weight score seems miscalibrated based on clue evidence, issue a weight challenge
-
-Output ONLY valid JSON:
-{
-  "scenario_assessments": [
-    {
-      "scenario_id": "<id>",
-      "assessment": "<your detailed assessment>",
-      "historic_analogues": ["<analogue 1>", ...],
-      "weak_points_identified": ["<point>", ...],
-      "probability_contribution": <0.0-1.0>
-    }
-  ],
-  "weight_challenges": [
-    {
-      "party_id": "<id>",
-      "dimension": "<weight dimension>",
-      "original_score": <number>,
-      "suggested_score": <number>,
-      "reasoning": "<evidence-based reasoning>",
-      "clues_cited": ["<clue_id>", ...]
-    }
-  ]
-}
-
-Rules:
-- Probability contributions across all scenarios must sum to ≤ 1.0
-- Each scenario must have ≥ 1 historic analogue
-- Weight challenges are optional — only issue them when clue evidence clearly shows miscalibration
-- Be precise and evidence-based — never speculate without citing clues`
+const EXPERT_SYSTEM = loadPrompt("expert/system")
 
 export async function runExpertAgent(
   topicId: string,
@@ -165,6 +123,7 @@ export async function runExpertAgent(
 ): Promise<ExpertArtifact> {
   log.expert(`${expert.name} (${expert.domain}): starting analysis`)
   onProgress?.(`Expert ${expert.name}: starting analysis`)
+  emitThink(topicId, "🏛", `Expert · ${expert.name}`, expert.domain)
 
   const ctx = await buildAgentContext("expert", topicId)
   const contextStr = serializeContext(ctx)
@@ -201,8 +160,7 @@ export async function runExpertAgent(
   } catch { /* search failure is non-fatal */ }
 
   // Load party data for weight challenge context
-  const partiesFile = Bun.file(join(getDataDir(), "topics", topicId, "parties.json"))
-  const parties = await partiesFile.json() as { id: string; name: string; weight: number; weight_factors: Record<string, number> }[]
+  const parties = dbGetParties(topicId)
   const partyWeightStr = parties.map(p => `${p.name} (${p.id}): total=${p.weight}, factors=${JSON.stringify(p.weight_factors)}`).join("\n")
 
   const userPrompt = fitContext([
@@ -263,6 +221,19 @@ export async function runExpertAgent(
   log.expert(`${expert.name} done: ${probStr}`, `${result.weight_challenges.length} weight challenge(s), ${result.scenario_assessments.flatMap(a => a.historic_analogues).length} analogues`)
   onProgress?.(`Expert ${expert.name}: complete`)
 
+  const topSummary = result.scenario_assessments.map(a =>
+    `${a.scenario_id}: ${Math.round(a.probability_contribution * 100)}%`
+  ).join(", ")
+  emit(topicId, {
+    type: "expert_assessment",
+    expert: expert.name,
+    domain: expert.domain,
+    summary: topSummary,
+    scenario_assessments: result.scenario_assessments,
+    weight_challenges: result.weight_challenges,
+  })
+  emitThink(topicId, "✅", `${expert.name} assessment done`, topSummary)
+
   return result
 }
 
@@ -275,6 +246,7 @@ export async function runCrossDeliberation(
   onProgress?: (msg: string) => void,
 ): Promise<string> {
   onProgress?.(`Cross-deliberation: ${expert.name} reading other experts`)
+  emitThink(topicId, "🔄", `Cross-deliberation · ${expert.name}`, "Reading other expert assessments")
 
   // Read all other expert artifacts
   const otherAssessments: string[] = []
@@ -294,21 +266,11 @@ export async function runCrossDeliberation(
   // Read own artifact
   const ownArtifact = await readArtifact<ExpertArtifact>(topicId, runId, `expert_${expert.domain}`)
 
-  const prompt = `You are ${expert.name}. You previously assessed the scenarios and assigned probabilities.
-
-YOUR ASSESSMENT:
-${JSON.stringify(ownArtifact.scenario_assessments, null, 2)}
-
-OTHER EXPERTS' ASSESSMENTS:
-${otherAssessments.join("\n\n")}
-
-Write a brief cross-deliberation response (2-4 paragraphs):
-- What do you agree with from other experts?
-- What do you disagree with and why?
-- Do their assessments change your probability estimates?
-- Any important points they missed?
-
-Be concise and specific. Reference other experts by name.`
+  const prompt = loadPrompt("expert/cross-deliberation", {
+    expert_name: expert.name,
+    own_assessment: JSON.stringify(ownArtifact.scenario_assessments, null, 2),
+    other_assessments: otherAssessments.join("\n\n"),
+  })
 
   const response = await chatCompletionText({
     model,

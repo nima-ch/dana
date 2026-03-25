@@ -1,13 +1,12 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { loadPrompt } from "../llm/promptLoader"
 import { getClue } from "../tools/internal/getClue"
 import { getPartyProfile } from "../tools/internal/getPartyProfile"
 import { getPriorTurns } from "../tools/internal/getForumData"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
+import { dbGetRepresentatives } from "../db/queries/forum"
 import type { ForumTurn } from "../tools/internal/getForumData"
-import { join } from "path"
-
-function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
 
 export interface DeltaContext {
   new_clues: string[]
@@ -29,27 +28,7 @@ export interface DeltaTurn {
   word_count: number
 }
 
-const DELTA_SYSTEM = `You are a forum representative providing a position update based on new evidence.
-
-You previously argued for your party. New clues have emerged. Your task:
-1. Summarize your prior position in 1-2 sentences
-2. Assess how the new clues affect your party's position
-3. Write an updated position statement
-4. Classify the change: upgraded (stronger), downgraded (weaker), unchanged, or new_argument
-
-OUTPUT FORMAT (JSON only):
-{
-  "prior_position_summary": "<1-2 sentence summary of your prior position>",
-  "updated_position": "<your updated position statement with clue citations [clue-xxx]>",
-  "position_delta": "upgraded" | "downgraded" | "unchanged" | "new_argument",
-  "clues_cited": ["clue-id", ...]
-}
-
-Rules:
-- You MUST reference your prior position and explain what changed
-- Cite new/updated clues by ID
-- Stay under 200 words for the updated position
-- Be honest about whether new evidence helps or hurts your party`
+const DELTA_SYSTEM = loadPrompt("delta-representative/system")
 
 export async function runDeltaRepresentativeAgent(
   topicId: string,
@@ -83,8 +62,7 @@ export async function runDeltaRepresentativeAgent(
   }
 
   // Load rep persona
-  const repsFile = Bun.file(join(getDataDir(), "topics", topicId, "representatives.json"))
-  const reps = await repsFile.json() as { party_id: string; persona_prompt: string }[]
+  const reps = dbGetRepresentatives(topicId)
   const rep = reps.find(r => r.party_id === partyId)
   const persona = rep?.persona_prompt ?? `You represent ${party.name}.`
 

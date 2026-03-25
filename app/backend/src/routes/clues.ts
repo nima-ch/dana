@@ -1,113 +1,90 @@
 import { Elysia, t } from "elysia"
-import { join } from "path"
-import { queuedWrite } from "../pipeline/writeQueue"
 import { markStale } from "../pipeline/stateManager"
-import type { Clue } from "../tools/processing/storeClue"
-
-function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
-function cluesPath(topicId: string) { return join(getDataDir(), "topics", topicId, "clues.json") }
+import { dbGetClues, dbGetClue, dbInsertClue, dbUpdateClueVersion, dbDeleteClue,
+         dbReplaceClues, dbNextClueId, dbCountClues } from "../db/queries/clues"
+import type { Clue, ClueVersion } from "../db/queries/clues"
 
 const cleanupJobs = new Map<string, { status: string; groups: any[] | null; original_count: number; error?: string }>()
 const bulkImportJobs = new Map<string, { status: string; imported: number; error?: string }>()
 
-async function readClues(topicId: string): Promise<Clue[]> {
-  const f = Bun.file(cluesPath(topicId))
-  if (!(await f.exists())) return []
-  return f.json()
-}
-
 export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
-  .get("/", async ({ params }) => readClues(params.id))
+  .get("/", async ({ params }) => dbGetClues(params.id))
 
   .get("/:clueId", async ({ params, error }) => {
-    const clues = await readClues(params.id)
-    const clue = clues.find(c => c.id === params.clueId)
+    const clue = dbGetClue(params.id, params.clueId)
     return clue ?? error(404, { message: "Clue not found" })
   })
 
   .post("/", async ({ params, body, error }) => {
     try {
       const topicId = params.id
-      let newClue: Clue | null = null
+      const b = body as Record<string, any>
+      const id = dbNextClueId(topicId)
+      const now = new Date().toISOString()
+      const timelineDate = b.timeline_date ?? now.slice(0, 10)
 
-      await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (clues) => {
-        const id = `clue-${String(clues.length + 1).padStart(3, "0")}`
-        const now = new Date().toISOString()
-        newClue = {
-          id, current: 1, added_at: now, last_updated_at: now,
-          added_by: "user", status: "verified",
-          versions: [{
-            v: 1, date: now,
-            title: (body as any).title,
-            raw_source: { url: (body as any).source_url || "", fetched_at: now },
-            source_credibility: {
-              score: (body as any).credibility_score ?? 50,
-              notes: (body as any).credibility_notes ?? "",
-              bias_flags: (body as any).bias_flags ?? [],
-              origin_source: (body as any).origin_source ?? { url: "", outlet: "", is_republication: false },
-            },
-            bias_corrected_summary: (body as any).bias_corrected_summary ?? "",
-            relevance_score: (body as any).relevance_score ?? 50,
-            party_relevance: (body as any).party_relevance ?? [],
-            domain_tags: (body as any).domain_tags ?? [],
-            timeline_date: (body as any).timeline_date ?? now.slice(0, 10),
-            clue_type: (body as any).clue_type ?? "event",
-            change_note: "User-submitted initial version",
-            key_points: (body as any).key_points ?? [],
-          }],
-        }
-        return [...clues, newClue!]
-      }, [])
+      const version: ClueVersion = {
+        v: 1, date: now,
+        title: b.title,
+        raw_source: { url: b.source_url || "", fetched_at: now },
+        source_credibility: {
+          score: b.credibility_score ?? 50,
+          notes: b.credibility_notes ?? "",
+          bias_flags: b.bias_flags ?? [],
+          origin_source: b.origin_source ?? { url: "", outlet: "", is_republication: false },
+        },
+        bias_corrected_summary: b.bias_corrected_summary ?? "",
+        relevance_score: b.relevance_score ?? 50,
+        party_relevance: b.party_relevance ?? [],
+        domain_tags: b.domain_tags ?? [],
+        timeline_date: timelineDate,
+        clue_type: b.clue_type ?? "event",
+        change_note: "User-submitted initial version",
+        key_points: b.key_points ?? [],
+      }
+
+      dbInsertClue(topicId, {
+        id, current: 1, added_at: now, last_updated_at: now,
+        added_by: "user", status: "verified", version,
+      })
 
       await markStale(topicId)
-      return newClue
+      return dbGetClue(topicId, id)
     } catch (e) {
       return error(400, { message: String(e) })
     }
   }, { body: t.Record(t.String(), t.Any()) })
 
-  // Inline edit — update fields on current version without creating new version
   .put("/:clueId", async ({ params, body, error }) => {
     const b = body as Record<string, unknown>
-    let updated: Clue | null = null
+    const clue = dbGetClue(params.id, params.clueId)
+    if (!clue) return error(404, { message: "Clue not found" })
 
-    await queuedWrite<Clue[]>(params.id, cluesPath(params.id), (clues) => {
-      return clues.map(c => {
-        if (c.id !== params.clueId) return c
-        const curIdx = c.versions.findIndex(v => v.v === c.current)
-        if (curIdx === -1) return c
-        const cur = { ...c.versions[curIdx] }
+    const cur = clue.versions.find(v => v.v === clue.current)!
+    const patch: Partial<ClueVersion> = {}
 
-        if (b.title !== undefined) cur.title = b.title as string
-        if (b.bias_corrected_summary !== undefined) cur.bias_corrected_summary = b.bias_corrected_summary as string
-        if (b.relevance_score !== undefined) cur.relevance_score = b.relevance_score as number
-        if (b.party_relevance !== undefined) cur.party_relevance = b.party_relevance as string[]
-        if (b.domain_tags !== undefined) cur.domain_tags = b.domain_tags as string[]
-        if (b.timeline_date !== undefined) cur.timeline_date = b.timeline_date as string
-        if (b.clue_type !== undefined) cur.clue_type = b.clue_type as string
-        if (b.credibility_score !== undefined) {
-          cur.source_credibility = { ...cur.source_credibility, score: b.credibility_score as number }
-        }
-        if (b.bias_flags !== undefined) {
-          cur.source_credibility = { ...cur.source_credibility, bias_flags: b.bias_flags as string[] }
-        }
-        if (b.credibility_notes !== undefined) {
-          cur.source_credibility = { ...cur.source_credibility, notes: b.credibility_notes as string }
-        }
+    if (b.title !== undefined) patch.title = b.title as string
+    if (b.bias_corrected_summary !== undefined) patch.bias_corrected_summary = b.bias_corrected_summary as string
+    if (b.relevance_score !== undefined) patch.relevance_score = b.relevance_score as number
+    if (b.party_relevance !== undefined) patch.party_relevance = b.party_relevance as string[]
+    if (b.domain_tags !== undefined) patch.domain_tags = b.domain_tags as string[]
+    if (b.timeline_date !== undefined) patch.timeline_date = b.timeline_date as string
+    if (b.clue_type !== undefined) patch.clue_type = b.clue_type as string
+    if (b.credibility_score !== undefined || b.bias_flags !== undefined || b.credibility_notes !== undefined) {
+      patch.source_credibility = {
+        ...cur.source_credibility,
+        ...(b.credibility_score !== undefined ? { score: b.credibility_score as number } : {}),
+        ...(b.bias_flags !== undefined ? { bias_flags: b.bias_flags as string[] } : {}),
+        ...(b.credibility_notes !== undefined ? { notes: b.credibility_notes as string } : {}),
+      }
+    }
 
-        const versions = [...c.versions]
-        versions[curIdx] = cur
-        updated = { ...c, versions, last_updated_at: new Date().toISOString() }
-        return updated
-      })
-    }, [])
-
-    return updated ?? error(404, { message: "Clue not found" })
+    dbUpdateClueVersion(params.id, params.clueId, patch)
+    return dbGetClue(params.id, params.clueId)
   }, { body: t.Record(t.String(), t.Any()) })
 
   .delete("/:clueId", async ({ params }) => {
-    await queuedWrite<Clue[]>(params.id, cluesPath(params.id),
-      (clues) => clues.filter(c => c.id !== params.clueId), [])
+    dbDeleteClue(params.id, params.clueId)
     await markStale(params.id)
     return { success: true }
   })
@@ -125,8 +102,7 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
 
     const topicId = params.id
     const topic = await getTopic(topicId)
-    const clues = await readClues(topicId)
-    const clue = clues.find(c => c.id === params.clueId)
+    const clue = dbGetClue(topicId, params.clueId)
     if (!clue) {
       set.status = 404
       return { message: "Clue not found" }
@@ -149,37 +125,22 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     try {
       const updated = await smartEditClue(topicId, topic.title, currentData, b.feedback.trim(), topic.models.enrichment)
 
-      let result: Clue | null = null
-      await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (allClues) => {
-        return allClues.map(c => {
-          if (c.id !== params.clueId) return c
-          const curIdx = c.versions.findIndex(v => v.v === c.current)
-          if (curIdx === -1) return c
-          const v = { ...c.versions[curIdx] }
-          v.title = updated.title
-          v.bias_corrected_summary = updated.summary
-          v.relevance_score = updated.relevance
-          v.party_relevance = updated.parties
-          v.timeline_date = updated.date
-          v.clue_type = updated.clue_type
-          v.domain_tags = updated.domain_tags ?? v.domain_tags
-          v.source_credibility = {
-            ...v.source_credibility,
-            score: updated.credibility,
-            bias_flags: updated.bias_flags,
-          }
-          const versions = [...c.versions]
-          versions[curIdx] = v
-          result = { ...c, versions, last_updated_at: new Date().toISOString() }
-          return result
-        })
-      }, [])
+      dbUpdateClueVersion(topicId, params.clueId, {
+        title: updated.title,
+        bias_corrected_summary: updated.summary,
+        relevance_score: updated.relevance,
+        party_relevance: updated.parties,
+        timeline_date: updated.date,
+        clue_type: updated.clue_type,
+        domain_tags: updated.domain_tags ?? cur.domain_tags,
+        source_credibility: {
+          ...cur.source_credibility,
+          score: updated.credibility,
+          bias_flags: updated.bias_flags,
+        },
+      })
 
-      if (!result) {
-        set.status = 500
-        return { message: "Failed to update clue" }
-      }
-      return result
+      return dbGetClue(topicId, params.clueId)
     } catch (e) {
       set.status = 500
       return { message: `Smart edit failed: ${e}` }
@@ -199,9 +160,9 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
         try {
           const { getTopic } = await import("../pipeline/topicManager")
           const { smartExtractClues } = await import("../agents/SmartClueExtractor")
+          const { dbGetParties } = await import("../db/queries/parties")
           const topic = await getTopic(topicId)
-          const partiesFile = Bun.file(join(getDataDir(), "topics", topicId, "parties.json"))
-          const parties = await partiesFile.exists() ? await partiesFile.json() : []
+          const parties = dbGetParties(topicId)
 
           const extracted = await smartExtractClues(
             topicId, topic.title, topic.description,
@@ -211,34 +172,30 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
           let count = 0
           for (const item of extracted) {
             const now = new Date().toISOString()
-            let newClue: Clue | null = null
-            await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (clues) => {
-              const id = `clue-${String(clues.length + 1).padStart(3, "0")}`
-              newClue = {
-                id, current: 1, added_at: now, last_updated_at: now,
-                added_by: "user", status: "verified",
-                versions: [{
-                  v: 1, date: now, title: item.title,
-                  raw_source: { url: item.source_url || "", fetched_at: now },
-                  source_credibility: {
-                    score: item.credibility ?? 50,
-                    notes: `Source: ${item.source_outlet || "user-submitted"}`,
-                    bias_flags: item.bias_flags ?? [],
-                    origin_source: { url: item.source_url || "", outlet: item.source_outlet || "user", is_republication: false },
-                  },
-                  bias_corrected_summary: item.summary,
-                  relevance_score: item.relevance ?? 70,
-                  party_relevance: item.parties ?? [],
-                  domain_tags: item.domain_tags ?? [],
-                  timeline_date: item.date || now.slice(0, 10),
-                  clue_type: item.clue_type || "event",
-                  change_note: "Smart bulk import",
-                  key_points: item.key_points ?? [],
-                }],
-              }
-              return [...clues, newClue!]
-            }, [])
-            if (newClue) count++
+            const id = dbNextClueId(topicId)
+            const version: ClueVersion = {
+              v: 1, date: now, title: item.title,
+              raw_source: { url: item.source_url || "", fetched_at: now },
+              source_credibility: {
+                score: item.credibility ?? 50,
+                notes: `Source: ${item.source_outlet || "user-submitted"}`,
+                bias_flags: item.bias_flags ?? [],
+                origin_source: { url: item.source_url || "", outlet: item.source_outlet || "user", is_republication: false },
+              },
+              bias_corrected_summary: item.summary,
+              relevance_score: item.relevance ?? 70,
+              party_relevance: item.parties ?? [],
+              domain_tags: item.domain_tags ?? [],
+              timeline_date: item.date || now.slice(0, 10),
+              clue_type: item.clue_type || "event",
+              change_note: "Smart bulk import",
+              key_points: item.key_points ?? [],
+            }
+            dbInsertClue(topicId, {
+              id, current: 1, added_at: now, last_updated_at: now,
+              added_by: "user", status: "verified", version,
+            })
+            count++
           }
 
           if (count > 0) await markStale(topicId)
@@ -262,15 +219,14 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
   .post("/research", async ({ params, body, error }) => {
     const { getTopic } = await import("../pipeline/topicManager")
     const { researchAndExtractClues } = await import("../agents/SmartClueExtractor")
+    const { dbGetParties } = await import("../db/queries/parties")
 
     const b = body as { query: string }
     if (!b.query?.trim()) return error(400, { message: "query is required" })
 
     const topicId = params.id
     const topic = await getTopic(topicId)
-
-    const partiesFile = Bun.file(join(getDataDir(), "topics", topicId, "parties.json"))
-    const parties = await partiesFile.exists() ? await partiesFile.json() : []
+    const parties = dbGetParties(topicId)
 
     const extracted = await researchAndExtractClues(
       topicId, topic.title, topic.description,
@@ -280,33 +236,30 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     const created: Clue[] = []
     for (const item of extracted) {
       const now = new Date().toISOString()
-      let newClue: Clue | null = null
-      await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (clues) => {
-        const id = `clue-${String(clues.length + 1).padStart(3, "0")}`
-        newClue = {
-          id, current: 1, added_at: now, last_updated_at: now,
-          added_by: "research", status: "verified",
-          versions: [{
-            v: 1, date: now, title: item.title,
-            raw_source: { url: item.source_url || "", fetched_at: now },
-            source_credibility: {
-              score: item.credibility ?? 50,
-              notes: `Research: ${b.query.slice(0, 60)}`,
-              bias_flags: item.bias_flags ?? [],
-              origin_source: { url: item.source_url || "", outlet: item.source_outlet || "research", is_republication: false },
-            },
-            bias_corrected_summary: item.summary,
-            relevance_score: item.relevance ?? 70,
-            party_relevance: item.parties ?? [],
-            domain_tags: item.domain_tags ?? [],
-            timeline_date: item.date || now.slice(0, 10),
-            clue_type: item.clue_type || "event",
-            change_note: `Research query: ${b.query.slice(0, 80)}`,
-            key_points: item.key_points ?? [],
-          }],
-        }
-        return [...clues, newClue!]
-      }, [])
+      const id = dbNextClueId(topicId)
+      const version: ClueVersion = {
+        v: 1, date: now, title: item.title,
+        raw_source: { url: item.source_url || "", fetched_at: now },
+        source_credibility: {
+          score: item.credibility ?? 50,
+          notes: `Research: ${b.query.slice(0, 60)}`,
+          bias_flags: item.bias_flags ?? [],
+          origin_source: { url: item.source_url || "", outlet: item.source_outlet || "research", is_republication: false },
+        },
+        bias_corrected_summary: item.summary,
+        relevance_score: item.relevance ?? 70,
+        party_relevance: item.parties ?? [],
+        domain_tags: item.domain_tags ?? [],
+        timeline_date: item.date || now.slice(0, 10),
+        clue_type: item.clue_type || "event",
+        change_note: `Research query: ${b.query.slice(0, 80)}`,
+        key_points: item.key_points ?? [],
+      }
+      dbInsertClue(topicId, {
+        id, current: 1, added_at: now, last_updated_at: now,
+        added_by: "research" as any, status: "verified", version,
+      })
+      const newClue = dbGetClue(topicId, id)
       if (newClue) created.push(newClue)
     }
 
@@ -318,7 +271,6 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
   .post("/cleanup/propose", async ({ params }) => {
     const topicId = params.id
 
-    // Start background job
     if (!cleanupJobs.has(topicId) || cleanupJobs.get(topicId)!.status === "done" || cleanupJobs.get(topicId)!.status === "error") {
       cleanupJobs.set(topicId, { status: "running", groups: null, original_count: 0 })
 
@@ -326,10 +278,10 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
         try {
           const { getTopic } = await import("../pipeline/topicManager")
           const { categorizeAndCleanup } = await import("../agents/SmartClueExtractor")
+          const { dbGetParties } = await import("../db/queries/parties")
           const topic = await getTopic(topicId)
-          const clues = await readClues(topicId)
-          const partiesFile = Bun.file(join(getDataDir(), "topics", topicId, "parties.json"))
-          const parties = await partiesFile.exists() ? await partiesFile.json() : []
+          const clues = dbGetClues(topicId)
+          const parties = dbGetParties(topicId)
 
           const clueData = clues.map(c => {
             const cur = c.versions.find(v => v.v === c.current)!
@@ -357,8 +309,7 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     const job = cleanupJobs.get(params.id)
     if (!job) return { status: "none" }
     if (job.status === "done") {
-      const result = { status: "done", groups: job.groups, original_count: job.original_count }
-      return result
+      return { status: "done", groups: job.groups, original_count: job.original_count }
     }
     return { status: job.status, error: (job as any).error }
   })
@@ -372,9 +323,8 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     const groups = b.groups
     const now = new Date().toISOString()
 
-    // Collect IDs to delete (from merge and delete groups)
     const idsToDelete = new Set<string>()
-    const newClues: Clue[] = []
+    const newClues: { id: string; version: ClueVersion }[] = []
 
     for (const g of groups) {
       if (g.action === "keep") continue
@@ -386,12 +336,7 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
         for (const id of g.source_clue_ids) idsToDelete.add(id)
         newClues.push({
           id: `clue-${g.group_id}`,
-          current: 1,
-          added_at: now,
-          last_updated_at: now,
-          added_by: "cleanup",
-          status: "verified",
-          versions: [{
+          version: {
             v: 1, date: now, title: g.merged_title,
             raw_source: { url: "", fetched_at: now },
             source_credibility: {
@@ -408,28 +353,34 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
             clue_type: g.merged_clue_type || "event",
             change_note: `Cleanup merge: ${g.reason}`,
             key_points: [],
-          }],
+          },
         })
       }
     }
 
-    // Apply: remove old clues, add new merged ones
-    await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (allClues) => {
-      const filtered = allClues.filter(c => !idsToDelete.has(c.id))
-      return [...filtered, ...newClues]
-    }, [])
+    // Load current clues, filter out deleted/merged, add new merged ones, then re-number
+    const allClues = dbGetClues(topicId)
+    const filtered = allClues.filter(c => !idsToDelete.has(c.id))
 
-    // Re-number clue IDs for consistency
-    await queuedWrite<Clue[]>(topicId, cluesPath(topicId), (allClues) => {
-      return allClues.map((c, i) => ({
-        ...c,
-        id: `clue-${String(i + 1).padStart(3, "0")}`,
-      }))
-    }, [])
+    const renumbered: Clue[] = filtered.map((c, i) => ({
+      ...c,
+      id: `clue-${String(i + 1).padStart(3, "0")}`,
+    }))
 
+    const mergedClues: Clue[] = newClues.map((nc, i) => ({
+      id: `clue-${String(renumbered.length + i + 1).padStart(3, "0")}`,
+      current: 1,
+      added_at: now,
+      last_updated_at: now,
+      added_by: "cleanup" as any,
+      status: "verified" as const,
+      versions: [nc.version],
+    }))
+
+    dbReplaceClues(topicId, [...renumbered, ...mergedClues])
     await markStale(topicId)
 
-    const finalClues = await readClues(topicId)
+    const finalClues = dbGetClues(topicId)
     return {
       original_count: groups.reduce((sum: number, g: any) => sum + (g.source_clue_ids?.length || 0), 0),
       merged: newClues.length,

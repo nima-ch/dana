@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react"
+import { partyColor } from "../../utils/partyColor"
 
 // Parse structured fields from a raw JSON statement (handles markdown fences + truncation)
 function parseStructuredFromStatement(turn: Turn): Turn {
@@ -104,13 +105,7 @@ interface Props {
   onClueClick?: (clueId: string) => void
 }
 
-const PARTY_COLORS = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1", "#84cc16", "#0ea5e9", "#d946ef"]
 
-function partyColor(name: string): string {
-  let hash = 0
-  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash)
-  return PARTY_COLORS[Math.abs(hash) % PARTY_COLORS.length]
-}
 
 function ClueChip({ clueId, onClick }: { clueId: string; onClick?: (id: string) => void }) {
   return (
@@ -217,67 +212,82 @@ function StructuredView({ turn, onClueClick }: { turn: Turn; onClueClick?: (id: 
   )
 }
 
+const ROUND_LABELS: Record<string, string> = {
+  opening_statements: "Opening",
+  rebuttals: "Rebuttal",
+  closings_and_scenarios: "Closing",
+  position_update: "Update",
+}
+
 export function TurnBubble({ turn: rawTurn, isDelta, onClueClick }: Props) {
   const turn = useMemo(() => parseStructuredFromStatement(rawTurn), [rawTurn])
   const color = turn.party_color ?? partyColor(turn.party_name)
   const time = new Date(turn.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
   const hasStructured = turn.position || (turn.evidence && turn.evidence.length > 0)
   const [showRaw, setShowRaw] = useState(false)
+  const roundLabel = ROUND_LABELS[turn.type] ?? `R${turn.round}`
 
   return (
-    <div className="flex flex-col gap-1">
-      {/* Header */}
-      <div className="flex items-center gap-2">
-        <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: color }} />
-        <div className="flex flex-col">
-          <span className="text-xs font-semibold text-gray-800">{turn.party_name}</span>
-          {turn.persona_title && (
-            <span className="text-xs text-gray-400 italic">{turn.persona_title}</span>
-          )}
+    <div className="flex flex-col gap-1.5 group">
+      {/* Header row */}
+      <div className="flex items-center gap-2 pl-1">
+        <div className="w-5 h-5 rounded-full shrink-0 flex items-center justify-center text-white text-[9px] font-bold" style={{ backgroundColor: color }}>
+          {turn.party_name.slice(0, 1).toUpperCase()}
         </div>
-        <span className="text-xs text-gray-400 ml-auto">{time} · R{turn.round} · {turn.word_count}w</span>
-        {isDelta && (
-          <span className="text-xs bg-orange-100 text-orange-700 px-1.5 rounded font-medium">delta</span>
+        <span className="text-xs font-semibold text-gray-800">{turn.party_name}</span>
+        {turn.persona_title && (
+          <span className="text-[10px] text-gray-400 italic hidden sm:inline truncate max-w-[180px]">{turn.persona_title}</span>
         )}
+        <div className="ml-auto flex items-center gap-1.5 shrink-0">
+          {isDelta && <span className="text-[10px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">Δ delta</span>}
+          <span className="text-[10px] text-gray-400 tabular-nums">{roundLabel} · {turn.word_count}w · {time}</span>
+        </div>
       </div>
 
-      {/* Delta: prior position struck through */}
+      {/* Delta: prior position */}
       {isDelta && turn.prior_position_summary && (
-        <div className="ml-5 text-xs text-gray-400 line-through italic border-l-2 border-gray-200 pl-2">
+        <div className="ml-7 text-xs text-gray-400 line-through italic border-l-2 border-gray-100 pl-2">
           {turn.prior_position_summary}
         </div>
       )}
 
-      {/* Main content */}
+      {/* Bubble */}
       <div
-        className="ml-5 border rounded-lg p-4 text-sm text-gray-800 leading-relaxed"
-        style={{ borderColor: `${color}30`, backgroundColor: `${color}06` }}
+        className="ml-7 rounded-xl border shadow-sm overflow-hidden"
+        style={{ borderColor: `${color}25`, backgroundColor: `${color}05` }}
       >
-        {hasStructured && !showRaw ? (
-          <StructuredView turn={turn} onClueClick={onClueClick} />
-        ) : (
-          <InlineStatement text={turn.statement} onClueClick={onClueClick} />
-        )}
-
-        {/* Toggle between structured and raw view */}
-        {hasStructured && (
-          <button
-            className="text-xs text-gray-400 hover:text-gray-600 mt-2 block"
-            onClick={() => setShowRaw(r => !r)}
-          >
-            {showRaw ? "Show structured view" : "Show full statement"}
-          </button>
-        )}
-      </div>
-
-      {/* Cited clues summary */}
-      {turn.clues_cited.length > 0 && !hasStructured && (
-        <div className="ml-5 flex gap-1 flex-wrap">
-          {turn.clues_cited.map(id => (
-            <ClueChip key={id} clueId={id} onClick={onClueClick} />
-          ))}
+        <div className="p-3.5">
+          {hasStructured && !showRaw ? (
+            <StructuredView turn={turn} onClueClick={onClueClick} />
+          ) : (
+            <div className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">
+              <InlineStatement text={turn.statement} onClueClick={onClueClick} />
+            </div>
+          )}
         </div>
-      )}
+
+        {/* Footer */}
+        <div className="flex items-center gap-2 px-3.5 py-1.5 border-t bg-white/40" style={{ borderColor: `${color}15` }}>
+          {turn.clues_cited.length > 0 && (
+            <div className="flex gap-1 flex-wrap flex-1">
+              {turn.clues_cited.slice(0, 6).map(cid => (
+                <ClueChip key={cid} clueId={cid} onClick={onClueClick} />
+              ))}
+              {turn.clues_cited.length > 6 && (
+                <span className="text-[10px] text-gray-400">+{turn.clues_cited.length - 6} more</span>
+              )}
+            </div>
+          )}
+          {hasStructured && (
+            <button
+              className="text-[10px] text-gray-400 hover:text-gray-600 ml-auto shrink-0"
+              onClick={() => setShowRaw(r => !r)}
+            >
+              {showRaw ? "structured view" : "full statement"}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

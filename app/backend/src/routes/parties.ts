@@ -1,25 +1,15 @@
 import { Elysia, t } from "elysia"
-import { join } from "path"
-import { queuedWrite } from "../pipeline/writeQueue"
 import { getTopic } from "../pipeline/topicManager"
 import { smartAddParty, smartEditParty, smartSplitParty, smartMergeParties } from "../agents/PartyIntelligence"
-import type { Party } from "../agents/DiscoveryAgent"
-
-function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
-function partiesPath(topicId: string) { return join(getDataDir(), "topics", topicId, "parties.json") }
-
-async function readParties(topicId: string): Promise<Party[]> {
-  const f = Bun.file(partiesPath(topicId))
-  if (!(await f.exists())) return []
-  return f.json()
-}
+import { dbGetParties, dbGetParty, dbUpsertParty, dbDeleteParty, dbSetParties } from "../db/queries/parties"
+import { dbGetClues, dbReplaceClues } from "../db/queries/clues"
+import type { Party } from "../db/queries/parties"
 
 export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
-  .get("/", async ({ params }) => readParties(params.id))
+  .get("/", async ({ params }) => dbGetParties(params.id))
 
   .get("/:partyId", async ({ params, error }) => {
-    const parties = await readParties(params.id)
-    const party = parties.find(p => p.id === params.partyId)
+    const party = dbGetParty(params.id, params.partyId)
     return party ?? error(404, { message: "Party not found" })
   })
 
@@ -38,8 +28,7 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
         stance: b.stance ?? "passive", vulnerabilities: b.vulnerabilities ?? [],
         auto_discovered: false, user_verified: true,
       }
-      await queuedWrite<Party[]>(params.id, partiesPath(params.id),
-        (parties) => [...parties, party], [])
+      dbUpsertParty(params.id, party)
       return party
     } catch (e) {
       return error(400, { message: String(e) })
@@ -48,23 +37,18 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
 
   .put("/:partyId", async ({ params, body, error }) => {
     try {
-      let updated: Party | null = null
-      await queuedWrite<Party[]>(params.id, partiesPath(params.id), (parties) => {
-        return parties.map(p => {
-          if (p.id !== params.partyId) return p
-          updated = { ...p, ...(body as Partial<Party>), id: p.id }
-          return updated
-        })
-      }, [])
-      return updated ?? error(404, { message: "Party not found" })
+      const existing = dbGetParty(params.id, params.partyId)
+      if (!existing) return error(404, { message: "Party not found" })
+      const updated: Party = { ...existing, ...(body as Partial<Party>), id: existing.id }
+      dbUpsertParty(params.id, updated)
+      return updated
     } catch (e) {
       return error(400, { message: String(e) })
     }
   }, { body: t.Record(t.String(), t.Any()) })
 
   .delete("/:partyId", async ({ params }) => {
-    await queuedWrite<Party[]>(params.id, partiesPath(params.id),
-      (parties) => parties.filter(p => p.id !== params.partyId), [])
+    dbDeleteParty(params.id, params.partyId)
     return { success: true }
   })
 
@@ -76,16 +60,14 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
     try {
       const topicId = params.id
       const topic = await getTopic(topicId)
-      const existing = await readParties(topicId)
+      const existing = dbGetParties(topicId)
 
       const party = await smartAddParty(
         topicId, topic.title, topic.description,
         b.name.trim(), topic.models.enrichment, existing,
       )
 
-      await queuedWrite<Party[]>(topicId, partiesPath(topicId),
-        (parties) => [...parties, party], [])
-
+      dbUpsertParty(topicId, party)
       return party
     } catch (e) {
       return error(500, { message: `Smart add failed: ${e}` })
@@ -100,8 +82,7 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
     try {
       const topicId = params.id
       const topic = await getTopic(topicId)
-      const parties = await readParties(topicId)
-      const current = parties.find(p => p.id === params.partyId)
+      const current = dbGetParty(topicId, params.partyId)
       if (!current) return error(404, { message: "Party not found" })
 
       const updated = await smartEditParty(
@@ -109,10 +90,9 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
         b.feedback.trim(), topic.models.enrichment,
       )
 
-      await queuedWrite<Party[]>(topicId, partiesPath(topicId), (ps) =>
-        ps.map(p => p.id === params.partyId ? { ...updated, id: p.id } : p), [])
-
-      return updated
+      const final: Party = { ...updated as Party, id: current.id }
+      dbUpsertParty(topicId, final)
+      return final
     } catch (e) {
       return error(500, { message: `Smart edit failed: ${e}` })
     }
@@ -127,8 +107,7 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
     try {
       const topicId = params.id
       const topic = await getTopic(topicId)
-      const parties = await readParties(topicId)
-      const source = parties.find(p => p.id === b.source_id)
+      const source = dbGetParty(topicId, b.source_id)
       if (!source) return error(404, { message: "Source party not found" })
 
       const splitNames = b.into.map(i => i.name)
@@ -137,27 +116,21 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
       )
 
       // Remove source, add new parties
-      await queuedWrite<Party[]>(topicId, partiesPath(topicId), (ps) =>
-        [...ps.filter(p => p.id !== b.source_id), ...newParties], [])
+      dbDeleteParty(topicId, b.source_id)
+      for (const p of newParties) dbUpsertParty(topicId, p)
 
-      // Update clue references: source_id → first new party (best-effort)
-      const cluesFilePath = join(getDataDir(), "topics", topicId, "clues.json")
-      const cluesFile = Bun.file(cluesFilePath)
-      if (await cluesFile.exists()) {
-        const primaryId = newParties[0]?.id
-        if (primaryId) {
-          await queuedWrite<any[]>(topicId, cluesFilePath, (clues) => {
-            return clues.map((clue: any) => ({
-              ...clue,
-              versions: clue.versions.map((v: any) => ({
-                ...v,
-                party_relevance: v.party_relevance.map((pr: string) =>
-                  pr === b.source_id ? primaryId : pr
-                ),
-              })),
-            }))
-          }, [])
-        }
+      // Update clue party_relevance references
+      const primaryId = newParties[0]?.id
+      if (primaryId) {
+        const allClues = dbGetClues(topicId)
+        const updated = allClues.map(clue => ({
+          ...clue,
+          versions: clue.versions.map(v => ({
+            ...v,
+            party_relevance: v.party_relevance.map(pr => pr === b.source_id ? primaryId : pr),
+          })),
+        }))
+        dbReplaceClues(topicId, updated)
       }
 
       return { removed: b.source_id, created: newParties }
@@ -176,24 +149,22 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
 
     try {
       const topicId = params.id
-      const parties = await readParties(topicId)
-      const sources = parties.filter(p => b.source_ids.includes(p.id))
+      const sources = b.source_ids.map(id => dbGetParty(topicId, id)).filter(Boolean) as Party[]
       if (sources.length < 2) return error(400, { message: "Not enough matching source parties" })
 
-      // Try LLM-powered smart merge, fall back to manual merge
       let merged: Party
       try {
         const topic = await getTopic(topicId)
         const smartMerged = await smartMergeParties(
-          topic.title, sources, b.target.name, topic.models.enrichment,
+          topic.title, sources, b.target.name!, topic.models.enrichment,
         )
         merged = smartMerged as Party
       } catch {
         // Fallback: manual merge
-        const targetId = b.target.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 30)
+        const targetId = b.target.name!.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 30)
         merged = {
           id: targetId,
-          name: b.target.name,
+          name: b.target.name!,
           type: b.target.type ?? sources[0].type,
           description: sources.map(s => s.description).join(" "),
           weight: Math.round(sources.reduce((s, p) => s + p.weight, 0) / sources.length),
@@ -211,28 +182,22 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
         }
       }
 
-      const targetId = merged.id || b.target.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 30)
+      const targetId = merged.id || b.target.name!.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 30)
       merged.id = targetId
 
-      await queuedWrite<Party[]>(topicId, partiesPath(topicId), (ps) =>
-        [...ps.filter(p => !b.source_ids.includes(p.id)), merged], [])
+      for (const id of b.source_ids) dbDeleteParty(topicId, id)
+      dbUpsertParty(topicId, merged)
 
       // Update clue party_relevance references
-      const cluesFilePath = join(getDataDir(), "topics", topicId, "clues.json")
-      const cluesFile = Bun.file(cluesFilePath)
-      if (await cluesFile.exists()) {
-        await queuedWrite<any[]>(topicId, cluesFilePath, (clues) => {
-          return clues.map((clue: any) => ({
-            ...clue,
-            versions: clue.versions.map((v: any) => ({
-              ...v,
-              party_relevance: v.party_relevance.map((pr: string) =>
-                b.source_ids.includes(pr) ? targetId : pr
-              ).filter((pr: string, i: number, arr: string[]) => arr.indexOf(pr) === i),
-            })),
-          }))
-        }, [])
-      }
+      const allClues = dbGetClues(topicId)
+      const updated = allClues.map(clue => ({
+        ...clue,
+        versions: clue.versions.map(v => ({
+          ...v,
+          party_relevance: [...new Set(v.party_relevance.map(pr => b.source_ids.includes(pr) ? targetId : pr))],
+        })),
+      }))
+      dbReplaceClues(topicId, updated)
 
       return merged
     } catch (e) {

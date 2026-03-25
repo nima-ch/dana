@@ -1,36 +1,25 @@
+import { mkdirSync } from "fs"
 import { join } from "path"
+import { dbListTopics, dbGetTopic, dbCreateTopic, dbUpdateTopic, dbDeleteTopic } from "../db/queries/topics"
+import { dbGetSettings } from "../db/queries/settings"
+
+// Re-export Topic type for compatibility
+export type { Topic } from "../db/queries/topics"
 
 function getDataDir(): string {
   return process.env.DATA_DIR || "/home/nima/dana/data"
 }
 
-export interface Topic {
-  id: string
-  title: string
-  description: string
-  created_at: string
-  updated_at: string
-  status: "draft" | "discovery" | "review_parties" | "enrichment" | "review_enrichment" | "forum" | "expert_council" | "verdict" | "complete" | "stale"
-  current_version: number
-  models: {
-    data_gathering: string
-    extraction: string
-    enrichment: string
-    delta_updates: string
-    forum_reasoning: string
-    expert_council: string
-    verdict: string
-  }
-  settings: {
-    auto_discover_parties: boolean
-    auto_gather_clues: boolean
-    clue_search_depth: number
-    forum_rounds: number
-    expert_count: number
-    language: string
-    auto_refresh_clues: boolean
-    refresh_interval_hours: number
-  }
+function topicDir(id: string): string {
+  return join(getDataDir(), "topics", id)
+}
+
+function slugify(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 60)
 }
 
 const DEFAULT_MODELS = {
@@ -54,112 +43,60 @@ const DEFAULT_SETTINGS = {
   refresh_interval_hours: 24,
 }
 
-function topicDir(id: string): string {
-  return join(getDataDir(), "topics", id)
+export async function listTopics() {
+  return dbListTopics()
 }
 
-function topicFile(id: string): string {
-  return join(topicDir(id), "topic.json")
+export async function getTopic(id: string) {
+  const topic = dbGetTopic(id)
+  if (!topic) throw new Error(`Topic not found: ${id}`)
+  return topic
 }
 
-function slugify(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 60)
-}
-
-async function ensureDir(path: string): Promise<void> {
-  const { mkdir } = await import("fs/promises")
-  await mkdir(path, { recursive: true })
-}
-
-async function readJSON<T>(path: string): Promise<T> {
-  const f = Bun.file(path)
-  if (!(await f.exists())) throw new Error(`File not found: ${path}`)
-  return f.json() as Promise<T>
-}
-
-async function writeJSON(path: string, data: unknown): Promise<void> {
-  await Bun.write(path, JSON.stringify(data, null, 2))
-}
-
-export async function listTopics(): Promise<Topic[]> {
-  const { readdir } = await import("fs/promises")
-  const topicsPath = join(getDataDir(), "topics")
-  try {
-    const dirs = await readdir(topicsPath)
-    const topics: Topic[] = []
-    for (const dir of dirs) {
-      try {
-        const topic = await readJSON<Topic>(join(topicsPath, dir, "topic.json"))
-        topics.push(topic)
-      } catch {
-        // skip malformed dirs
-      }
-    }
-    return topics.sort((a, b) => b.created_at.localeCompare(a.created_at))
-  } catch {
-    return []
-  }
-}
-
-export async function getTopic(id: string): Promise<Topic> {
-  return readJSON<Topic>(topicFile(id))
-}
-
-async function loadGlobalDefaultModels(): Promise<Record<string, string>> {
-  try {
-    const settingsFile = Bun.file(join(getDataDir(), "settings.json"))
-    if (await settingsFile.exists()) {
-      const settings = await settingsFile.json() as { default_models?: Record<string, string> }
-      if (settings.default_models) return { ...DEFAULT_MODELS, ...settings.default_models }
-    }
-  } catch { /* fallback to hardcoded */ }
-  return DEFAULT_MODELS
-}
-
-export async function createTopic(data: { title: string; description: string; models?: Partial<Topic["models"]>; settings?: Partial<Topic["settings"]> }): Promise<Topic> {
+export async function createTopic(data: {
+  title: string
+  description: string
+  models?: Record<string, string>
+  settings?: Record<string, unknown>
+}) {
   const id = slugify(data.title) + "-" + Date.now().toString(36)
   const dir = topicDir(id)
-  await ensureDir(dir)
-  await ensureDir(join(dir, "sources", "raw"))
-  await ensureDir(join(dir, "sources", "cache"))
-  await ensureDir(join(dir, "logs"))
-  await ensureDir(join(dir, "exports"))
 
-  const globalModels = await loadGlobalDefaultModels()
+  // Still create raw source dirs for file-based caching
+  mkdirSync(join(dir, "sources", "raw"), { recursive: true })
+  mkdirSync(join(dir, "sources", "cache"), { recursive: true })
+  mkdirSync(join(dir, "logs"), { recursive: true })
+  mkdirSync(join(dir, "exports"), { recursive: true })
 
-  const topic: Topic = {
+  const globalModels = dbGetSettings().default_models
+
+  const topic = {
     id,
     title: data.title,
     description: data.description,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-    status: "draft",
+    status: "draft" as const,
     current_version: 0,
-    models: { ...globalModels, ...data.models },
-    settings: { ...DEFAULT_SETTINGS, ...data.settings },
+    models: { ...DEFAULT_MODELS, ...globalModels, ...data.models },
+    settings: { ...DEFAULT_SETTINGS, ...(data.settings as object) },
   }
 
-  await writeJSON(topicFile(id), topic)
-  await writeJSON(join(dir, "parties.json"), [])
-  await writeJSON(join(dir, "clues.json"), [])
-  await writeJSON(join(dir, "representatives.json"), [])
-  await writeJSON(join(dir, "states.json"), [])
-
+  dbCreateTopic(topic)
   return topic
 }
 
-export async function updateTopic(id: string, patch: Partial<Topic>): Promise<Topic> {
-  const topic = await getTopic(id)
-  const updated: Topic = { ...topic, ...patch, id, updated_at: new Date().toISOString() }
-  await writeJSON(topicFile(id), updated)
+export async function updateTopic(id: string, patch: Record<string, unknown>) {
+  const updated = dbUpdateTopic(id, patch as any)
+  if (!updated) throw new Error(`Topic not found: ${id}`)
   return updated
 }
 
 export async function deleteTopic(id: string): Promise<void> {
-  const { rm } = await import("fs/promises")
-  await rm(topicDir(id), { recursive: true, force: true })
+  dbDeleteTopic(id)
+  // Also remove topic directory (sources/cache, etc.)
+  try {
+    const { rm } = await import("fs/promises")
+    await rm(topicDir(id), { recursive: true, force: true })
+  } catch { /* ignore if dir doesn't exist */ }
 }

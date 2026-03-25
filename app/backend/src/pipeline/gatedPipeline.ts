@@ -1,5 +1,5 @@
-import { join } from "path"
 import { mkdir } from "fs/promises"
+import { join } from "path"
 import { log } from "../utils/logger"
 import { runDiscoveryAgent } from "../agents/DiscoveryAgent"
 import { runEnrichmentAgent } from "../agents/EnrichmentAgent"
@@ -11,24 +11,18 @@ import { writeCheckpoint, readCheckpoint, isStageComplete } from "./checkpointMa
 import { createVersion } from "./stateManager"
 import { readArtifact } from "../tools/internal/artifactStore"
 import { emit } from "../routes/stream"
+import { getTopic, updateTopic } from "./topicManager"
+import { dbGetParties } from "../db/queries/parties"
 import type { Topic } from "./topicManager"
 
 function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
 
-function topicPath(topicId: string) {
-  return join(getDataDir(), "topics", topicId, "topic.json")
-}
-
 async function updateTopicStatus(topicId: string, status: Topic["status"]) {
-  const f = Bun.file(topicPath(topicId))
-  const topic = await f.json() as Topic
-  topic.status = status
-  topic.updated_at = new Date().toISOString()
-  await Bun.write(topicPath(topicId), JSON.stringify(topic, null, 2))
+  await updateTopic(topicId, { status })
 }
 
 async function loadTopic(topicId: string): Promise<Topic> {
-  return Bun.file(topicPath(topicId)).json()
+  return getTopic(topicId)
 }
 
 // Stage 1 only: Discovery → review_parties
@@ -124,8 +118,8 @@ export async function runAnalyzeStages(topicId: string): Promise<{ run_id: strin
 
       // Emit weight results for live UI
       try {
-        const weightedParties = await Bun.file(join(getDataDir(), "topics", topicId, "parties.json")).json()
-        emit(topicId, { type: "weight_result", parties: weightedParties.map((p: any) => ({ name: p.name, weight: p.weight })) })
+        const weightedParties = dbGetParties(topicId)
+        emit(topicId, { type: "weight_result", parties: weightedParties.map(p => ({ name: p.name, weight: p.weight })) })
       } catch { /* non-fatal */ }
 
       await writeCheckpoint(topicId, runId, { stage: "forum", step: 0 })
@@ -200,18 +194,6 @@ export async function runAnalyzeStages(topicId: string): Promise<{ run_id: strin
       (msg) => emit(topicId, { type: "progress", stage: "verdict", pct: 0.5, msg })
     )
 
-    // Emit verdict content for live UI
-    try {
-      const verdictArtifact = await readArtifact(topicId, runId, "verdict")
-      if (verdictArtifact?.scenarios_ranked) {
-        emit(topicId, {
-          type: "verdict_content",
-          headline: verdictArtifact.headline_assessment || "",
-          scenarios: verdictArtifact.scenarios_ranked.map((s: any) => ({ title: s.scenario_title, probability: s.probability })),
-        })
-      }
-    } catch { /* non-fatal */ }
-
     await createVersion(topicId, {
       label: "Initial analysis",
       trigger: "initial_run",
@@ -269,8 +251,8 @@ export async function runReanalysis(topicId: string): Promise<{ run_id: string; 
 
     // Emit weight results for live UI
     try {
-      const weightedParties = await Bun.file(join(getDataDir(), "topics", topicId, "parties.json")).json()
-      emit(topicId, { type: "weight_result", parties: weightedParties.map((p: any) => ({ name: p.name, weight: p.weight })) })
+      const weightedParties = dbGetParties(topicId)
+      emit(topicId, { type: "weight_result", parties: weightedParties.map(p => ({ name: p.name, weight: p.weight })) })
     } catch { /* non-fatal */ }
 
     log.weight("Stage 3/6: WEIGHT CALCULATION complete")
@@ -335,21 +317,9 @@ export async function runReanalysis(topicId: string): Promise<{ run_id: string; 
       (msg) => emit(topicId, { type: "progress", stage: "verdict", pct: 0.5, msg })
     )
 
-    // Emit verdict content for live UI
-    try {
-      const verdictArtifact = await readArtifact(topicId, runId, "verdict")
-      if (verdictArtifact?.scenarios_ranked) {
-        emit(topicId, {
-          type: "verdict_content",
-          headline: verdictArtifact.headline_assessment || "",
-          scenarios: verdictArtifact.scenarios_ranked.map((s: any) => ({ title: s.scenario_title, probability: s.probability })),
-        })
-      }
-    } catch { /* non-fatal */ }
-
     await createVersion(topicId, {
       label: `Re-analysis v${nextVersion}`,
-      trigger: "reanalysis",
+      trigger: "user_manual",
       forum_session_id: sessionId,
       verdict_id: councilOutput.verdict_id,
     })

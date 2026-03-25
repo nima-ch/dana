@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from "react"
 import { api } from "../../api/client"
 import { ConfirmationBanner } from "./ConfirmationBanner"
+import { RadarChart } from "../Common/RadarChart"
+import { partyColor } from "../../utils/partyColor"
 
 interface WeightFactors {
   military_capacity: number
@@ -36,14 +38,17 @@ const WEIGHT_FACTORS: { key: keyof WeightFactors; label: string }[] = [
   { key: "internal_legitimacy", label: "Legitimacy" },
 ]
 
-function WeightBar({ label, value }: { label: string; value: number }) {
+function WeightBar({ label, value, color }: { label: string; value: number; color?: string }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-xs text-gray-500 w-36 shrink-0">{label}</span>
-      <div className="flex-1 bg-gray-100 rounded-full h-1.5">
-        <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${value}%` }} />
+      <span className="text-xs text-gray-500 w-28 shrink-0">{label}</span>
+      <div className="flex-1 bg-gray-100 rounded-full h-1.5 overflow-hidden">
+        <div
+          className="h-1.5 rounded-full transition-all duration-500"
+          style={{ width: `${value}%`, backgroundColor: color ?? "#3b82f6", opacity: 0.75 }}
+        />
       </div>
-      <span className="text-xs text-gray-500 w-6 text-right">{value}</span>
+      <span className="text-xs text-gray-500 w-6 text-right tabular-nums">{value}</span>
     </div>
   )
 }
@@ -141,8 +146,13 @@ function PartyCard({
     setBusy("")
   }
 
+  const color = partyColor(party.name)
+
   return (
-    <div className={`bg-white border rounded-lg p-4 space-y-2 ${selected ? "border-amber-400 ring-1 ring-amber-200" : "border-gray-200"}`}>
+    <div
+      className={`bg-white border rounded-xl p-4 space-y-2 transition-shadow hover:shadow-sm ${selected ? "border-amber-400 ring-1 ring-amber-200" : "border-gray-200"}`}
+      style={{ borderLeftWidth: 3, borderLeftColor: color }}
+    >
       {busy && (
         <div className="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 rounded px-3 py-1.5">
           <div className="animate-spin w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full" />
@@ -226,11 +236,12 @@ function PartyCard({
             ) : (
               <>
                 <div className="flex items-center gap-2">
-                  <span className="font-medium text-sm text-gray-900">{party.name}</span>
-                  <span className="text-xs text-gray-400">{party.type.replace(/_/g, " ")}</span>
-                  {party.user_verified && <span className="text-xs bg-green-50 text-green-600 px-1.5 rounded">verified</span>}
+                  <div className="w-4 h-4 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                  <span className="font-semibold text-sm text-gray-900">{party.name}</span>
+                  <span className="text-xs text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">{party.type.replace(/_/g, " ")}</span>
+                  {party.user_verified && <span className="text-xs bg-green-50 text-green-600 px-1.5 py-0.5 rounded">✓ verified</span>}
                 </div>
-                <p className="text-xs text-gray-500 mt-0.5">{party.description}</p>
+                <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{party.description}</p>
               </>
             )}
           </div>
@@ -322,12 +333,17 @@ function PartyCard({
           )}
 
           {expanded && party.weight_factors && (
-            <div className="border-t border-gray-100 pt-2 space-y-1">
-              <WeightBar label="Military capacity" value={party.weight_factors.military_capacity ?? 0} />
-              <WeightBar label="Economic control" value={party.weight_factors.economic_control ?? 0} />
-              <WeightBar label="Information control" value={party.weight_factors.information_control ?? 0} />
-              <WeightBar label="International support" value={party.weight_factors.international_support ?? 0} />
-              <WeightBar label="Internal legitimacy" value={party.weight_factors.internal_legitimacy ?? 0} />
+            <div className="border-t border-gray-100 pt-3 flex items-start gap-4">
+              <RadarChart
+                data={party.weight_factors as unknown as Record<string, number>}
+                size={88}
+                color={partyColor(party.name)}
+              />
+              <div className="flex-1 space-y-1.5">
+                {WEIGHT_FACTORS.map(wf => (
+                  <WeightBar key={wf.key} label={wf.label} value={party.weight_factors[wf.key] ?? 0} color={partyColor(party.name)} />
+                ))}
+              </div>
             </div>
           )}
 

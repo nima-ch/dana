@@ -1,5 +1,6 @@
 import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput } from "../llm/tokenBudget"
+import { loadPrompt } from "../llm/promptLoader"
 import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { log } from "../utils/logger"
@@ -130,39 +131,7 @@ export async function smartExtractClues(
       messages: [
         {
           role: "system",
-          content: `You are an intelligence analyst extracting structured factual claims from a mixed-format intelligence brief containing narrative text, dated updates, source links, and analysis.
-
-Extract every distinct factual event, statement, or development as a separate clue. Be thorough — this is raw intelligence material and every fact matters.
-
-KNOWN PARTIES (use these IDs in party_relevance):
-${partyList}
-
-Output ONLY a valid JSON array:
-[{
-  "title": "<concise factual title>",
-  "summary": "<bias-corrected factual summary, 1-3 sentences>",
-  "date": "<YYYY-MM-DD or 'unknown'>",
-  "relevance": <50-100>,
-  "credibility": <0-100, based on source quality>,
-  "parties": ["<party_id>", ...],
-  "source_url": "<URL if mentioned, else empty>",
-  "source_outlet": "<source name: IDF, Reuters, CENTCOM, Trump, Netanyahu, etc.>",
-  "bias_flags": ["<flag if applicable>"],
-  "clue_type": "<event|statement|military_action|intelligence|economic|diplomatic>",
-  "domain_tags": ["<military|nuclear|economic|political|social|intelligence>"],
-  "key_points": ["<key fact 1>", "<key fact 2>"]
-}]
-
-Rules:
-- Each clue = one distinct fact/event/statement. Do NOT merge multiple events.
-- Attribute to the actual speaker/source (e.g., "Netanyahu stated..." not just "Israel")
-- For military strikes: include location, target type, and claimed results
-- For statements: quote key phrases and attribute precisely
-- Use party IDs from the list above, create new slugs only if no match
-- Credibility: official military/govt sources=70-85, verified journalists=60-75, unconfirmed/OSINT=40-55
-- bias_flags: state_media, propaganda, unverified, osint, official_statement, opposition_media
-- Extract as many clues as the content warrants. No maximum limit.
-- Output ONLY valid JSON array. No markdown fences.`,
+          content: loadPrompt("clue-extractor/extract", { party_list: partyList }),
         },
         {
           role: "user",
@@ -268,22 +237,7 @@ export async function smartEditClue(
     messages: [
       {
         role: "system",
-        content: `You are an intelligence analyst updating a clue/evidence item based on user feedback and research.
-
-Output ONLY a valid JSON object:
-{
-  "title": "<updated title>",
-  "summary": "<updated bias-corrected summary>",
-  "credibility": <0-100>,
-  "bias_flags": ["<flag>"],
-  "relevance": <0-100>,
-  "parties": ["<party_id>"],
-  "date": "<YYYY-MM-DD>",
-  "clue_type": "<event|statement|military_action|intelligence|economic|diplomatic>",
-  "domain_tags": ["<tag>"]
-}
-
-Preserve accurate information. Only change what the feedback and research warrant. Be specific and fact-based.`,
+        content: loadPrompt("clue-extractor/edit"),
       },
       {
         role: "user",
@@ -332,7 +286,7 @@ export async function researchAndExtractClues(
     messages: [
       {
         role: "system",
-        content: `You generate targeted web search queries to investigate a specific research direction for geopolitical analysis. Output ONLY a JSON array of 3-5 search query strings. No markdown.`,
+        content: loadPrompt("clue-extractor/queries"),
       },
       {
         role: "user",
@@ -392,33 +346,7 @@ Generate 3-5 specific, fact-finding search queries that would uncover concrete e
     messages: [
       {
         role: "system",
-        content: `You are an intelligence analyst extracting structured factual claims from research material gathered to investigate a specific question.
-
-KNOWN PARTIES (use these IDs in party relevance):
-${partyList}
-
-Output ONLY a valid JSON array of clues:
-[{
-  "title": "<concise factual title>",
-  "summary": "<bias-corrected factual summary, 1-3 sentences>",
-  "date": "<YYYY-MM-DD or 'unknown'>",
-  "relevance": <50-100>,
-  "credibility": <0-100>,
-  "parties": ["<party_id>"],
-  "source_url": "<URL if available>",
-  "source_outlet": "<source name>",
-  "bias_flags": ["<flag if applicable>"],
-  "clue_type": "<event|statement|military_action|intelligence|economic|diplomatic>",
-  "domain_tags": ["<tag>"],
-  "key_points": ["<key fact>"]
-}]
-
-Rules:
-- Extract every distinct verifiable fact relevant to the research question
-- Each clue = one fact/event/statement
-- Attribute sources precisely
-- Be thorough — the user asked to research this specific direction
-- Output ONLY valid JSON array`,
+        content: loadPrompt("clue-extractor/research", { party_list: partyList }),
       },
       {
         role: "user",
@@ -498,42 +426,7 @@ export async function categorizeAndCleanup(
     messages: [
       {
         role: "system",
-        content: `You are an intelligence analyst organizing and consolidating a large set of clues/evidence items. Your job is to:
-
-1. GROUP related clues — events that are about the same thing, updates on the same development, or overlapping information
-2. For each group, produce a MERGED clue that synthesizes all the information into one comprehensive, up-to-date item
-3. Mark standalone clues that are unique and should be KEPT as-is
-4. Mark truly redundant or low-value clues for DELETION
-
-KNOWN PARTIES:
-${partyList}
-
-Output ONLY a valid JSON array of group objects:
-[{
-  "group_id": "<short slug>",
-  "category": "<thematic category: military_operations, nuclear_program, protest_movement, leadership_succession, international_response, economic_impact, intelligence, diplomatic, internal_politics>",
-  "merged_title": "<comprehensive title for the merged clue>",
-  "merged_summary": "<synthesized summary combining all source clues, 2-4 sentences, factual and up-to-date>",
-  "merged_credibility": <0-100, weighted average>,
-  "merged_bias_flags": ["<flags from sources>"],
-  "merged_relevance": <0-100>,
-  "merged_date": "<most recent date from source clues>",
-  "merged_clue_type": "<event|statement|military_action|intelligence|economic|diplomatic>",
-  "merged_domain_tags": ["<tags>"],
-  "merged_parties": ["<party_id>"],
-  "source_clue_ids": ["<clue-xxx>", "<clue-yyy>"],
-  "action": "merge",
-  "reason": "<why these clues should be merged>"
-}]
-
-Rules:
-- Groups with only 1 source clue should have action="keep" (standalone, unique info)
-- Groups can have action="delete" if ALL source clues are truly redundant or garbage
-- EVERY clue ID must appear in exactly one group
-- Aim to reduce clue count by 40-60% through merging related items
-- Preserve ALL unique factual information in merged summaries
-- Keep the most recent date and highest credibility among source clues
-- Be aggressive about merging — if two clues are about the same event/topic, merge them`,
+        content: loadPrompt("clue-extractor/categorize", { party_list: partyList }),
       },
       {
         role: "user",

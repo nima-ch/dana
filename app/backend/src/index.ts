@@ -1,6 +1,7 @@
 import { Elysia } from "elysia"
 import { cors } from "@elysiajs/cors"
 import { swagger } from "@elysiajs/swagger"
+import { initDb } from "./db/database"
 import { topicsRouter } from "./routes/topics"
 import { streamRouter } from "./routes/stream"
 import { cluesRouter } from "./routes/clues"
@@ -10,6 +11,8 @@ import { pipelineRouter } from "./routes/pipeline"
 import { expertCouncilRouter } from "./routes/expertCouncil"
 import { settingsRouter } from "./routes/settings"
 import { fetchAvailableModels } from "./llm/proxyClient"
+
+initDb()
 
 const app = new Elysia()
   .use(cors())

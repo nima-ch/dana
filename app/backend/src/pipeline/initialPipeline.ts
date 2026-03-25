@@ -1,4 +1,3 @@
-import { join } from "path"
 import { log } from "../utils/logger"
 import { runDiscoveryAgent } from "../agents/DiscoveryAgent"
 import { runEnrichmentAgent } from "../agents/EnrichmentAgent"
@@ -9,24 +8,15 @@ import { runVerdictSynthesizer } from "../agents/VerdictSynthesizer"
 import { writeCheckpoint, readCheckpoint, isStageComplete } from "./checkpointManager"
 import { createVersion } from "./stateManager"
 import { emit, makeProgressEmitter } from "../routes/stream"
+import { getTopic, updateTopic } from "./topicManager"
 import type { Topic } from "./topicManager"
 
-function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
-
-function topicPath(topicId: string) {
-  return join(getDataDir(), "topics", topicId, "topic.json")
-}
-
 async function updateTopicStatus(topicId: string, status: Topic["status"]) {
-  const f = Bun.file(topicPath(topicId))
-  const topic = await f.json() as Topic
-  topic.status = status
-  topic.updated_at = new Date().toISOString()
-  await Bun.write(topicPath(topicId), JSON.stringify(topic, null, 2))
+  await updateTopic(topicId, { status })
 }
 
 async function loadTopic(topicId: string): Promise<Topic> {
-  return Bun.file(topicPath(topicId)).json()
+  return getTopic(topicId)
 }
 
 export async function runInitialPipeline(topicId: string, runId?: string): Promise<{ run_id: string; status: string }> {

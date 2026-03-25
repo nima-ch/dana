@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react"
 import { api } from "../../api/client"
 import { ConfirmationBanner } from "./ConfirmationBanner"
+import { CredibilityRing } from "../Common/CredibilityRing"
 
 interface ClueVersion {
   v: number
@@ -33,11 +34,7 @@ const BIAS_OPTIONS = [
   "editorial_bias", "conflict_of_interest", "single_source", "outdated",
 ]
 
-function credColor(score: number) {
-  if (score >= 80) return "text-green-700 bg-green-50 border-green-200"
-  if (score >= 50) return "text-yellow-700 bg-yellow-50 border-yellow-200"
-  return "text-red-700 bg-red-50 border-red-200"
-}
+
 
 function ClueCard({ clue, topicId, onUpdate, onDelete, onReload }: {
   clue: Clue
@@ -88,33 +85,49 @@ function ClueCard({ clue, topicId, onUpdate, onDelete, onReload }: {
     setBusy("")
   }
 
+  const domainTagColor: Record<string, string> = {
+    military: "bg-red-50 text-red-700 border-red-100",
+    nuclear: "bg-orange-50 text-orange-700 border-orange-100",
+    economic: "bg-green-50 text-green-700 border-green-100",
+    diplomatic: "bg-blue-50 text-blue-700 border-blue-100",
+    intelligence: "bg-purple-50 text-purple-700 border-purple-100",
+    political: "bg-indigo-50 text-indigo-700 border-indigo-100",
+    social: "bg-pink-50 text-pink-700 border-pink-100",
+    legal: "bg-teal-50 text-teal-700 border-teal-100",
+  }
+
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-4 space-y-2">
+    <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-2 hover:shadow-sm transition-shadow">
       {busy && (
-        <div className="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 rounded px-3 py-1.5">
+        <div className="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 rounded-lg px-3 py-1.5">
           <div className="animate-spin w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full" />
           {busy}
         </div>
       )}
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-gray-900">{cur.title}</span>
-          </div>
-          <div className="flex items-center gap-2 mt-1 flex-wrap">
-            <span className="text-xs text-gray-400">{cur.timeline_date}</span>
-            <span className="text-xs text-gray-400">·</span>
-            <span className="text-xs text-gray-500">{cur.clue_type}</span>
-            {cur.party_relevance.map(p => (
-              <span key={p} className="text-xs bg-gray-100 text-gray-600 px-1.5 rounded">{p}</span>
-            ))}
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-2.5 flex-1 min-w-0">
+          <CredibilityRing score={cur.source_credibility.score} size={34} />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start gap-2 flex-wrap">
+              <span className="text-sm font-medium text-gray-900 leading-snug">{cur.title}</span>
+            </div>
+            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+              <span className="text-[10px] text-gray-400 font-mono">{clue.id}</span>
+              <span className="text-[10px] text-gray-300">·</span>
+              <span className="text-[10px] text-gray-400">{cur.timeline_date}</span>
+              <span className="text-[10px] text-gray-300">·</span>
+              <span className="text-[10px] bg-gray-50 text-gray-500 px-1.5 py-0.5 rounded border border-gray-100">{cur.clue_type}</span>
+              {cur.domain_tags?.map(tag => (
+                <span key={tag} className={`text-[10px] px-1.5 py-0.5 rounded border ${domainTagColor[tag] ?? "bg-gray-50 text-gray-500 border-gray-100"}`}>{tag}</span>
+              ))}
+              {cur.party_relevance.map(p => (
+                <span key={p} className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100">{p}</span>
+              ))}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <span className={`text-xs border px-1.5 py-0.5 rounded ${credColor(cur.source_credibility.score)}`}>
-            {cur.source_credibility.score}
-          </span>
-          <span className="text-xs text-gray-400">v{clue.current}</span>
+          <span className="text-[10px] text-gray-400 font-mono">v{clue.current}</span>
           {!editing && (
             <button className="text-xs text-blue-400 hover:text-blue-600" onClick={() => setEditing(true)}>edit</button>
           )}

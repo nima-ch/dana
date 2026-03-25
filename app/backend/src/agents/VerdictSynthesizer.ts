@@ -1,9 +1,12 @@
 import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput, fitContext } from "../llm/tokenBudget"
+import { loadPrompt } from "../llm/promptLoader"
 import { log } from "../utils/logger"
 import { readArtifact, writeArtifact } from "../tools/internal/artifactStore"
 import { getScenarioSummary } from "../tools/internal/getForumData"
-import { join } from "path"
+import { emit, emitThink } from "../routes/stream"
+import { dbSaveExpertCouncil } from "../db/queries/expert"
+import { dbGetTopic } from "../db/queries/topics"
 import type {
   ExpertArtifact,
   ExpertCouncilOutput,
@@ -12,8 +15,6 @@ import type {
   RankedScenario,
   WeightChallengeDecision,
 } from "./ExpertAgent"
-
-function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
 
 function resolveWeightChallenges(deliberations: ExpertArtifact[]): WeightChallengeDecision[] {
   // Group challenges by party_id + dimension
@@ -56,42 +57,7 @@ function resolveWeightChallenges(deliberations: ExpertArtifact[]): WeightChallen
   return decisions
 }
 
-const VERDICT_SYSTEM = `You are the Verdict Synthesizer. You aggregate expert assessments into a final verdict.
-
-You will receive:
-1. All expert scenario assessments with probabilities
-2. Cross-deliberation responses
-3. Scenario definitions from the forum
-4. Weight challenge decisions
-
-Produce a final verdict as JSON:
-{
-  "scenarios_ranked": [
-    {
-      "scenario_id": "<id>",
-      "title": "<scenario title>",
-      "probability": <0.0-1.0>,
-      "confidence": "high" | "medium" | "low",
-      "key_drivers": ["<driver>", ...],
-      "watch_indicators": ["<indicator>", ...],
-      "near_future_trajectories": {
-        "90_days": "<trajectory>",
-        "6_months": "<trajectory>",
-        "1_year": "<trajectory>"
-      }
-    }
-  ],
-  "final_assessment": "<comprehensive narrative assessment, 2-4 paragraphs>",
-  "confidence_note": "<note on overall confidence level and key uncertainties>"
-}
-
-Rules:
-- Rank scenarios by probability (highest first)
-- Probabilities must sum to ≤ 1.0
-- Each scenario needs ≥ 2 watch indicators
-- Each scenario needs all 3 trajectory timeframes
-- Final assessment should synthesize expert consensus and disagreements
-- Confidence note should flag key uncertainties and evidence gaps`
+const VERDICT_SYSTEM = loadPrompt("verdict/system")
 
 export async function runVerdictSynthesizer(
   topicId: string,
@@ -103,6 +69,7 @@ export async function runVerdictSynthesizer(
 ): Promise<ExpertCouncilOutput> {
   log.verdict("Reading expert artifacts")
   onProgress?.("Verdict: reading expert artifacts")
+  emitThink(topicId, "⚖️", "Reading expert assessments", `${experts.length} experts`)
 
   const deliberations: ExpertArtifact[] = []
   for (const expert of experts) {
@@ -219,11 +186,10 @@ export async function runVerdictSynthesizer(
   let version = 1
   const vMatch = runId.match(/v(\d+)/)
   if (vMatch) version = parseInt(vMatch[1])
-  // Also check topic.json for next version
+  // Also check DB for next version
   try {
-    const topicFile = Bun.file(join(getDataDir(), "topics", topicId, "topic.json"))
-    const topic = await topicFile.json()
-    version = Math.max(version, (topic.current_version || 0) + 1)
+    const topic = dbGetTopic(topicId)
+    if (topic) version = Math.max(version, (topic.current_version || 0) + 1)
   } catch { /* use parsed version */ }
 
   const councilOutput: ExpertCouncilOutput = {
@@ -234,12 +200,21 @@ export async function runVerdictSynthesizer(
     final_verdict: finalVerdict,
   }
 
-  // Write expert council file
-  const councilPath = join(getDataDir(), "topics", topicId, `expert_council_v${version}.json`)
-  await Bun.write(councilPath, JSON.stringify(councilOutput, null, 2))
+  // Persist expert council to DB
+  dbSaveExpertCouncil(topicId, councilOutput)
 
   // Write verdict artifact for pipeline tracking
   await writeArtifact(topicId, runId, "verdict_synthesis", finalVerdict)
+
+  emitThink(topicId, "⚖️", "Synthesizing final verdict")
+  // Emit rich verdict event for live UI
+  emit(topicId, {
+    type: "verdict_content",
+    headline: finalVerdict.final_assessment.slice(0, 200),
+    scenarios: finalVerdict.scenarios_ranked.map(s => ({ title: s.title ?? s.scenario_id, probability: s.probability })),
+    final_assessment: finalVerdict.final_assessment,
+    confidence_note: finalVerdict.confidence_note,
+  })
 
   const rankedStr = finalVerdict.scenarios_ranked.map(s => `${s.title || s.scenario_id}=${Math.round(s.probability * 100)}%`).join(", ")
   log.verdict(`Synthesis complete: ${rankedStr}`)

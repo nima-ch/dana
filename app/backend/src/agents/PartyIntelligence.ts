@@ -1,34 +1,10 @@
 import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput } from "../llm/tokenBudget"
+import { loadPrompt } from "../llm/promptLoader"
 import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { log } from "../utils/logger"
 import type { Party } from "./DiscoveryAgent"
-
-const PARTY_JSON_SCHEMA = `{
-  "id": "<slug>",
-  "name": "<full name>",
-  "type": "<state|state_military|non_state|individual|media|economic|alliance>",
-  "description": "<detailed 2-4 sentence description with specific facts, dates, events>",
-  "weight": <0-100>,
-  "weight_factors": {
-    "military_capacity": <0-100>,
-    "economic_control": <0-100>,
-    "information_control": <0-100>,
-    "international_support": <0-100>,
-    "internal_legitimacy": <0-100>
-  },
-  "agenda": "<their goal regarding this topic>",
-  "means": ["<specific lever of power or action>"],
-  "circle": {
-    "visible": ["<known ally or partner with brief context>"],
-    "shadow": ["<inferred or covert actor with brief context>"]
-  },
-  "stance": "<active|passive|covert|overt|defensive_active>",
-  "vulnerabilities": ["<specific weak point>"],
-  "auto_discovered": false,
-  "user_verified": true
-}`
 
 function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 30)
@@ -75,12 +51,7 @@ export async function smartAddParty(
     messages: [
       {
         role: "system",
-        content: `You are a geopolitical intelligence analyst. Given a party name, a topic, and research material, produce a complete party profile as JSON.
-
-Output ONLY a single valid JSON object matching this schema:
-${PARTY_JSON_SCHEMA}
-
-Be specific and fact-based. Use the research material to ground your analysis. Weight factors should reflect the party's real capabilities relative to the topic.`,
+        content: loadPrompt("party-intelligence/add"),
       },
       {
         role: "user",
@@ -129,12 +100,7 @@ export async function smartEditParty(
     messages: [
       {
         role: "system",
-        content: `You are a geopolitical intelligence analyst. Given a party's current profile, user feedback, and research material, update the profile to address the feedback.
-
-Output ONLY a single valid JSON object matching this schema:
-${PARTY_JSON_SCHEMA}
-
-Preserve accurate existing information. Only change fields that the feedback and research warrant updating. Be specific and fact-based.`,
+        content: loadPrompt("party-intelligence/edit"),
       },
       {
         role: "user",
@@ -186,12 +152,7 @@ export async function smartSplitParty(
     messages: [
       {
         role: "system",
-        content: `You are a geopolitical intelligence analyst. A party is being split into multiple sub-parties. Distribute the original party's attributes across the new parties appropriately.
-
-Output ONLY a valid JSON array of party objects, each matching this schema:
-${PARTY_JSON_SCHEMA}
-
-Each sub-party should get the relevant subset of means, circle members, and vulnerabilities. Re-estimate weights and weight_factors for each sub-party independently. Specialize descriptions and agendas.`,
+        content: loadPrompt("party-intelligence/split"),
       },
       {
         role: "user",
@@ -239,12 +200,7 @@ export async function smartMergeParties(
     messages: [
       {
         role: "system",
-        content: `You are a geopolitical intelligence analyst. Multiple parties are being merged into one. Synthesize their profiles into a single coherent party profile.
-
-Output ONLY a single valid JSON object matching this schema:
-${PARTY_JSON_SCHEMA}
-
-Combine means, circle members, and vulnerabilities intelligently (deduplicate, merge related items). Write a new unified description and agenda. Re-estimate weight and weight_factors for the combined entity.`,
+        content: loadPrompt("party-intelligence/merge"),
       },
       {
         role: "user",

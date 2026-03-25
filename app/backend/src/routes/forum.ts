@@ -1,9 +1,7 @@
 import { Elysia } from "elysia"
-import { join } from "path"
 import { getForumSession } from "../tools/internal/getForumData"
 import { getAllVersions } from "../pipeline/stateManager"
-
-function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
+import { dbGetRepresentatives } from "../db/queries/forum"
 
 export const forumRouter = new Elysia({ prefix: "/api/topics/:id" })
   .get("/forum/:sessionId", async ({ params, error }) => {
@@ -24,7 +22,5 @@ export const forumRouter = new Elysia({ prefix: "/api/topics/:id" })
     }
   })
   .get("/representatives", async ({ params }) => {
-    const f = Bun.file(join(getDataDir(), "topics", params.id, "representatives.json"))
-    if (!(await f.exists())) return []
-    return f.json()
+    return dbGetRepresentatives(params.id)
   })

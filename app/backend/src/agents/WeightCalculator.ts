@@ -1,9 +1,12 @@
 import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput, fitContext } from "../llm/tokenBudget"
+import { loadPrompt } from "../llm/promptLoader"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
+import { emitThink } from "../routes/stream"
 import { log } from "../utils/logger"
-import { join } from "path"
+import { dbGetParties, dbSetParties } from "../db/queries/parties"
+import { dbSetRepresentatives } from "../db/queries/forum"
 import type { Party } from "./DiscoveryAgent"
 
 export interface SpeakingBudget {
@@ -34,45 +37,6 @@ const ROUND_POOLS = { opening: 600, rebuttal: 400, closing: 300 }
 const MIN_FLOOR = 150
 const LOW_WEIGHT_THRESHOLD = 15
 
-const WEIGHT_SYSTEM = `You are scoring party influence for geopolitical analysis.
-
-For each party given, score their current influence on 5 dimensions (0-100 each) and compute an overall weight.
-
-Output ONLY a valid JSON array:
-[
-  {
-    "party_id": "<id>",
-    "weight": <overall 0-100>,
-    "weight_factors": {
-      "military_capacity": <0-100>,
-      "economic_control": <0-100>,
-      "information_control": <0-100>,
-      "international_support": <0-100>,
-      "internal_legitimacy": <0-100>
-    },
-    "reasoning": "<1-2 sentences explaining the overall weight>"
-  }
-]
-
-Rules:
-- weight should reflect real-world influence on the specific topic, not just general power
-- Show working: weight_factors drive the overall weight (roughly their average)
-- Output ONLY the JSON array, no prose`
-
-const PERSONA_SYSTEM = `Generate a representative persona for a geopolitical analysis forum.
-
-This persona argues WITH CONVICTION from their party's perspective — they are an advocate, not a neutral analyst.
-They must be evidence-based and intellectually honest, but their VOICE, FRAMING, and EMPHASIS reflect their party's worldview.
-
-Output ONLY a valid JSON object:
-{
-  "title": "<short role title, e.g. 'Senior IRGC Strategic Affairs Analyst' or 'EU Foreign Policy Coordinator'>",
-  "prompt": "<4-6 sentence persona prompt that defines: (1) their professional background, (2) their communication style and rhetorical tendencies, (3) what they emphasize and what they downplay, (4) their key concerns and blind spots. The persona should create a DISTINCT VOICE that readers can recognize.>"
-}
-
-Output ONLY the JSON object. No markdown.`
-
-function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
 
 function computeSpeakingBudget(weight: number, totalWeight: number, isLowWeight: boolean): SpeakingBudget {
   if (isLowWeight) {
@@ -94,15 +58,16 @@ export async function runWeightCalculator(
   runId: string,
   onProgress?: (msg: string) => void
 ): Promise<WeightCalculatorOutput> {
-  const partiesPath = join(getDataDir(), "topics", topicId, "parties.json")
-  const partiesFile = Bun.file(partiesPath)
-  const parties = await partiesFile.json() as Party[]
+  const WEIGHT_SYSTEM = loadPrompt("weight/weight-scoring")
+  const PERSONA_SYSTEM = loadPrompt("weight/persona-generation")
 
+  const parties = dbGetParties(topicId)
   const ctx = await buildAgentContext("weight", topicId)
   const contextStr = serializeContext(ctx)
 
   log.weight(`Scoring ${parties.length} parties: ${parties.map(p => p.name).join(", ")}`)
   onProgress?.(`WeightCalculator: scoring ${parties.length} parties`)
+  emitThink(topicId, "⚖️", "Calculating party weights", `${parties.length} parties`)
 
   // Score weights
   const partyList = parties.map(p => ({ id: p.id, name: p.name, type: p.type, agenda: p.agenda }))
@@ -185,7 +150,7 @@ export async function runWeightCalculator(
       const isLowWeight = party.weight < LOW_WEIGHT_THRESHOLD
       const budget = computeSpeakingBudget(party.weight, totalWeight, isLowWeight)
 
-      return {
+      const rep = {
         id: `rep-${party.id}`,
         party_id: party.id,
         persona_prompt: personaPrompt,
@@ -194,15 +159,18 @@ export async function runWeightCalculator(
         speaking_budget: budget,
         auto_generated: true,
       } as Representative
+
+      emitThink(topicId, "🎭", `Representative created · ${party.name}`, `${personaTitle} · weight ${party.weight}`)
+
+      return rep
     }))
 
     representatives.push(...batchResults)
   }
 
-  // Write updated parties and representatives
-  await Bun.write(partiesPath, JSON.stringify(parties, null, 2))
-  const repsPath = join(getDataDir(), "topics", topicId, "representatives.json")
-  await Bun.write(repsPath, JSON.stringify(representatives, null, 2))
+  // Persist updated parties and representatives to DB
+  dbSetParties(topicId, parties)
+  dbSetRepresentatives(topicId, representatives)
 
   const output: WeightCalculatorOutput = {
     topic_id: topicId,
