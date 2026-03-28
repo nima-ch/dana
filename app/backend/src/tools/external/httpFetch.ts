@@ -2,6 +2,22 @@ import { join } from "path"
 import { createHash } from "crypto"
 
 const CACHE_TTL_MS = 48 * 60 * 60 * 1000 // 48 hours
+const FETCH_TIMEOUT_MS = 10_000 // 10 seconds
+
+// Domains known to require a subscription or return 401/403 to bots
+const PAYWALLED_DOMAINS = new Set([
+  "reuters.com", "wsj.com", "ft.com", "bloomberg.com",
+  "nytimes.com", "washingtonpost.com", "politico.com",
+  "theathletic.com", "economist.com", "foreignpolicy.com",
+  "thetimes.co.uk", "telegraph.co.uk",
+])
+
+function isPaywalled(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "")
+    return PAYWALLED_DOMAINS.has(host)
+  } catch { return false }
+}
 
 export interface FetchResult {
   url: string
@@ -57,6 +73,11 @@ function extractText(html: string): { title: string; content: string } {
 }
 
 export async function httpFetch(url: string, topicId?: string): Promise<FetchResult> {
+  // Reject known paywalled domains immediately — no network round-trip
+  if (isPaywalled(url)) {
+    throw new Error(`httpFetch skipped: paywalled domain for ${url}`)
+  }
+
   // Check cache if topicId provided
   if (topicId) {
     const cachePath = getCachePath(topicId, url)
@@ -70,13 +91,22 @@ export async function httpFetch(url: string, topicId?: string): Promise<FetchRes
     }
   }
 
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; Dana/1.0)",
-      Accept: "text/html,application/xhtml+xml",
-    },
-    redirect: "follow",
-  })
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+
+  let res: Response
+  try {
+    res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; Dana/1.0)",
+        Accept: "text/html,application/xhtml+xml",
+      },
+      redirect: "follow",
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
 
   if (!res.ok) throw new Error(`httpFetch failed: HTTP ${res.status} for ${url}`)
 

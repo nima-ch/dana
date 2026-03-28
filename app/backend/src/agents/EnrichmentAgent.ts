@@ -74,6 +74,7 @@ export async function runEnrichmentAgent(
 
         const query = `${party.name} ${title} recent news 2025 2026`
         emitThink(topicId, "🔎", `Searching · ${party.name}`, query)
+        await new Promise(r => setTimeout(r, 400))
         const results = await webSearch(query, 3)
         for (const result of results.slice(0, 2)) {
           try {

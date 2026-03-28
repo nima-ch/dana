@@ -1,4 +1,5 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput } from "../llm/tokenBudget"
 import { loadPrompt } from "../llm/promptLoader"
 import { webSearch } from "../tools/external/webSearch"
@@ -8,6 +9,7 @@ import { emitThink } from "../routes/stream"
 import { log } from "../utils/logger"
 import { dbSetParties } from "../db/queries/parties"
 import { writeArtifact } from "../tools/internal/artifactStore"
+import type { SearchResult } from "../tools/external/webSearch"
 
 export interface Party {
   id: string
@@ -39,6 +41,7 @@ interface ResearchFinding {
   summary: string            // from processClue (LLM extraction)
   relevance: number
   party_hint?: string        // set when fetching for a specific party in Step 4
+  multi_source_summary?: string  // synthesized summary across multiple findings for the same query
 }
 
 export interface DiscoveryOutput {
@@ -87,13 +90,101 @@ function currentYear(): string {
   return new Date().getFullYear().toString()
 }
 
-// Build a concise research summary from in-memory findings for the LLM
+// Score a search result by recency and keyword relevance to the topic title
+function scoreResult(result: SearchResult, titleKeywords: string[]): number {
+  let score = 0
+
+  // Recency boost: prefer results with a date field within last 12 months
+  if (result.date) {
+    try {
+      const ageMs = Date.now() - new Date(result.date).getTime()
+      const ageMonths = ageMs / (1000 * 60 * 60 * 24 * 30)
+      if (ageMonths <= 3) score += 40
+      else if (ageMonths <= 6) score += 25
+      else if (ageMonths <= 12) score += 15
+    } catch { /* ignore unparseable dates */ }
+  }
+
+  // Keyword relevance: title and snippet overlap with topic keywords
+  const text = `${result.title} ${result.snippet}`.toLowerCase()
+  for (const kw of titleKeywords) {
+    if (text.includes(kw)) score += 10
+  }
+
+  return score
+}
+
+// Select best results: highest-scored, plus guarantee at least one most-recent result
+function selectBestResults(results: SearchResult[], titleKeywords: string[], maxPick = 2): SearchResult[] {
+  if (results.length === 0) return []
+
+  const scored = results.map(r => ({ r, score: scoreResult(r, titleKeywords) }))
+  scored.sort((a, b) => b.score - a.score)
+
+  const picked: SearchResult[] = [scored[0].r]
+
+  // If the top result is not the most-recent one, also include the most-recent
+  const withDate = results.filter(r => r.date)
+  if (withDate.length > 0) {
+    const mostRecent = withDate.sort((a, b) =>
+      new Date(b.date!).getTime() - new Date(a.date!).getTime()
+    )[0]
+    if (mostRecent.url !== picked[0].url) picked.push(mostRecent)
+  }
+
+  // Fill up to maxPick with next highest-scored results not already picked
+  for (const { r } of scored) {
+    if (picked.length >= maxPick) break
+    if (!picked.find(p => p.url === r.url)) picked.push(r)
+  }
+
+  return picked.slice(0, maxPick)
+}
+
+// Synthesize multiple findings for a query into a single cited summary
+async function synthesizeFindings(
+  findings: ResearchFinding[],
+  query: string,
+  topicContext: string,
+  model: string
+): Promise<string | null> {
+  if (findings.length < 2) return null
+
+  const sourcesBlock = findings
+    .slice(0, 5)
+    .map(f => `[${domainOf(f.url)}] ${f.title}: ${f.summary.slice(0, 300)}`)
+    .join("\n")
+
+  try {
+    const raw = await chatCompletionText({
+      model,
+      messages: [
+        {
+          role: "system",
+          content: "You are a neutral intelligence analyst. Synthesize the following sources into a single concise paragraph (3-5 sentences) that captures the key facts relevant to the topic. Cite each source domain inline like (source.com). Output ONLY the paragraph, no preamble.",
+        },
+        {
+          role: "user",
+          content: `TOPIC: ${topicContext}\nSEARCH ANGLE: ${query}\n\nSOURCES:\n${sourcesBlock}`,
+        },
+      ],
+      temperature: 0.2,
+      max_tokens: 300,
+    })
+    return raw.trim()
+  } catch {
+    return null
+  }
+}
+
+// Build a concise research summary from in-memory findings for the LLM.
+// Prefers multi_source_summary (synthesized across findings) over individual summaries.
 function formatFindings(findings: ResearchFinding[], max = 60): string {
   return findings
     .slice(0, max)
     .map(f => {
       const src = domainOf(f.url)
-      const text = f.summary || f.snippet
+      const text = f.multi_source_summary || f.summary || f.snippet
       return `[${src}] ${f.title}: ${text.slice(0, 300)}`
     })
     .join("\n")
@@ -171,23 +262,35 @@ export async function runDiscoveryAgent(
   emitThink(topicId, "🗺️", `${orientation.angles.length} angles identified`, orientation.angles.slice(0, 3).join(" · "))
   allSearchQueries.push(...orientation.seed_queries)
 
+  // Pre-compute topic keywords for scoring (lowercase words ≥4 chars)
+  const titleKeywords = title.toLowerCase().split(/\s+/).filter(w => w.length >= 4)
+
   // ─────────────────────────────────────────────
-  // STEP 2: Broad research — search + fetch + summarize, store in memory only
+  // STEP 2: Broad research — scored selection + multi-source synthesis
+  //   - Search 8 candidates per query, pick best 2 by recency + relevance
+  //   - After fetching, synthesize findings per query into a single cited summary
   // ─────────────────────────────────────────────
   onProgress?.(`Discovery: broad research across ${orientation.seed_queries.length} queries`)
 
   for (const query of orientation.seed_queries.slice(0, 8)) {
     try {
+      // Small inter-query delay to avoid DDG rate-limiting
+      await new Promise(r => setTimeout(r, 400))
       emitThink(topicId, "🔎", `Searching`, query)
       onProgress?.(`Discovery: searching "${query}"`)
-      const results = await webSearch(query, 5)
-      log.discovery(`Search "${query}" → ${results.length} results`)
+      const candidates = await webSearch(query, 8)
+      log.discovery(`Search "${query}" → ${candidates.length} candidates`)
 
-      for (const result of results.slice(0, 3)) {
+      const selected = selectBestResults(candidates, titleKeywords, 2)
+      log.discovery(`  Selected ${selected.length} best results (recency + relevance scored)`)
+
+      const queryFindings: ResearchFinding[] = []
+
+      for (const result of selected) {
         try {
           emitThink(topicId, "📄", `Reading · ${domainOf(result.url)}`, result.title || result.snippet?.slice(0, 80) || "")
           const fetched = await httpFetch(result.url, topicId)
-          const processed = await processClue(fetched.raw_content, result.url, topicContext)
+          const processed = await processClue(fetched.raw_content, result.url, topicContext, undefined, true)
 
           if (processed.relevance_score < 35) {
             log.discovery(`  Skipped (relevance ${processed.relevance_score}): ${result.url}`)
@@ -201,12 +304,24 @@ export async function runDiscoveryAgent(
             summary: processed.bias_corrected_summary,
             relevance: processed.relevance_score,
           }
+          queryFindings.push(finding)
           findings.push(finding)
 
           emitThink(topicId, "💡", `Found · ${result.title || fetched.title || domainOf(result.url)}`, `relevance ${processed.relevance_score}`)
-          log.discovery(`  Finding stored in memory (relevance ${processed.relevance_score}): ${result.url}`)
+          log.discovery(`  Finding stored (relevance ${processed.relevance_score}): ${result.url}`)
         } catch (e) {
           log.discovery(`  Fetch/process failed for ${result.url}: ${e}`)
+        }
+      }
+
+      // Synthesize findings across sources for this query angle
+      if (queryFindings.length >= 2) {
+        const synthesis = await synthesizeFindings(queryFindings, query, topicContext, model)
+        if (synthesis) {
+          // Attach the multi-source synthesis to the first finding so formatFindings() picks it up
+          queryFindings[0].multi_source_summary = synthesis
+          log.discovery(`  Synthesized ${queryFindings.length} sources for query "${query}"`)
+          emitThink(topicId, "🔗", `Synthesized · ${queryFindings.length} sources`, query)
         }
       }
     } catch (e) {
@@ -249,7 +364,7 @@ export async function runDiscoveryAgent(
       if (!match) throw new Error("No JSON array found")
       return JSON.parse(match[0]) as Party[]
     },
-    (v) => Array.isArray(v) && v.length >= 5
+    (v) => Array.isArray(v) && v.length >= 1
   )
 
   const parties: Party[] = rawParties.map(p => ({
@@ -285,6 +400,7 @@ export async function runDiscoveryAgent(
 
     for (const query of queries) {
       try {
+        await new Promise(r => setTimeout(r, 400))
         const results = await webSearch(query, 3)
         for (const result of results.slice(0, 2)) {
           // Snippets only — no httpFetch, no processClue, no DB
@@ -386,6 +502,128 @@ export async function runDiscoveryAgent(
 
   // Suppress unused variable warning — ENRICH_PROMPT_BASE used to warm cache
   void ENRICH_PROMPT_BASE
+
+  // ─────────────────────────────────────────────
+  // STEP 5b: Auto party refinement — merge duplicates, delete unsupported, add emerged actors
+  // ─────────────────────────────────────────────
+  onProgress?.("Discovery: refining party list from research evidence…")
+  emitThink(topicId, "🔀", "Refining party list", "Checking for merges, deletions, and new actors…")
+
+  try {
+    const partyListSummary = parties.map(p =>
+      `${p.id} | ${p.name} (${p.type}) — ${p.agenda.slice(0, 120)}`
+    ).join("\n")
+
+    const researchSummaryForRefine = formatFindings(
+      findings.filter(f => !f.party_hint),  // broad research only — less noisy
+      40
+    )
+
+    const REFINE_PROMPT = loadPrompt("discovery/refine-parties", {
+      today,
+      topic: title,
+      party_list: partyListSummary,
+      research_summary: researchSummaryForRefine,
+    })
+
+    const refineBudget = budgetOutput(model, REFINE_PROMPT, { min: 500, max: 1500 })
+    const refineRaw = await chatCompletionText({
+      model,
+      messages: [
+        { role: "system", content: REFINE_PROMPT },
+        { role: "user", content: "Analyze the party list against the research findings and output your consolidation decisions." },
+      ],
+      temperature: 0.2,
+      max_tokens: refineBudget,
+    })
+
+    const refineMatch = refineRaw.match(/\{[\s\S]+\}/)
+    if (refineMatch) {
+      const decisions = JSON.parse(refineMatch[0]) as {
+        merge: { source_ids: string[]; into: string; reason: string }[]
+        delete: { id: string; reason: string }[]
+        add: { name: string; type: Party["type"]; reason: string }[]
+      }
+
+      // Apply deletes first
+      for (const del of (decisions.delete ?? [])) {
+        const idx = parties.findIndex(p => p.id === del.id)
+        if (idx !== -1) {
+          emitThink(topicId, "🗑️", `Removing · ${parties[idx].name}`, del.reason)
+          log.discovery(`  Removing party "${parties[idx].name}": ${del.reason}`)
+          parties.splice(idx, 1)
+        }
+      }
+
+      // Apply merges in-memory
+      for (const merge of (decisions.merge ?? [])) {
+        const sources = merge.source_ids.map(id => parties.find(p => p.id === id)).filter(Boolean) as Party[]
+        if (sources.length < 2) continue
+
+        const mergedId = slugify(merge.into)
+        // Synthesize merged profile from sources
+        const merged: Party = {
+          id: mergedId,
+          name: merge.into,
+          type: sources[0].type,
+          description: sources.map(s => s.description).join(" "),
+          weight: Math.round(sources.reduce((s, p) => s + p.weight, 0) / sources.length),
+          weight_factors: sources[0].weight_factors,
+          agenda: sources.map(s => s.agenda).filter(Boolean).join("; "),
+          means: [...new Set(sources.flatMap(s => s.means))],
+          circle: {
+            visible: [...new Set(sources.flatMap(s => s.circle?.visible ?? []))],
+            shadow: [...new Set(sources.flatMap(s => s.circle?.shadow ?? []))],
+          },
+          stance: sources[0].stance,
+          vulnerabilities: [...new Set(sources.flatMap(s => s.vulnerabilities))],
+          auto_discovered: true,
+          user_verified: false,
+        }
+
+        // Remove sources, add merged
+        for (const src of sources) {
+          const idx = parties.findIndex(p => p.id === src.id)
+          if (idx !== -1) parties.splice(idx, 1)
+        }
+        parties.push(merged)
+
+        emitThink(topicId, "🔀", `Merging · ${sources.map(s => s.name).join(" + ")} → ${merge.into}`, merge.reason)
+        log.discovery(`  Merged [${merge.source_ids.join(", ")}] → "${merge.into}": ${merge.reason}`)
+      }
+
+      // Apply adds
+      for (const add of (decisions.add ?? [])) {
+        // Don't add if a party with this name already exists
+        const exists = parties.find(p => p.name.toLowerCase() === add.name.toLowerCase())
+        if (exists) continue
+
+        const stub: Party = {
+          id: slugify(add.name),
+          name: add.name,
+          type: add.type ?? "non_state",
+          description: add.reason,
+          weight: 30,
+          weight_factors: { military_capacity: 0, economic_control: 0, information_control: 0, international_support: 0, internal_legitimacy: 0 },
+          agenda: add.reason,
+          means: [],
+          circle: { visible: [], shadow: [] },
+          stance: "active",
+          vulnerabilities: [],
+          auto_discovered: true,
+          user_verified: false,
+        }
+        parties.push(stub)
+
+        emitThink(topicId, "➕", `Adding · ${add.name}`, add.reason)
+        log.discovery(`  Added party "${add.name}": ${add.reason}`)
+      }
+
+      log.discovery(`Party refinement complete: ${parties.length} parties after refinement`)
+    }
+  } catch (e) {
+    log.discovery(`Party refinement failed (non-fatal): ${e}`)
+  }
 
   // ─────────────────────────────────────────────
   // STEP 6: Save parties to DB (no clues — that's Enrichment's job)

@@ -14,6 +14,7 @@ async function gatherResearch(queries: string[], topicId: string): Promise<strin
   const snippets: string[] = []
   for (const query of queries.slice(0, 3)) {
     try {
+      await new Promise(r => setTimeout(r, 400))
       const results = await webSearch(query, 3)
       for (const r of results.slice(0, 2)) {
         try {

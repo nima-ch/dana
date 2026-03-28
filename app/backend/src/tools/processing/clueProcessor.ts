@@ -19,13 +19,33 @@ export interface ClueProcessorOutput {
   relevance_score: number
 }
 
+// Slim output for Discovery — only what's needed, ~150-200 tokens max
+interface SlimProcessorOutput {
+  bias_corrected_summary: string
+  relevance_score: number
+}
+
 const SYSTEM_PROMPT = loadPrompt("clue-processor/system")
+
+const SLIM_SYSTEM_PROMPT = `You are a neutral intelligence analyst. Given raw web content and a topic context, extract a short bias-corrected summary and score relevance.
+
+Output ONLY a valid JSON object with exactly these two fields:
+{
+  "bias_corrected_summary": "<2-3 sentence neutral summary of key facts relevant to the topic>",
+  "relevance_score": <integer 0-100 indicating relevance to the topic context>
+}
+
+Rules:
+- bias_corrected_summary must be strictly neutral — remove loaded language and emotional framing
+- relevance_score: 0 = completely unrelated, 100 = directly on-topic
+- Output ONLY the JSON object, no prose, no markdown fences`
 
 export async function processClue(
   rawHtml: string,
   sourceUrl: string,
   topicContext: string,
-  model: string = "claude-haiku-4-5-20251001"
+  model: string = "claude-haiku-4-5-20251001",
+  slim: boolean = false
 ): Promise<ClueProcessorOutput> {
   const truncatedHtml = rawHtml.slice(0, 6000)
 
@@ -38,6 +58,42 @@ ${truncatedHtml}
 
 Extract, bias-correct, and analyze this content for the topic context above.`
 
+  if (slim) {
+    const text = await chatCompletionText({
+      model,
+      messages: [
+        { role: "system", content: SLIM_SYSTEM_PROMPT },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.2,
+      max_tokens: 250,
+    })
+
+    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]+?)\s*```/) || text.match(/(\{[\s\S]+\})/)
+    const jsonStr = jsonMatch ? jsonMatch[1] : text
+
+    try {
+      const parsed = JSON.parse(jsonStr) as SlimProcessorOutput
+      if (parsed.bias_corrected_summary === undefined || parsed.relevance_score === undefined) {
+        throw new Error("Missing required slim fields")
+      }
+      // Return as ClueProcessorOutput with stub values for unused fields
+      return {
+        extracted_content: "",
+        bias_corrected_summary: parsed.bias_corrected_summary,
+        bias_flags: [],
+        source_credibility_score: 50,
+        credibility_notes: "",
+        origin_source: { url: sourceUrl, outlet: "", is_republication: false },
+        key_points: [],
+        date_references: [],
+        relevance_score: parsed.relevance_score,
+      }
+    } catch (e) {
+      throw new Error(`ClueProcessor (slim): failed to parse JSON: ${e}\nResponse: ${text.slice(0, 200)}`)
+    }
+  }
+
   const text = await chatCompletionText({
     model,
     messages: [
@@ -45,7 +101,7 @@ Extract, bias-correct, and analyze this content for the topic context above.`
       { role: "user", content: prompt },
     ],
     temperature: 0.2,
-    max_tokens: 1000,
+    max_tokens: 1500,
   })
 
   // Extract JSON from response — handle markdown code fences if present
@@ -54,7 +110,6 @@ Extract, bias-correct, and analyze this content for the topic context above.`
 
   try {
     const parsed = JSON.parse(jsonStr) as ClueProcessorOutput
-    // Validate required fields exist
     const required: (keyof ClueProcessorOutput)[] = [
       "extracted_content", "bias_corrected_summary", "bias_flags",
       "source_credibility_score", "credibility_notes", "origin_source",
@@ -65,6 +120,6 @@ Extract, bias-correct, and analyze this content for the topic context above.`
     }
     return parsed
   } catch (e) {
-    throw new Error(`ClueProcessor: failed to parse LLM response as JSON: ${e}\nResponse: ${text}`)
+    throw new Error(`ClueProcessor: failed to parse LLM response as JSON: ${e}\nResponse: ${text.slice(0, 200)}`)
   }
 }
