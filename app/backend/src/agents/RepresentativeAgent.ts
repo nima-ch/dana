@@ -34,18 +34,26 @@ function countWords(text: string): number {
 }
 
 function formatScratchpad(content: ScratchpadContent): string {
+  const clueLines = content.clue_analysis
+    .filter(c => {
+      const rel = c.r ?? c.relevance_to_us
+      return rel !== "N" && rel !== "neutral"
+    })
+    .slice(0, 20)
+    .map(c => {
+      const rel = c.r ?? (c.relevance_to_us === "supports" ? "S" : c.relevance_to_us === "weakens" ? "W" : "N")
+      const use = c.use || c.how_we_use_it || ""
+      return `  [${c.clue_id}] ${rel}: ${use.slice(0, 100)}`
+    })
+
   return [
     `YOUR CORE POSITION: ${content.our_core_position}`,
     `SCENARIO YOU ARE PUSHING: ${content.scenario_we_are_pushing}`,
     `STRONGEST OPPONENT: ${content.strongest_opposing_party}`,
     `YOUR VULNERABILITIES: ${content.our_key_vulnerabilities.join("; ")}`,
     `YOUR OPENING MOVE: ${content.opening_move}`,
-    `\nCLUE STRATEGY SUMMARY:`,
-    content.clue_analysis
-      .filter(c => c.relevance_to_us !== "neutral")
-      .slice(0, 15)
-      .map(c => `  [${c.clue_id}] ${c.relevance_to_us.toUpperCase()}: ${c.how_we_use_it.slice(0, 100)}`)
-      .join("\n"),
+    `\nCLUE STRATEGY (non-neutral clues):`,
+    ...clueLines,
   ].join("\n")
 }
 

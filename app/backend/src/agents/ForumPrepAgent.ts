@@ -63,7 +63,7 @@ export async function runForumPrepAgent(
       clue_list: clueList,
     })
 
-    const budget = budgetOutput(model, SCRATCHPAD_PROMPT, { min: 2000, max: 8000 })
+    const budget = budgetOutput(model, SCRATCHPAD_PROMPT, { min: 3000, max: 16000 })
 
     try {
       const raw = await chatCompletionText({

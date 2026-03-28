@@ -284,10 +284,13 @@ export function dbUpsertForumSession(topicId: string, session: ForumSession): vo
 export interface ScratchpadContent {
   clue_analysis: {
     clue_id: string
-    relevance_to_us: "supports" | "weakens" | "neutral"
-    how_we_use_it: string
-    how_opponents_might_use_it: string
-    our_counter_if_used_against_us: string
+    r: "S" | "W" | "N"                // S=supports, W=weakens, N=neutral
+    use: string
+    counter: string
+    // legacy field names — kept for backward compat with full-format scratchpads
+    relevance_to_us?: string
+    how_we_use_it?: string
+    our_counter_if_used_against_us?: string
   }[]
   our_core_position: string
   scenario_we_are_pushing: string

@@ -29,10 +29,9 @@ Output ONLY a valid JSON object:
   "clue_analysis": [
     {
       "clue_id": "<clue-XXX>",
-      "relevance_to_us": "<supports|weakens|neutral>",
-      "how_we_use_it": "<how we cite this to advance our position — be specific>",
-      "how_opponents_might_use_it": "<which opponent and how they might weaponize this clue>",
-      "our_counter_if_used_against_us": "<our rebuttal if they cite this against us>"
+      "r": "<S=supports us|W=weakens us|N=neutral>",
+      "use": "<1 sentence: how we cite this clue in our favor>",
+      "counter": "<1 sentence: our rebuttal if opponents use this against us>"
     }
   ],
   "our_core_position": "<our central argument in 2-3 sentences — what outcome we are pushing for and why the evidence supports it>",
@@ -43,7 +42,8 @@ Output ONLY a valid JSON object:
 }
 
 Rules:
-- You MUST analyze every clue — do not skip any
-- Be ruthlessly honest in your internal assessment — this is private, no one else sees it
-- our_core_position must be grounded in specific clues, not general rhetoric
+- Analyze EVERY clue — include all of them in clue_analysis, even neutral ones
+- Be ruthlessly honest — this is private, no one else sees it
+- Keep each "use" and "counter" field to ONE concise sentence — brevity is essential
+- our_core_position must reference specific clue IDs
 - Output ONLY the JSON object, no markdown fences, no prose
