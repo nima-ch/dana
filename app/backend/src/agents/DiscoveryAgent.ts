@@ -9,7 +9,7 @@ import { emitThink } from "../routes/stream"
 import { log } from "../utils/logger"
 import { dbSetParties } from "../db/queries/parties"
 import { writeArtifact } from "../tools/internal/artifactStore"
-import type { SearchResult } from "../tools/external/webSearch"
+import { scoreResult, selectBestResults } from "../tools/external/searchUtils"
 
 export interface Party {
   id: string
@@ -90,56 +90,6 @@ function currentYear(): string {
   return new Date().getFullYear().toString()
 }
 
-// Score a search result by recency and keyword relevance to the topic title
-function scoreResult(result: SearchResult, titleKeywords: string[]): number {
-  let score = 0
-
-  // Recency boost: prefer results with a date field within last 12 months
-  if (result.date) {
-    try {
-      const ageMs = Date.now() - new Date(result.date).getTime()
-      const ageMonths = ageMs / (1000 * 60 * 60 * 24 * 30)
-      if (ageMonths <= 3) score += 40
-      else if (ageMonths <= 6) score += 25
-      else if (ageMonths <= 12) score += 15
-    } catch { /* ignore unparseable dates */ }
-  }
-
-  // Keyword relevance: title and snippet overlap with topic keywords
-  const text = `${result.title} ${result.snippet}`.toLowerCase()
-  for (const kw of titleKeywords) {
-    if (text.includes(kw)) score += 10
-  }
-
-  return score
-}
-
-// Select best results: highest-scored, plus guarantee at least one most-recent result
-function selectBestResults(results: SearchResult[], titleKeywords: string[], maxPick = 2): SearchResult[] {
-  if (results.length === 0) return []
-
-  const scored = results.map(r => ({ r, score: scoreResult(r, titleKeywords) }))
-  scored.sort((a, b) => b.score - a.score)
-
-  const picked: SearchResult[] = [scored[0].r]
-
-  // If the top result is not the most-recent one, also include the most-recent
-  const withDate = results.filter(r => r.date)
-  if (withDate.length > 0) {
-    const mostRecent = withDate.sort((a, b) =>
-      new Date(b.date!).getTime() - new Date(a.date!).getTime()
-    )[0]
-    if (mostRecent.url !== picked[0].url) picked.push(mostRecent)
-  }
-
-  // Fill up to maxPick with next highest-scored results not already picked
-  for (const { r } of scored) {
-    if (picked.length >= maxPick) break
-    if (!picked.find(p => p.url === r.url)) picked.push(r)
-  }
-
-  return picked.slice(0, maxPick)
-}
 
 // Synthesize multiple findings for a query into a single cited summary
 async function synthesizeFindings(
