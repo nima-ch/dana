@@ -1,181 +1,180 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { budgetOutput } from "../llm/tokenBudget"
 import { loadPrompt } from "../llm/promptLoader"
 import { getPartyProfile } from "../tools/internal/getPartyProfile"
-import { getPriorTurns } from "../tools/internal/getForumData"
 import { writeArtifact } from "../tools/internal/artifactStore"
-import { buildAgentContext, serializeContext } from "./contextBuilder"
-import type { SpeakingBudget } from "./WeightCalculator"
-import type { ForumTurn } from "../tools/internal/getForumData"
+import { log } from "../utils/logger"
+import { dbGetScratchpad } from "../db/queries/forum"
+import type { ForumTurn, ForumScenario, ScratchpadContent } from "../db/queries/forum"
 
 export interface RepTurnInput {
   topicId: string
   runId: string
   sessionId: string
   partyId: string
-  personaPrompt: string
-  personaTitle?: string
-  speakingBudget: SpeakingBudget
-  round: number
-  roundType: "opening_statements" | "rebuttals" | "closings_and_scenarios"
+  personaTitle: string
   model: string
+  turnNumber: number
+  myTurnCount: number
+  speakingWeight: number
+  consecutivePasses: number
+  recentTurns: ForumTurn[]
+  compressedHistory: string
+  liveScenarios: ForumScenario[]
+  topic: string
 }
 
 export interface RepTurnOutput {
-  turn: ForumTurn
-  artifact_name: string
+  turn: ForumTurn | null   // null = passed
+  passed: boolean
 }
-
-const BASE_SYSTEM = loadPrompt("representative/base")
 
 function countWords(text: string): number {
-  return text.trim().split(/\s+/).length
+  return text.trim().split(/\s+/).filter(Boolean).length
 }
 
-function buildRoundInstructions(roundType: RepTurnInput["roundType"], budget: number): string {
-  switch (roundType) {
-    case "opening_statements":
-      return `ROUND: Opening Statement. Present your party's position with force and conviction. Lay out your strongest evidence. Identify which other parties' positions concern you most. Budget: ~${budget} words.`
-    case "rebuttals":
-      return `ROUND: Rebuttal. You've read all opening statements. Attack the weakest arguments from other parties using evidence. Defend your position against the strongest critiques. Be specific about WHO you're challenging and WHY their evidence is weaker than yours. Budget: ~${budget} words.`
-    case "closings_and_scenarios":
-      return `ROUND: Closing + Scenario Proposal. Make your strongest final case. Propose or endorse 1-2 scenarios (with required conditions and falsification conditions). Explain what would prove you WRONG. Budget: ~${budget} words.`
-  }
+function formatScratchpad(content: ScratchpadContent): string {
+  return [
+    `YOUR CORE POSITION: ${content.our_core_position}`,
+    `SCENARIO YOU ARE PUSHING: ${content.scenario_we_are_pushing}`,
+    `STRONGEST OPPONENT: ${content.strongest_opposing_party}`,
+    `YOUR VULNERABILITIES: ${content.our_key_vulnerabilities.join("; ")}`,
+    `YOUR OPENING MOVE: ${content.opening_move}`,
+    `\nCLUE STRATEGY SUMMARY:`,
+    content.clue_analysis
+      .filter(c => c.relevance_to_us !== "neutral")
+      .slice(0, 15)
+      .map(c => `  [${c.clue_id}] ${c.relevance_to_us.toUpperCase()}: ${c.how_we_use_it.slice(0, 100)}`)
+      .join("\n"),
+  ].join("\n")
 }
 
-export async function runRepresentativeAgent(input: RepTurnInput): Promise<RepTurnOutput> {
-  const { topicId, runId, sessionId, partyId, personaPrompt, personaTitle, speakingBudget, round, roundType, model } = input
+function formatRecentTurns(turns: ForumTurn[]): string {
+  return turns.map(t =>
+    `[Turn ${t.round} — ${t.party_name}]: ${t.statement}`
+  ).join("\n\n---\n\n")
+}
 
-  const budget = roundType === "opening_statements" ? speakingBudget.opening_statement
-    : roundType === "rebuttals" ? speakingBudget.rebuttal
-    : speakingBudget.closing
+function formatScenarios(scenarios: ForumScenario[]): string {
+  if (scenarios.length === 0) return "No scenarios defined yet."
+  return scenarios.map(s =>
+    `• ${s.title}: ${s.description} (supported by: ${s.supported_by.join(", ") || "none"}, contested by: ${s.contested_by.join(", ") || "none"})`
+  ).join("\n")
+}
 
-  const ctx = await buildAgentContext("forum", topicId)
-  const contextStr = serializeContext(ctx)
-
-  let priorTurnsStr = ""
-  if (round > 1) {
-    const priorTurns = await getPriorTurns(topicId, sessionId, { round: round - 1 })
-    if (priorTurns.length > 0) {
-      priorTurnsStr = "\n\nPRIOR ROUND STATEMENTS:\n" + priorTurns.map(t =>
-        `[${t.party_name}]: ${t.position || t.statement.slice(0, 400)}...`
-      ).join("\n\n")
-    }
-  }
-
-  // Also include same-round prior turns for rebuttals (so later speakers can reference earlier ones)
-  if (round >= 2) {
-    const sameRoundTurns = await getPriorTurns(topicId, sessionId, { round })
-    if (sameRoundTurns.length > 0) {
-      priorTurnsStr += "\n\nEARLIER THIS ROUND:\n" + sameRoundTurns.map(t =>
-        `[${t.party_name}]: ${t.position || t.statement.slice(0, 400)}...`
-      ).join("\n\n")
-    }
-  }
+export async function runRepresentativeTurn(input: RepTurnInput): Promise<RepTurnOutput> {
+  const {
+    topicId, runId, sessionId, partyId, personaTitle, model,
+    turnNumber, myTurnCount, speakingWeight, consecutivePasses,
+    recentTurns, compressedHistory, liveScenarios, topic,
+  } = input
 
   const party = await getPartyProfile(topicId, partyId)
+  const repId = `rep-${partyId}`
 
-  const systemPrompt = `PERSONA: ${personaPrompt}\n\n${BASE_SYSTEM}`
-  const userPrompt = `TOPIC CONTEXT:\n${contextStr}
+  // Load scratchpad
+  const scratchpadRow = dbGetScratchpad(topicId, sessionId, repId)
+  const scratchpadStr = scratchpadRow
+    ? formatScratchpad(scratchpadRow.content)
+    : `YOUR CORE POSITION: ${party.agenda}\nNo detailed preparation available.`
 
-YOUR PARTY: ${party.name}
-PARTY TYPE: ${party.type}
-AGENDA: ${party.agenda}
-MEANS: ${party.means.join(", ")}
-VULNERABILITIES: ${party.vulnerabilities.join(", ")}
-STANCE: ${party.stance}
+  // Build context
+  const historyBlock = compressedHistory
+    ? `DEBATE SUMMARY (earlier turns):\n${compressedHistory}\n\n`
+    : ""
 
-${buildRoundInstructions(roundType, budget)}${priorTurnsStr}
+  const recentStr = formatRecentTurns(recentTurns)
+  const scenariosStr = formatScenarios(liveScenarios)
 
-Argue with conviction from ${party.name}'s perspective. Cite clues by ID from the context above.`
+  // Force speak if passed twice in a row
+  const forceSpeak = consecutivePasses >= 2
 
-  const raw = await chatCompletionText({
-    model,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-    temperature: 0.6,
-    max_tokens: Math.max(budget * 3, 1000),
+  const TURN_PROMPT = loadPrompt("forum/representative-turn", {
+    persona_title: personaTitle,
+    party_name: party.name,
+    scratchpad: scratchpadStr,
+    topic,
+    live_scenarios: scenariosStr,
+    conversation_history: historyBlock,
+    recent_turns: recentStr,
+    my_turn_count: String(myTurnCount),
+    turn_number: String(turnNumber),
+    speaking_weight: String(speakingWeight),
   })
 
-  // Parse structured output
-  let statement = raw
-  let clues_cited: string[] = []
-  let word_count = countWords(raw)
-  let position: string | undefined
-  let evidence: ForumTurn["evidence"]
-  let challenges: ForumTurn["challenges"]
-  let concessions: string[] | undefined
-  let scenario_endorsement: string | undefined
+  const userContent = forceSpeak
+    ? `Turn ${turnNumber}: You MUST speak this turn (you have passed the last ${consecutivePasses} turns). Make your contribution now.`
+    : `Turn ${turnNumber}: It is your moment. Speak or pass.`
 
-  // Strip markdown code fences before parsing
-  const cleaned = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "")
-  const jsonMatch = cleaned.match(/\{[\s\S]+\}/)
-  if (jsonMatch) {
-    try {
-      const parsed = JSON.parse(jsonMatch[0])
-      statement = parsed.statement ?? raw
-      clues_cited = parsed.clues_cited ?? []
-      word_count = parsed.word_count ?? countWords(statement)
-      position = parsed.position
-      evidence = parsed.evidence
-      challenges = parsed.challenges
-      concessions = parsed.concessions
-      scenario_endorsement = parsed.scenario_endorsement
-    } catch {
-      // JSON may be truncated - extract fields individually
-      try {
-        const posMatch = cleaned.match(/"position"\s*:\s*"((?:[^"\\]|\\.)*)"/s)
-        if (posMatch) position = posMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
+  const budget = budgetOutput(model, TURN_PROMPT + userContent, { min: 300, max: 800 })
 
-        const evMatch = cleaned.match(/"evidence"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"challenges)/s)
-        if (evMatch) try { evidence = JSON.parse(evMatch[1]) } catch {}
+  let raw: string
+  try {
+    raw = await chatCompletionText({
+      model,
+      messages: [
+        { role: "system", content: TURN_PROMPT },
+        { role: "user", content: userContent },
+      ],
+      temperature: 0.7,
+      max_tokens: budget,
+    })
+  } catch (e) {
+    log.forum(`  ${partyId} turn failed: ${e}`)
+    return { turn: null, passed: true }
+  }
 
-        const chMatch = cleaned.match(/"challenges"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"concessions)/s)
-        if (chMatch) try { challenges = JSON.parse(chMatch[0].match(/\[[\s\S]*\]/)?.[0] || "[]") } catch {}
+  // Parse output
+  let action: "speak" | "pass" = "speak"
+  let statement = ""
+  let cluesCited: string[] = []
+  let scenarioSignal: string | undefined
 
-        const coMatch = cleaned.match(/"concessions"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"(?:statement|scenario))/s)
-        if (coMatch) try { concessions = JSON.parse(coMatch[1]) } catch {}
-
-        const stmtMatch = cleaned.match(/"statement"\s*:\s*"((?:[^"\\]|\\.)*)/)
-        if (stmtMatch) statement = stmtMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
-
-        if (position) word_count = countWords(position + (statement || ""))
-      } catch { /* use raw */ }
+  try {
+    const cleaned = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "")
+    const match = cleaned.match(/\{[\s\S]+\}/)
+    if (match) {
+      const parsed = JSON.parse(match[0])
+      action = parsed.action === "pass" && !forceSpeak ? "pass" : "speak"
+      statement = parsed.statement || ""
+      cluesCited = parsed.clues_cited || []
+      scenarioSignal = parsed.scenario_signal || undefined
+    } else {
+      // Treat raw text as a statement
+      statement = raw.trim()
     }
+  } catch {
+    statement = raw.trim()
   }
 
-  // Extract clue citations from text if not in structured output
-  if (clues_cited.length === 0) {
-    const matches = statement.match(/\[clue-\d+\]/g) ?? []
-    clues_cited = [...new Set(matches.map(m => m.replace(/[\[\]]/g, "")))]
+  if (action === "pass") {
+    log.forum(`  ${partyId} PASSED turn ${turnNumber}`)
+    return { turn: null, passed: true }
   }
 
-  // Also extract from evidence/challenges if clues_cited is still empty
-  if (clues_cited.length === 0 && evidence) {
-    clues_cited = [...new Set(evidence.map(e => e.clue_id).filter(Boolean))]
-  }
+  // Extract inline clue citations from statement text
+  const inlineCites = statement.match(/\[clue-\d+\]/g) ?? []
+  const allCited = [...new Set([...cluesCited, ...inlineCites.map(m => m.replace(/[\[\]]/g, ""))])]
 
   const turn: ForumTurn = {
-    id: `turn-${partyId}-r${round}`,
-    representative_id: `rep-${partyId}`,
+    id: `turn-${partyId}-t${turnNumber}`,
+    representative_id: repId,
     party_name: party.name,
     persona_title: personaTitle,
     statement,
-    position,
-    evidence,
-    challenges,
-    concessions,
-    scenario_endorsement: roundType === "closings_and_scenarios" ? scenario_endorsement : undefined,
-    clues_cited,
+    clues_cited: allCited,
+    scenario_endorsement: scenarioSignal,
     timestamp: new Date().toISOString(),
-    round,
-    type: roundType,
-    word_count,
+    round: turnNumber,       // repurposed: turn number in the dynamic debate
+    type: "debate",
+    word_count: countWords(statement),
+    evidence: [],
+    challenges: [],
+    concessions: [],
   }
 
-  const artifactName = `representative_${partyId}_r${round}`
-  await writeArtifact(topicId, runId, artifactName, turn)
+  await writeArtifact(topicId, runId, `turn_${partyId}_t${turnNumber}`, turn)
+  log.forum(`  ${partyId} spoke (${turn.word_count}w, cited ${allCited.length} clues): "${statement.slice(0, 80)}…"`)
 
-  return { turn, artifact_name: artifactName }
+  return { turn, passed: false }
 }

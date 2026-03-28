@@ -278,3 +278,107 @@ export function dbUpsertForumSession(topicId: string, session: ForumSession): vo
   })
   txn()
 }
+
+// ─── Scratchpad types & queries ───────────────────────────────────────────────
+
+export interface ScratchpadContent {
+  clue_analysis: {
+    clue_id: string
+    relevance_to_us: "supports" | "weakens" | "neutral"
+    how_we_use_it: string
+    how_opponents_might_use_it: string
+    our_counter_if_used_against_us: string
+  }[]
+  our_core_position: string
+  scenario_we_are_pushing: string
+  strongest_opposing_party: string
+  our_key_vulnerabilities: string[]
+  opening_move: string
+}
+
+export interface Scratchpad {
+  representative_id: string
+  session_id: string
+  topic_id: string
+  party_id: string
+  content: ScratchpadContent
+  created_at: string
+}
+
+export function dbWriteScratchpad(topicId: string, pad: Scratchpad): void {
+  getDb().run(
+    `INSERT INTO forum_scratchpads (representative_id, session_id, topic_id, party_id, content, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(representative_id, session_id, topic_id) DO UPDATE SET content=excluded.content`,
+    [pad.representative_id, pad.session_id, topicId, pad.party_id,
+     JSON.stringify(pad.content), pad.created_at]
+  )
+}
+
+export function dbGetScratchpad(topicId: string, sessionId: string, representativeId: string): Scratchpad | null {
+  type Row = { representative_id: string; session_id: string; topic_id: string; party_id: string; content: string; created_at: string }
+  const row = getDb().query<Row, [string, string, string]>(
+    "SELECT * FROM forum_scratchpads WHERE topic_id = ? AND session_id = ? AND representative_id = ?"
+  ).get(topicId, sessionId, representativeId)
+  if (!row) return null
+  return { ...row, content: JSON.parse(row.content) as ScratchpadContent }
+}
+
+export function dbGetAllScratchpads(topicId: string, sessionId: string): Scratchpad[] {
+  type Row = { representative_id: string; session_id: string; topic_id: string; party_id: string; content: string; created_at: string }
+  const rows = getDb().query<Row, [string, string]>(
+    "SELECT * FROM forum_scratchpads WHERE topic_id = ? AND session_id = ?"
+  ).all(topicId, sessionId)
+  return rows.map(r => ({ ...r, content: JSON.parse(r.content) as ScratchpadContent }))
+}
+
+// ─── Supervisor state types & queries ────────────────────────────────────────
+
+export interface SupervisorState {
+  session_id: string
+  topic_id: string
+  turn_count: number
+  turn_distribution: Record<string, number>
+  live_scenarios: ForumScenario[]
+  compressed_history: string
+  status: "running" | "done"
+  closure_reason?: string
+  updated_at: string
+}
+
+export function dbUpsertSupervisorState(topicId: string, state: SupervisorState): void {
+  getDb().run(
+    `INSERT INTO forum_supervisor_state
+       (session_id, topic_id, turn_count, turn_distribution, live_scenarios, compressed_history, status, closure_reason, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(session_id, topic_id) DO UPDATE SET
+       turn_count=excluded.turn_count, turn_distribution=excluded.turn_distribution,
+       live_scenarios=excluded.live_scenarios, compressed_history=excluded.compressed_history,
+       status=excluded.status, closure_reason=excluded.closure_reason, updated_at=excluded.updated_at`,
+    [state.session_id, topicId, state.turn_count, JSON.stringify(state.turn_distribution),
+     JSON.stringify(state.live_scenarios), state.compressed_history,
+     state.status, state.closure_reason ?? null, state.updated_at]
+  )
+}
+
+export function dbGetSupervisorState(topicId: string, sessionId: string): SupervisorState | null {
+  type Row = {
+    session_id: string; topic_id: string; turn_count: number; turn_distribution: string
+    live_scenarios: string; compressed_history: string; status: string; closure_reason: string | null; updated_at: string
+  }
+  const row = getDb().query<Row, [string, string]>(
+    "SELECT * FROM forum_supervisor_state WHERE topic_id = ? AND session_id = ?"
+  ).get(topicId, sessionId)
+  if (!row) return null
+  return {
+    session_id: row.session_id,
+    topic_id: row.topic_id,
+    turn_count: row.turn_count,
+    turn_distribution: JSON.parse(row.turn_distribution),
+    live_scenarios: JSON.parse(row.live_scenarios),
+    compressed_history: row.compressed_history,
+    status: row.status as SupervisorState["status"],
+    closure_reason: row.closure_reason ?? undefined,
+    updated_at: row.updated_at,
+  }
+}

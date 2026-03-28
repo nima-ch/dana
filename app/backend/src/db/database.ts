@@ -249,6 +249,33 @@ function applySchema(db: Database): void {
   `)
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS forum_scratchpads (
+      representative_id TEXT NOT NULL,
+      session_id        TEXT NOT NULL,
+      topic_id          TEXT NOT NULL,
+      party_id          TEXT NOT NULL,
+      content           TEXT NOT NULL DEFAULT '{}',
+      created_at        TEXT NOT NULL,
+      PRIMARY KEY (representative_id, session_id, topic_id)
+    )
+  `)
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS forum_supervisor_state (
+      session_id        TEXT NOT NULL,
+      topic_id          TEXT NOT NULL,
+      turn_count        INTEGER NOT NULL DEFAULT 0,
+      turn_distribution TEXT NOT NULL DEFAULT '{}',
+      live_scenarios    TEXT NOT NULL DEFAULT '[]',
+      compressed_history TEXT NOT NULL DEFAULT '',
+      status            TEXT NOT NULL DEFAULT 'running',
+      closure_reason    TEXT,
+      updated_at        TEXT NOT NULL,
+      PRIMARY KEY (session_id, topic_id)
+    )
+  `)
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
