@@ -1,7 +1,6 @@
 import { computeDelta, createVersion, getLatestVersion } from "./stateManager"
 import { runDeltaRepresentativeAgent, type DeltaContext } from "../agents/DeltaRepresentativeAgent"
-import { generateExpertPersonas, runExpertAgent, runCrossDeliberation } from "../agents/ExpertAgent"
-import { runVerdictSynthesizer } from "../agents/VerdictSynthesizer"
+import { runScenarioScorer } from "../agents/ScenarioScorer"
 import { writeForumSession, type ForumSession } from "../tools/internal/getForumData"
 import { readArtifact, writeArtifact } from "../tools/internal/artifactStore"
 import { chatCompletionText } from "../llm/proxyClient"
@@ -10,7 +9,7 @@ import { writeCheckpoint } from "./checkpointManager"
 import { emit } from "../routes/stream"
 import { getTopic, updateTopic } from "./topicManager"
 import { dbGetRepresentatives } from "../db/queries/forum"
-import { dbSaveExpertCouncil } from "../db/queries/expert"
+
 import type { Topic } from "./topicManager"
 import type { DeltaTurn } from "../agents/DeltaRepresentativeAgent"
 
@@ -128,49 +127,14 @@ Output JSON array:
     await writeArtifact(topicId, runId, "delta_forum_orchestrator", { scenario_updates: scenarioUpdates })
     emit(topicId, { type: "stage_complete", stage: "forum" })
 
-    // Step 3: Delta expert review
+    // Step 3: Scenario Scoring (using prior session which has full scenario data)
     await updateTopicStatus(topicId, "expert_council")
-    emit(topicId, { type: "progress", stage: "expert_council", pct: 0, msg: "Delta expert review..." })
+    emit(topicId, { type: "progress", stage: "expert_council", pct: 0, msg: "Scoring updated scenarios..." })
 
-    const expertCount = topic.settings?.expert_count as number ?? 6
-    const experts = generateExpertPersonas(topic.title, expertCount)
-
-    // Run delta experts — they'll use the latest scenario summary
-    // For delta, we use the prior session's scenario summary since the delta one is minimal
-    const BATCH = 3
-    for (let i = 0; i < experts.length; i += BATCH) {
-      const batch = experts.slice(i, i + BATCH)
-      await Promise.all(batch.map(expert =>
-        runExpertAgent(topicId, runId, expert, priorSessionId, topic.models.delta_updates,
-          (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: (i + 1) / experts.length, msg })
-        )
-      ))
-    }
-
-    // Cross-deliberation
-    for (let i = 0; i < experts.length; i += BATCH) {
-      const batch = experts.slice(i, i + BATCH)
-      await Promise.all(batch.map(expert =>
-        runCrossDeliberation(topicId, runId, expert, experts, topic.models.delta_updates,
-          (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: 0.9, msg })
-        )
-      ))
-    }
-    emit(topicId, { type: "stage_complete", stage: "expert_council" })
-
-    // Step 4: Verdict update
-    await updateTopicStatus(topicId, "verdict")
-    emit(topicId, { type: "progress", stage: "verdict", pct: 0, msg: "Updating verdict..." })
-
-    const councilOutput = await runVerdictSynthesizer(
-      topicId, runId, experts, priorSessionId, topic.models.verdict,
-      (msg) => emit(topicId, { type: "progress", stage: "verdict", pct: 0.5, msg })
+    const councilOutput = await runScenarioScorer(
+      topicId, runId, priorSessionId, topic.models.delta_updates,
+      (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: 0.5, msg })
     )
-
-    // Council is already saved by runVerdictSynthesizer; just update version fields
-    councilOutput.version = newVersion
-    councilOutput.verdict_id = `verdict-v${newVersion}`
-    dbSaveExpertCouncil(topicId, councilOutput)
 
     // Create new state version
     await createVersion(topicId, {

@@ -5,11 +5,10 @@ import { runDiscoveryAgent } from "../agents/DiscoveryAgent"
 import { runEnrichmentAgent } from "../agents/EnrichmentAgent"
 import { runWeightCalculator } from "../agents/WeightCalculator"
 import { runForumOrchestrator } from "../agents/ForumOrchestrator"
-import { generateExpertPersonas, runExpertAgent, runCrossDeliberation } from "../agents/ExpertAgent"
-import { runVerdictSynthesizer } from "../agents/VerdictSynthesizer"
+import { runScenarioScorer } from "../agents/ScenarioScorer"
 import { writeCheckpoint, readCheckpoint, isStageComplete } from "./checkpointManager"
 import { createVersion } from "./stateManager"
-import { readArtifact } from "../tools/internal/artifactStore"
+
 import { emit } from "../routes/stream"
 import { getTopic, updateTopic } from "./topicManager"
 import { dbGetParties } from "../db/queries/parties"
@@ -98,17 +97,16 @@ export async function runAnalyzeStages(topicId: string): Promise<{ run_id: strin
   const runId = `initial-v${topic.current_version + 1}`
   const checkpoint = await readCheckpoint(topicId, runId)
   const sessionId = `forum-session-v${topic.current_version + 1}`
-  const expertCount = topic.settings?.expert_count as number ?? 6
 
   log.separator()
-  log.pipeline(`Starting ANALYSIS (weight→forum→expert→verdict) for "${topic.title}"`, `run=${runId}`)
+  log.pipeline(`Starting ANALYSIS (weight→forum→scoring) for "${topic.title}"`, `run=${runId}`)
   log.separator()
   const pipelineStart = Date.now()
 
   try {
     // Stage 3: Weight
     if (!isStageComplete(checkpoint, "weight")) {
-      log.weight("Stage 3/6: WEIGHT CALCULATION starting")
+      log.weight("Stage 3/5: WEIGHT CALCULATION starting")
       emit(topicId, { type: "progress", stage: "weight", pct: 0, msg: "Calculating weights..." })
 
       await runWeightCalculator(
@@ -116,21 +114,20 @@ export async function runAnalyzeStages(topicId: string): Promise<{ run_id: strin
         (msg) => emit(topicId, { type: "progress", stage: "weight", pct: 0.5, msg })
       )
 
-      // Emit weight results for live UI
       try {
         const weightedParties = dbGetParties(topicId)
         emit(topicId, { type: "weight_result", parties: weightedParties.map(p => ({ name: p.name, weight: p.weight })) })
       } catch { /* non-fatal */ }
 
       await writeCheckpoint(topicId, runId, { stage: "forum", step: 0 })
-      log.weight("Stage 3/6: WEIGHT CALCULATION complete")
+      log.weight("Stage 3/5: WEIGHT CALCULATION complete")
       emit(topicId, { type: "stage_complete", stage: "weight" })
-    } else { log.weight("Stage 3/6: WEIGHT skipped (checkpoint)") }
+    } else { log.weight("Stage 3/5: WEIGHT skipped (checkpoint)") }
 
     // Stage 4: Forum
     if (!isStageComplete(checkpoint, "forum")) {
       await updateTopicStatus(topicId, "forum")
-      log.forum("Stage 4/6: FORUM starting")
+      log.forum("Stage 4/5: FORUM starting")
       emit(topicId, { type: "progress", stage: "forum", pct: 0, msg: "Starting forum..." })
 
       const forumCheckpoint = await readCheckpoint(topicId, runId)
@@ -140,58 +137,17 @@ export async function runAnalyzeStages(topicId: string): Promise<{ run_id: strin
       )
 
       await writeCheckpoint(topicId, runId, { stage: "expert_council", step: 0 })
-      log.forum("Stage 4/6: FORUM complete")
-    } else { log.forum("Stage 4/6: FORUM skipped (checkpoint)") }
+      log.forum("Stage 4/5: FORUM complete")
+    } else { log.forum("Stage 4/5: FORUM skipped (checkpoint)") }
 
-    // Stage 5: Expert Council
-    if (!isStageComplete(checkpoint, "expert_council")) {
-      await updateTopicStatus(topicId, "expert_council")
-      log.expert("Stage 5/6: EXPERT COUNCIL starting")
-      emit(topicId, { type: "progress", stage: "expert_council", pct: 0, msg: "Convening expert council..." })
+    // Stage 5: Scenario Scoring
+    await updateTopicStatus(topicId, "expert_council")
+    log.expert("Stage 5/5: SCENARIO SCORER starting")
+    emit(topicId, { type: "progress", stage: "expert_council", pct: 0, msg: "Scoring scenarios..." })
 
-      const experts = generateExpertPersonas(topic.title, expertCount)
-      log.expert(`Generated ${experts.length} expert personas: ${experts.map(e => e.name).join(", ")}`)
-
-      const BATCH = 3
-      for (let i = 0; i < experts.length; i += BATCH) {
-        const batch = experts.slice(i, i + BATCH)
-        await Promise.all(batch.map(async expert => {
-          await runExpertAgent(topicId, runId, expert, sessionId, topic.models.expert_council,
-            (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: (i + 1) / experts.length, msg })
-          )
-          try {
-            const artifact = await readArtifact(topicId, runId, `expert_${expert.domain}`)
-            const summary = artifact?.scenarios_assessed?.[0]?.assessment?.slice(0, 200) || ""
-            emit(topicId, { type: "expert_assessment", expert: expert.name, domain: expert.domain, summary })
-          } catch { /* non-fatal */ }
-        }))
-      }
-
-      log.expert("Cross-expert deliberation round starting")
-      emit(topicId, { type: "progress", stage: "expert_council", pct: 0.8, msg: "Cross-expert deliberation..." })
-      for (let i = 0; i < experts.length; i += BATCH) {
-        const batch = experts.slice(i, i + BATCH)
-        await Promise.all(batch.map(expert =>
-          runCrossDeliberation(topicId, runId, expert, experts, topic.models.expert_council,
-            (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: 0.9, msg })
-          )
-        ))
-      }
-
-      await writeCheckpoint(topicId, runId, { stage: "verdict", step: 0 })
-      log.expert("Stage 5/6: EXPERT COUNCIL complete")
-      emit(topicId, { type: "stage_complete", stage: "expert_council" })
-    } else { log.expert("Stage 5/6: EXPERT COUNCIL skipped (checkpoint)") }
-
-    // Stage 6: Verdict
-    await updateTopicStatus(topicId, "verdict")
-    log.verdict("Stage 6/6: VERDICT SYNTHESIS starting")
-    emit(topicId, { type: "progress", stage: "verdict", pct: 0, msg: "Synthesizing final verdict..." })
-
-    const experts = generateExpertPersonas(topic.title, expertCount)
-    const councilOutput = await runVerdictSynthesizer(
-      topicId, runId, experts, sessionId, topic.models.verdict,
-      (msg) => emit(topicId, { type: "progress", stage: "verdict", pct: 0.5, msg })
+    const councilOutput = await runScenarioScorer(
+      topicId, runId, sessionId, topic.models.expert_council,
+      (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: 0.5, msg })
     )
 
     await createVersion(topicId, {
@@ -219,10 +175,9 @@ export async function runAnalyzeStages(topicId: string): Promise<{ run_id: strin
   }
 }
 
-// Clean re-analysis: wipe old analysis artifacts, run fresh Weight → Forum → Expert → Verdict
+// Clean re-analysis: wipe old analysis artifacts, run fresh Weight → Forum → Scoring
 export async function runReanalysis(topicId: string): Promise<{ run_id: string; status: string }> {
   const topic = await loadTopic(topicId)
-  // Use next version number for the new run
   const nextVersion = topic.current_version + 1
   const runId = `reanalysis-v${nextVersion}`
   const sessionId = `forum-session-v${nextVersion}`
@@ -231,17 +186,14 @@ export async function runReanalysis(topicId: string): Promise<{ run_id: string; 
   log.pipeline(`Starting CLEAN RE-ANALYSIS for "${topic.title}"`, `run=${runId}, session=${sessionId}`)
   log.separator()
 
-  // Clear the checkpoint for this run so all stages run fresh
   const checkpointDir = join(getDataDir(), "topics", topicId, "logs", `run-${runId}`)
   await mkdir(checkpointDir, { recursive: true })
 
-  // Now run the full analysis pipeline from weight onwards (no checkpoint resume)
-  const expertCount = topic.settings?.expert_count as number ?? 6
   const pipelineStart = Date.now()
 
   try {
     // Stage 3: Weight (re-score with updated parties/clues)
-    log.weight("Stage 3/6: WEIGHT CALCULATION starting (fresh)")
+    log.weight("Stage 3/5: WEIGHT CALCULATION starting (fresh)")
     emit(topicId, { type: "progress", stage: "weight", pct: 0, msg: "Re-scoring party weights..." })
 
     await runWeightCalculator(
@@ -249,18 +201,17 @@ export async function runReanalysis(topicId: string): Promise<{ run_id: string; 
       (msg) => emit(topicId, { type: "progress", stage: "weight", pct: 0.5, msg })
     )
 
-    // Emit weight results for live UI
     try {
       const weightedParties = dbGetParties(topicId)
       emit(topicId, { type: "weight_result", parties: weightedParties.map(p => ({ name: p.name, weight: p.weight })) })
     } catch { /* non-fatal */ }
 
-    log.weight("Stage 3/6: WEIGHT CALCULATION complete")
+    log.weight("Stage 3/5: WEIGHT CALCULATION complete")
     emit(topicId, { type: "stage_complete", stage: "weight" })
 
     // Stage 4: Forum (fresh session)
     await updateTopicStatus(topicId, "forum")
-    log.forum("Stage 4/6: FORUM starting (fresh)")
+    log.forum("Stage 4/5: FORUM starting (fresh)")
     emit(topicId, { type: "progress", stage: "forum", pct: 0, msg: "Starting fresh forum..." })
 
     await runForumOrchestrator(
@@ -268,53 +219,16 @@ export async function runReanalysis(topicId: string): Promise<{ run_id: string; 
       (msg) => emit(topicId, { type: "progress", stage: "forum", pct: 0.5, msg })
     )
 
-    log.forum("Stage 4/6: FORUM complete")
+    log.forum("Stage 4/5: FORUM complete")
 
-    // Stage 5: Expert Council
+    // Stage 5: Scenario Scoring
     await updateTopicStatus(topicId, "expert_council")
-    log.expert("Stage 5/6: EXPERT COUNCIL starting (fresh)")
-    emit(topicId, { type: "progress", stage: "expert_council", pct: 0, msg: "Convening expert council..." })
+    log.expert("Stage 5/5: SCENARIO SCORER starting (fresh)")
+    emit(topicId, { type: "progress", stage: "expert_council", pct: 0, msg: "Scoring scenarios..." })
 
-    const experts = generateExpertPersonas(topic.title, expertCount)
-    log.expert(`Generated ${experts.length} expert personas: ${experts.map(e => e.name).join(", ")}`)
-
-    const BATCH = 3
-    for (let i = 0; i < experts.length; i += BATCH) {
-      const batch = experts.slice(i, i + BATCH)
-      await Promise.all(batch.map(async expert => {
-        await runExpertAgent(topicId, runId, expert, sessionId, topic.models.expert_council,
-          (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: (i + 1) / experts.length, msg })
-        )
-        try {
-          const artifact = await readArtifact(topicId, runId, `expert_${expert.domain}`)
-          const summary = artifact?.scenarios_assessed?.[0]?.assessment?.slice(0, 200) || ""
-          emit(topicId, { type: "expert_assessment", expert: expert.name, domain: expert.domain, summary })
-        } catch { /* non-fatal */ }
-      }))
-    }
-
-    log.expert("Cross-expert deliberation round starting")
-    emit(topicId, { type: "progress", stage: "expert_council", pct: 0.8, msg: "Cross-expert deliberation..." })
-    for (let i = 0; i < experts.length; i += BATCH) {
-      const batch = experts.slice(i, i + BATCH)
-      await Promise.all(batch.map(expert =>
-        runCrossDeliberation(topicId, runId, expert, experts, topic.models.expert_council,
-          (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: 0.9, msg })
-        )
-      ))
-    }
-
-    log.expert("Stage 5/6: EXPERT COUNCIL complete")
-    emit(topicId, { type: "stage_complete", stage: "expert_council" })
-
-    // Stage 6: Verdict
-    await updateTopicStatus(topicId, "verdict")
-    log.verdict("Stage 6/6: VERDICT SYNTHESIS starting (fresh)")
-    emit(topicId, { type: "progress", stage: "verdict", pct: 0, msg: "Synthesizing verdict..." })
-
-    const councilOutput = await runVerdictSynthesizer(
-      topicId, runId, experts, sessionId, topic.models.verdict,
-      (msg) => emit(topicId, { type: "progress", stage: "verdict", pct: 0.5, msg })
+    const councilOutput = await runScenarioScorer(
+      topicId, runId, sessionId, topic.models.expert_council,
+      (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: 0.5, msg })
     )
 
     await createVersion(topicId, {
@@ -335,7 +249,6 @@ export async function runReanalysis(topicId: string): Promise<{ run_id: string; 
     return { run_id: runId, status: "complete" }
   } catch (e) {
     log.error("PIPELINE", "Re-analysis FAILED", e)
-    // Reset status to stale so user can retry
     await updateTopicStatus(topicId, "stale")
     emit(topicId, { type: "error", message: String(e) })
     return { run_id: runId, status: `error: ${e}` }
