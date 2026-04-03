@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { ChevronDown, ChevronRight, Search, AlertTriangle, ExternalLink, Plug } from "lucide-react"
+import { ChevronDown, ChevronRight, Search, AlertTriangle, ExternalLink, Plug, RotateCcw } from "lucide-react"
 import { useNavigate, useParams } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -53,6 +53,18 @@ const TASK_CATEGORIES: Array<{ key: string; label: string; description: string }
   { key: "expert_council", label: "Expert Council", description: "Expert analysis and synthesis." },
   { key: "verdict", label: "Verdict", description: "Final scoring and verdict synthesis." },
 ]
+
+const PIPELINE_DEFAULTS = {
+  forum_rounds: 3,
+  expert_count: 6,
+  clue_search_depth: 3,
+  forum_max_turns: 50,
+  language: "en",
+  auto_refresh_clues: false,
+  refresh_interval_hours: 24,
+}
+
+const LANGUAGE_OPTIONS = ["en", "fa", "ar", "he", "tr", "ru", "fr", "es"]
 
 const DEFAULT_MODELS: Record<string, string> = {
   data_gathering: "claude-haiku-4-5-20251001",
@@ -274,6 +286,9 @@ function SettingsPanel({ title, description, active }: { title: string; descript
   if (title === "System Prompts") {
     return <PromptsPanel active={active} />
   }
+  if (title === "Pipeline") {
+    return <PipelinePanel active={active} />
+  }
   return (
     <Card className={cn("border-border/70 bg-card/80", active && "ring-1 ring-primary/30")}>
       <CardHeader>
@@ -290,6 +305,140 @@ function SettingsPanel({ title, description, active }: { title: string; descript
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+function PipelinePanel({ active }: { active: boolean }) {
+  const [settings, setSettings] = useState(PIPELINE_DEFAULTS)
+  const [customTopics, setCustomTopics] = useState<Array<{ id: string; title: string; settings: Record<string, unknown> }>>([])
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    void (async () => {
+      const topics = await api.topics.list()
+      const custom = topics.filter(topic => Object.keys(topic.settings || {}).length > 0)
+      setCustomTopics(custom.map(topic => ({ id: topic.id, title: topic.title, settings: topic.settings })))
+    })()
+  }, [])
+
+  const validate = (next = settings) => {
+    const nextErrors: Record<string, string> = {}
+    const check = (key: keyof typeof PIPELINE_DEFAULTS, min: number, max: number) => {
+      const value = Number(next[key])
+      if (!Number.isInteger(value) || value < min || value > max) nextErrors[key] = `Must be between ${min} and ${max}`
+    }
+    check("forum_rounds", 1, 5)
+    check("expert_count", 2, 8)
+    check("clue_search_depth", 1, 10)
+    check("forum_max_turns", 10, 100)
+    check("refresh_interval_hours", 1, 168)
+    if (!String(next.language || "").trim()) nextErrors.language = "Language is required"
+    setErrors(nextErrors)
+    return Object.keys(nextErrors).length === 0
+  }
+
+  const save = async () => {
+    if (!validate()) return
+    setSaving(true)
+    try {
+      await api.settings.update(settings)
+      setMessage("Saved pipeline settings.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const reset = () => {
+    setSettings(PIPELINE_DEFAULTS)
+    setErrors({})
+    setMessage("Reset to defaults.")
+  }
+
+  const updateNumber = (key: keyof typeof PIPELINE_DEFAULTS, value: string) => {
+    const parsed = value === "" ? value : Number(value)
+    const next = { ...settings, [key]: parsed }
+    setSettings(next)
+    validate(next)
+  }
+
+  return (
+    <Card className={cn("border-border/70 bg-card/80", active && "ring-1 ring-primary/30")}>
+      <CardHeader>
+        <CardTitle>Pipeline</CardTitle>
+        <CardDescription>Configure global analysis defaults and review topic-specific overrides.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <SettingField label="Forum rounds" error={errors.forum_rounds}>
+            <Input type="number" min={1} max={5} value={String(settings.forum_rounds)} onChange={e => updateNumber("forum_rounds", e.target.value)} />
+          </SettingField>
+          <SettingField label="Expert count" error={errors.expert_count}>
+            <Input type="number" min={2} max={8} value={String(settings.expert_count)} onChange={e => updateNumber("expert_count", e.target.value)} />
+          </SettingField>
+          <SettingField label="Clue search depth" error={errors.clue_search_depth}>
+            <Input type="number" min={1} max={10} value={String(settings.clue_search_depth)} onChange={e => updateNumber("clue_search_depth", e.target.value)} />
+          </SettingField>
+          <SettingField label="Forum max turns" error={errors.forum_max_turns}>
+            <Input type="number" min={10} max={100} value={String(settings.forum_max_turns)} onChange={e => updateNumber("forum_max_turns", e.target.value)} />
+          </SettingField>
+          <SettingField label="Language" error={errors.language}>
+            <Select value={settings.language} onValueChange={value => setSettings(current => ({ ...current, language: value }))}>
+              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {LANGUAGE_OPTIONS.map(code => <SelectItem key={code} value={code}>{code}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </SettingField>
+          <SettingField label="Refresh interval (hours)" error={errors.refresh_interval_hours}>
+            <Input type="number" min={1} max={168} value={String(settings.refresh_interval_hours)} onChange={e => updateNumber("refresh_interval_hours", e.target.value)} />
+          </SettingField>
+        </div>
+        <div className="flex items-center justify-between rounded-lg border border-border/70 bg-background/50 p-4">
+          <div>
+            <div className="text-sm font-medium">Auto-refresh clues</div>
+            <div className="text-sm text-muted-foreground">Automatically refresh clue data on the configured interval.</div>
+          </div>
+          <input type="checkbox" checked={settings.auto_refresh_clues} onChange={e => setSettings(current => ({ ...current, auto_refresh_clues: e.target.checked }))} className="h-4 w-4" />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={() => void save()} disabled={saving}>{saving ? "Saving..." : "Save"}</Button>
+          <Button variant="outline" onClick={reset}><RotateCcw className="mr-2 size-4" />Reset to defaults</Button>
+          {message && <span className="self-center text-sm text-muted-foreground">{message}</span>}
+        </div>
+        <Separator />
+        <div className="space-y-3">
+          <div className="text-sm font-medium">Per-topic overrides</div>
+          {customTopics.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border/70 bg-background/40 p-4 text-sm text-muted-foreground">No topics with custom pipeline settings yet.</div>
+          ) : customTopics.map(topic => (
+            <div key={topic.id} className="rounded-lg border border-border/70 bg-background/50 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">{topic.title}</div>
+                  <div className="text-xs text-muted-foreground">{topic.id}</div>
+                </div>
+                <Badge variant="outline">Override active</Badge>
+              </div>
+              <div className="mt-3 grid gap-2 text-xs text-muted-foreground md:grid-cols-2 xl:grid-cols-3">
+                {Object.entries(topic.settings).map(([key, value]) => <div key={key}><span className="font-medium text-foreground">{key}:</span> {String(value)}</div>)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function SettingField({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <Label>{label}</Label>
+      {children}
+      {error && <div className="text-xs text-destructive">{error}</div>}
+    </div>
   )
 }
 

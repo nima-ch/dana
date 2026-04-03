@@ -133,9 +133,9 @@ export const api = {
       ),
   },
   settings: {
-    get: () => request<{ default_models: Record<string, string> }>("/settings"),
-    update: (data: { default_models?: Record<string, string> }) =>
-      request<{ default_models: Record<string, string> }>("/settings", { method: "PUT", body: JSON.stringify(data) }),
+    get: () => request<any>("/settings"),
+    update: (data: Record<string, unknown>) =>
+      request<any>("/settings", { method: "PUT", body: JSON.stringify(data) }),
   },
   prompts: {
     list: () => request<Array<{ name: string; path: string; content: string; agent: string; variables: string[]; stage: string }>>("/prompts"),
