@@ -1,6 +1,6 @@
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
+import { BrowserRouter, Route, Routes } from "react-router-dom"
 import { AppShell } from "./components/AppShell"
 import { ErrorBoundary } from "./components/ErrorBoundary"
 import { ThemeProvider } from "./components/theme-provider"
@@ -20,7 +20,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/topic/:id" element={<TopicView />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<div className="flex min-h-screen items-center justify-center bg-background p-6 text-center">404 — Page not found</div>} />
           </Routes>
         </BrowserRouter>
       </ThemeProvider>

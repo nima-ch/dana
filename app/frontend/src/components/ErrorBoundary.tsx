@@ -12,7 +12,15 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.hasError) {
-      return <div className="flex min-h-screen items-center justify-center bg-background p-6 text-center text-foreground">An unexpected error occurred.</div>
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-background p-6 text-center text-foreground">
+          <div className="max-w-md space-y-3 rounded-xl border border-border bg-card p-6 shadow-sm">
+            <h1 className="text-lg font-semibold">Can’t load Dana right now</h1>
+            <p className="text-sm text-muted-foreground">The app encountered a connection problem or unexpected error. Please check that the backend is running and try again.</p>
+            <p className="text-xs text-muted-foreground">{this.state.message}</p>
+          </div>
+        </div>
+      )
     }
     return this.props.children
   }

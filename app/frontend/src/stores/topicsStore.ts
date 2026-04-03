@@ -9,6 +9,7 @@ interface TopicsStore {
   fetch: () => Promise<void>
   create: (title: string, description: string) => Promise<Topic>
   delete: (id: string) => Promise<void>
+  upsertTopic: (topic: Topic) => void
 }
 
 export const useTopicsStore = create<TopicsStore>((set) => ({
@@ -16,6 +17,7 @@ export const useTopicsStore = create<TopicsStore>((set) => ({
   loading: false,
   error: null,
   setTopics: (topics) => set({ topics }),
+  upsertTopic: (topic) => set(s => ({ topics: [topic, ...s.topics.filter(t => t.id !== topic.id)] })),
 
   fetch: async () => {
     set({ loading: true, error: null })
@@ -23,13 +25,13 @@ export const useTopicsStore = create<TopicsStore>((set) => ({
       const topics = await api.topics.list()
       set({ topics, loading: false })
     } catch (e) {
-      set({ error: String(e), loading: false })
+      set({ error: e instanceof Error ? e.message : String(e), loading: false })
     }
   },
 
   create: async (title, description) => {
     const topic = await api.topics.create({ title, description })
-    set(s => ({ topics: [topic, ...s.topics] }))
+    set(s => ({ topics: [topic, ...s.topics.filter(t => t.id !== topic.id)] }))
     return topic
   },
 
