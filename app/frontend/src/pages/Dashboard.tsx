@@ -3,7 +3,6 @@ import { useTopicsStore } from "../stores/topicsStore"
 import { TopicCard } from "../components/Dashboard/TopicCard"
 import { NewTopicDialog } from "../components/Dashboard/NewTopicDialog"
 import { GlobalSettingsDialog } from "../components/Dashboard/GlobalSettingsDialog"
-import { ThemeToggle } from "../components/theme-toggle"
 
 export function Dashboard() {
   const { topics, loading, error, fetch, create, delete: deleteTopic } = useTopicsStore()
@@ -13,34 +12,7 @@ export function Dashboard() {
   useEffect(() => { void fetch() }, [fetch])
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border/70 bg-card/80 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground font-semibold shadow-sm">D</div>
-            <div>
-              <h1 className="text-base font-semibold leading-tight">Dana</h1>
-              <p className="text-xs text-muted-foreground leading-tight">Geopolitical & Scenario Analysis</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <ThemeToggle />
-            <button
-              className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
-              onClick={() => setShowSettings(true)}
-            >
-              Global Settings
-            </button>
-            <button
-              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:opacity-90"
-              onClick={() => setShowDialog(true)}
-            >
-              + New Topic
-            </button>
-          </div>
-        </div>
-      </header>
-
+    <>
       <main className="mx-auto max-w-6xl px-6 py-8">
         {loading && (
           <div className="flex items-center justify-center gap-2 py-20 text-muted-foreground">
@@ -82,9 +54,8 @@ export function Dashboard() {
           </>
         )}
       </main>
-
       {showDialog && <NewTopicDialog onClose={() => setShowDialog(false)} onCreate={create} />}
       {showSettings && <GlobalSettingsDialog onClose={() => setShowSettings(false)} />}
-    </div>
+    </>
   )
 }

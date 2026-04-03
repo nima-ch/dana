@@ -5,6 +5,7 @@ interface TopicsStore {
   topics: Topic[]
   loading: boolean
   error: string | null
+  setTopics: (topics: Topic[]) => void
   fetch: () => Promise<void>
   create: (title: string, description: string) => Promise<Topic>
   delete: (id: string) => Promise<void>
@@ -14,6 +15,7 @@ export const useTopicsStore = create<TopicsStore>((set) => ({
   topics: [],
   loading: false,
   error: null,
+  setTopics: (topics) => set({ topics }),
 
   fetch: async () => {
     set({ loading: true, error: null })
