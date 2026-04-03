@@ -1,6 +1,18 @@
 import { getDb } from "../database"
 
-const DEFAULT_MODELS: Record<string, string> = {
+export const TASK_CATEGORIES = [
+  "data_gathering",
+  "extraction",
+  "enrichment",
+  "delta_updates",
+  "forum_reasoning",
+  "expert_council",
+  "verdict",
+] as const
+
+export type TaskCategory = typeof TASK_CATEGORIES[number]
+
+export const DEFAULT_MODELS: Record<TaskCategory, string> = {
   data_gathering: "claude-haiku-4-5-20251001",
   extraction: "claude-haiku-4-5-20251001",
   enrichment: "claude-sonnet-4-6",
