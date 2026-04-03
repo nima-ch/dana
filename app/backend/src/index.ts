@@ -1,4 +1,6 @@
 import { Elysia } from "elysia"
+import { join } from "path"
+import { existsSync } from "fs"
 import { cors } from "@elysiajs/cors"
 import { swagger } from "@elysiajs/swagger"
 import { initDb } from "./db/database"
@@ -14,6 +16,16 @@ import { promptsRouter } from "./routes/prompts"
 import { providersRouter } from "./routes/providers"
 import { agentToolsRouter } from "./routes/agentTools"
 import { fetchAvailableModels } from "./llm/proxyClient"
+
+const DIST_DIR = join(import.meta.dir, "../../frontend/dist")
+
+function serveStatic(filePath: string) {
+  if (!existsSync(filePath)) {
+    return new Response("Not found", { status: 404 })
+  }
+  return new Response(Bun.file(filePath).stream())
+}
+
 
 initDb()
 
@@ -34,6 +46,16 @@ const app = new Elysia()
   .get("/health", () => ({ status: "ok" }))
   .get("/api/models", async () => {
     return fetchAvailableModels()
+  })
+  .get("/assets/*", ({ path }) => {
+    const filePath = join(DIST_DIR, path.replace(/^\/assets\//, "assets/"))
+    return serveStatic(filePath)
+  })
+  .get("/favicon.svg", () => serveStatic(join(DIST_DIR, "favicon.svg")))
+  .get("/icons.svg", () => serveStatic(join(DIST_DIR, "icons.svg")))
+  .get("/*", ({ path }) => {
+    if (path.startsWith("/api/")) return new Response("Not found", { status: 404 })
+    return serveStatic(join(DIST_DIR, "index.html"))
   })
   .listen(Number(process.env.PORT) || 3000)
 
