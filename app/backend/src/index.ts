@@ -12,6 +12,7 @@ import { expertCouncilRouter } from "./routes/expertCouncil"
 import { settingsRouter } from "./routes/settings"
 import { promptsRouter } from "./routes/prompts"
 import { providersRouter } from "./routes/providers"
+import { agentToolsRouter } from "./routes/agentTools"
 import { fetchAvailableModels } from "./llm/proxyClient"
 
 initDb()
@@ -29,6 +30,7 @@ const app = new Elysia()
   .use(settingsRouter)
   .use(promptsRouter)
   .use(providersRouter)
+  .use(agentToolsRouter)
   .get("/health", () => ({ status: "ok" }))
   .get("/api/models", async () => {
     return fetchAvailableModels()
