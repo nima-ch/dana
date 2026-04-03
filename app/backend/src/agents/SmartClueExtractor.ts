@@ -4,6 +4,7 @@ import { loadPrompt } from "../llm/promptLoader"
 import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { log } from "../utils/logger"
+import { emitThink } from "../routes/stream"
 import type { Party } from "./DiscoveryAgent"
 
 export interface ExtractedClue {
@@ -51,17 +52,30 @@ async function gatherResearch(queries: string[], topicId: string): Promise<strin
   const snippets: string[] = []
   for (const query of queries.slice(0, 3)) {
     try {
+      await new Promise(r => setTimeout(r, 400))
+      emitThink(topicId, "🔎", "Searching", query)
+      log.enrichment(`Research query: "${query}"`)
       const results = await webSearch(query, 3)
+      log.enrichment(`Research: "${query}" → ${results.length} results`)
+      emitThink(topicId, "📄", `Found ${results.length} results`, results.slice(0, 3).map(r => r.title).join(", "))
       for (const r of results.slice(0, 2)) {
         try {
+          emitThink(topicId, "🌐", "Fetching", r.title)
           const fetched = await httpFetch(r.url, topicId)
           snippets.push(`[${r.title}]\n${fetched.raw_content.slice(0, 2000)}`)
-        } catch {
+          emitThink(topicId, "✓", "Fetched", `${r.title} (${fetched.raw_content.length} chars)`)
+        } catch (fetchErr) {
+          log.enrichment(`Research fetch failed for ${r.url}: ${fetchErr instanceof Error ? fetchErr.message : fetchErr}`)
           if (r.snippet) snippets.push(`[${r.title}] ${r.snippet}`)
         }
       }
-    } catch { /* skip */ }
+    } catch (searchErr) {
+      log.enrichment(`Research search failed for "${query}": ${searchErr instanceof Error ? searchErr.message : searchErr}`)
+      emitThink(topicId, "⚠", "Search failed", searchErr instanceof Error ? searchErr.message : String(searchErr))
+    }
   }
+  log.enrichment(`Research complete: ${snippets.length} snippets, ${snippets.join("").length} chars`)
+  emitThink(topicId, "📊", "Research complete", `${snippets.length} snippets gathered`)
   return snippets.join("\n\n---\n\n").slice(0, 12000)
 }
 
@@ -225,6 +239,7 @@ export async function smartEditClue(
   domain_tags: string[]
 }> {
   log.enrichment(`Smart clue edit: researching feedback for "${currentClue.title}"`)
+  emitThink(topicId, "📝", "Smart edit started", `Editing "${currentClue.title}" — ${feedback.slice(0, 80)}`)
 
   // Research based on feedback
   const research = await gatherResearch([
@@ -232,6 +247,7 @@ export async function smartEditClue(
     `${topicTitle} ${feedback.slice(0, 80)}`,
   ], topicId)
 
+  emitThink(topicId, "🤖", "Applying edits", `Sending to ${model} with research context`)
   const raw = await chatCompletionText({
     model,
     messages: [
@@ -264,6 +280,7 @@ Update the clue. Output ONLY valid JSON.`,
   const updated = JSON.parse(match[0])
 
   log.enrichment(`Smart clue edit complete: "${updated.title}"`)
+  emitThink(topicId, "✅", "Smart edit complete", `Updated: "${updated.title}"`)
   return updated
 }
 

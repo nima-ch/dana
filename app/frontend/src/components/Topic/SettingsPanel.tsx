@@ -7,8 +7,7 @@ const TASK_CATEGORIES = [
   { key: "enrichment", label: "Enrichment", desc: "Discovery, Enrichment, Weight" },
   { key: "delta_updates", label: "Delta Updates", desc: "Delta reps, delta experts" },
   { key: "forum_reasoning", label: "Forum Reasoning", desc: "Representatives, Forum, Devil's Advocate" },
-  { key: "expert_council", label: "Expert Council", desc: "Expert analysis, cross-deliberation" },
-  { key: "verdict", label: "Verdict", desc: "VerdictSynthesizer" },
+  { key: "expert_council", label: "Scenario Scoring", desc: "Evidence-based scenario probability ranking" },
 ]
 
 interface Props {
@@ -48,7 +47,6 @@ export function SettingsPanel({ topic, onClose, onSave }: Props) {
       delta_updates: "claude-sonnet-4-6",
       forum_reasoning: "claude-opus-4-6",
       expert_council: "claude-opus-4-6",
-      verdict: "claude-opus-4-6",
     })
   }
 

@@ -12,6 +12,13 @@ export type PipelineFeedItem =
   | { id: string; type: "expert_assessment"; expert: string; domain: string; summary: string; ts: number }
   | { id: string; type: "verdict_content"; headline: string; scenarios?: { title: string; probability: number }[]; ts: number }
 
+export interface ActiveOperation {
+  topicId: string
+  type: string
+  label: string
+  events: PipelineFeedItem[]
+}
+
 interface TopicPipelineState {
   items: PipelineFeedItem[]
   liveStages: Record<string, number>
@@ -19,8 +26,11 @@ interface TopicPipelineState {
 
 interface PipelineStore {
   sessions: Record<string, TopicPipelineState>
+  activeOperation: ActiveOperation | null
   resetTopic: (topicId: string) => void
   pushEvent: (topicId: string, event: SSEEvent) => void
+  startOperation: (topicId: string, type: string, label: string) => void
+  finishOperation: () => void
 }
 
 function normalizeEvent(id: string, event: SSEEvent): PipelineFeedItem {
@@ -37,30 +47,54 @@ function normalizeEvent(id: string, event: SSEEvent): PipelineFeedItem {
   return { id, ts, type: "verdict_content", headline: event.headline, scenarios: event.scenarios ?? [] }
 }
 
+function uid() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
 export const usePipelineStore = create<PipelineStore>((set) => ({
   sessions: {},
+  activeOperation: null,
+
   resetTopic: (topicId) => set((state) => ({
     sessions: {
       ...state.sessions,
       [topicId]: { items: [], liveStages: {} },
     },
   })),
+
+  startOperation: (topicId, type, label) => set(() => ({
+    activeOperation: { topicId, type, label, events: [] },
+  })),
+
+  finishOperation: () => set(() => ({
+    activeOperation: null,
+  })),
+
   pushEvent: (topicId, event) => {
     if (event.type === "ping") return
     set((state) => {
+      const id = uid()
+      const item = normalizeEvent(id, event)
+
+      // Push to persistent session feed
       const current = state.sessions[topicId] ?? { items: [], liveStages: {} }
-      const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
       const nextStages = { ...current.liveStages }
       if (event.type === "progress") nextStages[event.stage] = event.pct
       if (event.type === "stage_complete") nextStages[event.stage] = 100
+      const nextSession = {
+        items: [...current.items.slice(-99), item],
+        liveStages: nextStages,
+      }
+
+      // Also push to active operation if it matches
+      const op = state.activeOperation
+      const nextOp = op && op.topicId === topicId
+        ? { ...op, events: [...op.events, item] }
+        : op
+
       return {
-        sessions: {
-          ...state.sessions,
-          [topicId]: {
-            items: [...current.items.slice(-99), normalizeEvent(id, event)],
-            liveStages: nextStages,
-          },
-        },
+        sessions: { ...state.sessions, [topicId]: nextSession },
+        activeOperation: nextOp,
       }
     })
   },

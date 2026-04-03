@@ -16,17 +16,28 @@ async function gatherResearch(queries: string[], topicId: string): Promise<strin
   for (const query of queries.slice(0, 3)) {
     try {
       await new Promise(r => setTimeout(r, 400))
+      emitThink(topicId, "🔎", "Searching", query)
+      log.discovery(`Research query: "${query}"`)
       const results = await webSearch(query, 3)
+      log.discovery(`Research: "${query}" → ${results.length} results`)
+      emitThink(topicId, "📄", `Found ${results.length} results`, results.slice(0, 3).map(r => r.title).join(", "))
       for (const r of results.slice(0, 2)) {
         try {
+          emitThink(topicId, "🌐", "Fetching", r.title)
           const fetched = await httpFetch(r.url, topicId)
           snippets.push(`[${r.title}]\n${fetched.raw_content.slice(0, 2000)}`)
-        } catch {
+          emitThink(topicId, "✓", "Fetched", `${r.title} (${fetched.raw_content.length} chars)`)
+        } catch (fetchErr) {
+          log.discovery(`Research fetch failed for ${r.url}: ${fetchErr instanceof Error ? fetchErr.message : fetchErr}`)
           if (r.snippet) snippets.push(`[${r.title}] ${r.snippet}`)
         }
       }
-    } catch { /* skip */ }
+    } catch (searchErr) {
+      log.discovery(`Research search failed for "${query}": ${searchErr instanceof Error ? searchErr.message : searchErr}`)
+      emitThink(topicId, "⚠", "Search failed", searchErr instanceof Error ? searchErr.message : String(searchErr))
+    }
   }
+  log.discovery(`Research complete: ${snippets.length} snippets, ${snippets.join("").length} chars`)
   return snippets.join("\n\n---\n\n").slice(0, 12000)
 }
 

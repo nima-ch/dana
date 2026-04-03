@@ -51,8 +51,7 @@ const TASK_CATEGORIES: Array<{ key: string; label: string; description: string }
   { key: "enrichment", label: "Enrichment", description: "Discovery, enrichment, and weighting." },
   { key: "delta_updates", label: "Delta Updates", description: "Incremental refresh and delta analysis." },
   { key: "forum_reasoning", label: "Forum Reasoning", description: "Forum debate and representative reasoning." },
-  { key: "expert_council", label: "Expert Council", description: "Expert analysis and synthesis." },
-  { key: "verdict", label: "Verdict", description: "Final scoring and verdict synthesis." },
+  { key: "expert_council", label: "Scenario Scoring", description: "Evidence-based scenario probability ranking and final verdict." },
 ]
 
 const PIPELINE_DEFAULTS = {
@@ -74,7 +73,6 @@ const DEFAULT_MODELS: Record<string, string> = {
   delta_updates: "claude-sonnet-4-6",
   forum_reasoning: "claude-opus-4-6",
   expert_council: "claude-opus-4-6",
-  verdict: "claude-opus-4-6",
 }
 
 function readStoredTab(): TabKey {

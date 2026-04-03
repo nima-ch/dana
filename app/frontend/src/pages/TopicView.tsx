@@ -4,12 +4,13 @@ import { api, type Topic } from "@/api/client"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { PipelineActivityFeed } from "@/components/Pipeline/PipelineActivityFeed"
+import { OperationModal } from "@/components/Pipeline/OperationModal"
 import { PartiesPanel } from "@/components/Topic/PartiesPanel"
 import { CluesPanel } from "@/components/Topic/CluesPanel"
+import { usePipelineStore } from "@/stores/pipelineStore"
 
 const TAB_SLUGS = ["overview", "parties", "evidence", "forum"] as const
 
@@ -23,7 +24,6 @@ export function TopicView() {
   const activeTab = tabFromSlug(params.get("tab"))
   const [topic, setTopic] = useState<Topic | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [panel, setPanel] = useState<string | null>(null)
 
   useEffect(() => {
     if (!id) return
@@ -31,26 +31,35 @@ export function TopicView() {
     api.topics.get(id).then(setTopic).catch((e) => setError(e instanceof Error ? e.message : String(e)))
   }, [id])
 
-  async function handlePipelineAction(action: "discover" | "analyze" | "reanalyze" | "update") {
+  const startOp = usePipelineStore((s) => s.startOperation)
+  const finishOp = usePipelineStore((s) => s.finishOperation)
+
+  const refreshTopic = () => {
     if (!id) return
-    if (action === "discover") {
-      await api.pipeline.discover(id)
-      setTopic(current => current ? { ...current, status: "discovery" } : current)
-      return
-    }
-    if (action === "analyze") {
-      await api.pipeline.analyze(id)
-      setTopic(current => current ? { ...current, status: "enrichment" } : current)
-      return
-    }
-    if (action === "reanalyze") {
-      await api.pipeline.reanalyze(id)
-      setTopic(current => current ? { ...current, status: "discovery" } : current)
-      return
-    }
-    if (action === "update") {
-      await api.pipeline.update(id)
-      setTopic(current => current ? { ...current, status: "discovery" } : current)
+    api.topics.get(id).then(setTopic).catch(() => {})
+  }
+
+  async function handlePipelineAction(action: "discover" | "enrich" | "analyze" | "reanalyze") {
+    if (!id) return
+    const labels: Record<string, string> = { discover: "Discovery", enrich: "Enrichment", analyze: "Analysis", reanalyze: "Re-analysis" }
+    startOp(id, action, labels[action] ?? action)
+    try {
+      if (action === "discover") {
+        await api.pipeline.discover(id)
+        setTopic(current => current ? { ...current, status: "discovery" } : current)
+      } else if (action === "enrich") {
+        await api.pipeline.enrich(id)
+        setTopic(current => current ? { ...current, status: "enrichment" } : current)
+      } else if (action === "analyze") {
+        await api.pipeline.analyze(id)
+        setTopic(current => current ? { ...current, status: "weight" } : current)
+      } else if (action === "reanalyze") {
+        await api.pipeline.reanalyze(id)
+        setTopic(current => current ? { ...current, status: "weight" } : current)
+      }
+    } finally {
+      finishOp()
+      refreshTopic()
     }
   }
 
@@ -61,9 +70,9 @@ export function TopicView() {
   const pipelineFeed = <PipelineActivityFeed topicId={id} status={topic.status} active={topic.status !== "draft" && topic.status !== "complete"} onAction={handlePipelineAction} />
   const content = {
     overview: <div className="space-y-4"><Card><CardHeader><CardTitle>Overview</CardTitle><CardDescription>{topic.description || "No description yet."}</CardDescription></CardHeader><CardContent><div className="grid gap-3 sm:grid-cols-3"><Meta label="Status" value={topic.status} /><Meta label="Version" value={`v${topic.current_version}`} /><Meta label="Topic ID" value={topic.id} /></div></CardContent></Card>{pipelineFeed}</div>,
-    parties: <div className="space-y-4">{pipelineFeed}<PartiesPanel topicId={id} status={topic.status} /></div>,
-    evidence: <div className="space-y-4">{pipelineFeed}<CluesPanel topicId={id} status={topic.status} /></div>,
-    forum: <div className="space-y-4">{pipelineFeed}<TabEmpty title="Forum" description="No forum session loaded yet." /></div>,
+    parties: <PartiesPanel topicId={id} status={topic.status} />,
+    evidence: <CluesPanel topicId={id} />,
+    forum: <TabEmpty title="Forum" description="No forum session loaded yet." />,
   }
 
   return (
@@ -76,7 +85,6 @@ export function TopicView() {
           </div>
           <p className="max-w-3xl text-sm text-muted-foreground">{topic.description || "No description yet."}</p>
         </div>
-        <Button variant="outline" onClick={() => setPanel("party")}>Open detail panel</Button>
       </div>
 
       <Tabs value={activeTab} onValueChange={(value) => setParams(value === "overview" ? {} : { tab: value })}>
@@ -89,17 +97,7 @@ export function TopicView() {
         {TAB_SLUGS.map(slug => <TabsContent key={slug} value={slug} className="mt-4">{content[slug]}</TabsContent>)}
       </Tabs>
 
-      <Sheet open={panel !== null} onOpenChange={(open) => !open && setPanel(null)}>
-        <SheetContent side="right" className="w-[420px] sm:max-w-[420px]">
-          <SheetHeader>
-            <SheetTitle>{panel === "clue" ? "Clue detail" : "Party profile"}</SheetTitle>
-            <SheetDescription>Contextual detail panel for the workspace.</SheetDescription>
-          </SheetHeader>
-          <div className="space-y-3 p-4 text-sm text-muted-foreground">
-            {panel === "clue" ? <><div className="rounded-lg border bg-card p-3"><div className="font-medium text-foreground">clue-001</div><div>Placeholder clue details while data loads.</div></div></> : <><div className="rounded-lg border bg-card p-3"><div className="font-medium text-foreground">Sample Party</div><div>Placeholder party profile while data loads.</div></div></>}
-          </div>
-        </SheetContent>
-      </Sheet>
+      <OperationModal />
     </div>
   )
 }

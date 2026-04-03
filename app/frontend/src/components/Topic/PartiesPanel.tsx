@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { AlertCircle, ChevronDown, ChevronRight, Loader2, Pencil, Plus, Search, Sparkles, SplitSquareVertical, Trash2, Users } from "lucide-react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { AlertCircle, ChevronDown, ChevronRight, Pencil, Plus, Search, SplitSquareVertical, Trash2, Users } from "lucide-react"
 import { api } from "@/api/client"
-import { useSSE } from "@/hooks/useSSE"
+import { usePipelineStore } from "@/stores/pipelineStore"
 import { RadarChart } from "@/components/Common/RadarChart"
 import { ConfirmationBanner } from "@/components/Topic/ConfirmationBanner"
 import { Badge } from "@/components/ui/badge"
@@ -255,54 +255,6 @@ function PartyCard({
   )
 }
 
-function SmartEditDialog({ topicId, party, busy, feedback, onFeedbackChange, onApply, onClose }: {
-  topicId: string
-  party: Party | null
-  busy: boolean
-  feedback: string
-  onFeedbackChange: (v: string) => void
-  onApply: () => void | Promise<void>
-  onClose: () => void
-}) {
-  const [events, setEvents] = useState<{ id: string; label: string; detail?: string }[]>([])
-  const scrollRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => { if (!party) setEvents([]) }, [party])
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }) }, [events])
-
-  useSSE(busy && party ? topicId : null, (event) => {
-    if (event.type === "think") {
-      setEvents((prev) => [...prev, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, label: event.label, detail: event.detail }])
-    }
-  })
-
-  return (
-    <Dialog open={Boolean(party)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Smart edit</DialogTitle>
-          <DialogDescription>Give feedback for {party?.name}.</DialogDescription>
-        </DialogHeader>
-        <Textarea value={feedback} onChange={(e) => onFeedbackChange(e.target.value)} placeholder="What should change?" className="min-h-28" disabled={busy} />
-        {events.length > 0 && (
-          <div ref={scrollRef} className="max-h-40 space-y-1.5 overflow-y-auto rounded-lg border border-border bg-muted/30 p-3">
-            {events.map((evt) => (
-              <div key={evt.id} className="flex items-start gap-2 text-xs">
-                {busy ? <Loader2 className="mt-0.5 size-3 shrink-0 animate-spin text-primary" /> : <Sparkles className="mt-0.5 size-3 shrink-0 text-primary" />}
-                <div><span className="font-medium">{evt.label}</span>{evt.detail && <span className="ml-1 text-muted-foreground">{evt.detail}</span>}</div>
-              </div>
-            ))}
-          </div>
-        )}
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button onClick={() => void onApply()} disabled={busy || !feedback.trim()}>{busy ? "Working..." : "Apply"}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 interface PartiesPanelProps {
   topicId: string
   status: string
@@ -311,6 +263,8 @@ interface PartiesPanelProps {
 }
 
 export function PartiesPanel({ topicId, status, onApprove, approveLoading }: PartiesPanelProps) {
+  const startOp = usePipelineStore((s) => s.startOperation)
+  const finishOp = usePipelineStore((s) => s.finishOperation)
   const [parties, setParties] = useState<Party[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -382,16 +336,16 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
   const handleSmartAdd = async () => {
     if (!smartAddName.trim()) return
     setActionBusy(true)
-    const previous = parties
+    setSmartAddOpen(false)
+    startOp(topicId, "smart-add", `Smart add: ${smartAddName.trim()}`)
     try {
       await api.parties.smartAdd(topicId, smartAddName.trim())
       await load()
       setSmartAddName("")
-      setSmartAddOpen(false)
     } catch (err) {
-      setParties(previous)
       setError(err instanceof Error ? err.message : "Smart add failed")
     } finally {
+      finishOp()
       setActionBusy(false)
     }
   }
@@ -399,14 +353,16 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
   const handleSmartEdit = async () => {
     if (!smartEditParty || !smartEditFeedback.trim()) return
     setActionBusy(true)
+    setSmartEditParty(null)
+    startOp(topicId, "smart-edit", `Smart edit: ${smartEditParty.name}`)
     try {
       await api.parties.smartEdit(topicId, smartEditParty.id, smartEditFeedback.trim())
       await load()
-      setSmartEditParty(null)
       setSmartEditFeedback("")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Smart edit failed")
     } finally {
+      finishOp()
       setActionBusy(false)
     }
   }
@@ -435,14 +391,17 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
   const handleSplit = async () => {
     if (!splitParty) return
     setSplitBusy(true)
+    const partyName = splitParty.name
+    setSplitParty(null)
+    startOp(topicId, "split", `Split: ${partyName}`)
     try {
       await api.parties.split(topicId, splitParty.id, splitNames.filter(Boolean).map((name) => ({ name })))
       await load()
-      setSplitParty(null)
       setSplitNames(["", ""])
     } catch (err) {
       setError(err instanceof Error ? err.message : "Split failed")
     } finally {
+      finishOp()
       setSplitBusy(false)
     }
   }
@@ -451,14 +410,17 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
     const sourceIds = Array.from(selectedIds)
     if (sourceIds.length < 2) return
     setMergeBusy(true)
+    setMergeOpen(false)
+    const names = sourceIds.map((id) => parties.find((party) => party.id === id)?.name).filter(Boolean).join(" + ")
+    startOp(topicId, "merge", `Merge: ${names}`)
     try {
-      await api.parties.merge(topicId, sourceIds, { name: sourceIds.map((id) => parties.find((party) => party.id === id)?.name).filter(Boolean).join(" + ") })
+      await api.parties.merge(topicId, sourceIds, { name: names })
       setSelectedIds(new Set())
-      setMergeOpen(false)
       await load()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Merge failed")
     } finally {
+      finishOp()
       setMergeBusy(false)
     }
   }
@@ -572,15 +534,19 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
         </DialogContent>
       </Dialog>
 
-      <SmartEditDialog
-        topicId={topicId}
-        party={smartEditParty}
-        busy={actionBusy}
-        onApply={handleSmartEdit}
-        feedback={smartEditFeedback}
-        onFeedbackChange={setSmartEditFeedback}
-        onClose={() => setSmartEditParty(null)}
-      />
+      <Dialog open={Boolean(smartEditParty)} onOpenChange={(open) => !open && setSmartEditParty(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Smart edit</DialogTitle>
+            <DialogDescription>Give feedback for {smartEditParty?.name}.</DialogDescription>
+          </DialogHeader>
+          <Textarea value={smartEditFeedback} onChange={(e) => setSmartEditFeedback(e.target.value)} placeholder="What should change?" className="min-h-28" />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSmartEditParty(null)}>Cancel</Button>
+            <Button onClick={() => void handleSmartEdit()} disabled={!smartEditFeedback.trim()}>Apply</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(deleteParty)} onOpenChange={(open) => !open && setDeleteParty(null)}>
         <DialogContent>

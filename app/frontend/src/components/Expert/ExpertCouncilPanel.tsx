@@ -65,7 +65,7 @@ export function ExpertCouncilPanel({ topicId, version }: { topicId: string; vers
       .sort((a, b) => b.probability - a.probability)
   }, [council])
 
-  if (loading) return <div className="py-12 text-center text-sm text-muted-foreground">Loading expert council…</div>
+  if (loading) return <div className="py-12 text-center text-sm text-muted-foreground">Loading scenario scoring…</div>
   if (!council || !council.deliberations.length) return <EmptyState />
 
   const activeExpert = council.deliberations.find((expert) => expert.expert_id === activeExpertId) ?? council.deliberations[0]
@@ -74,7 +74,7 @@ export function ExpertCouncilPanel({ topicId, version }: { topicId: string; vers
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">Expert council</p>
+          <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">Scenario scoring</p>
           <h2 className="text-xl font-semibold">Per-expert assessments</h2>
           <CardDescription>Switch between expert deliberations to compare scenario views.</CardDescription>
         </div>
@@ -163,5 +163,5 @@ function TagList({ title, values, tone = "blue" }: { title: string; values: stri
 }
 
 function EmptyState() {
-  return <Card><CardContent className="flex min-h-64 flex-col items-center justify-center py-12 text-center"><div className="text-lg font-semibold">No expert council data available yet.</div><p className="mt-2 max-w-md text-sm text-muted-foreground">Expert deliberations and aggregated probabilities will appear here once analysis completes.</p></CardContent></Card>
+  return <Card><CardContent className="flex min-h-64 flex-col items-center justify-center py-12 text-center"><div className="text-lg font-semibold">No scoring data available yet.</div><p className="mt-2 max-w-md text-sm text-muted-foreground">Scenario probabilities and the final verdict will appear here once analysis completes.</p></CardContent></Card>
 }
