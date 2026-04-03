@@ -137,6 +137,19 @@ export const api = {
     update: (data: { default_models?: Record<string, string> }) =>
       request<{ default_models: Record<string, string> }>("/settings", { method: "PUT", body: JSON.stringify(data) }),
   },
+  prompts: {
+    list: () => request<Array<{ name: string; path: string; content: string; agent: string; variables: string[]; stage: string }>>("/prompts"),
+    get: (name: string) => request<{ name: string; path: string; content: string; agent: string; variables: string[]; stage: string }>(`/prompts/${encodeURIComponent(name)}`),
+    update: (name: string, content: string) =>
+      request<{ name: string; path: string; content: string; agent: string; variables: string[]; stage: string }>(`/prompts/${encodeURIComponent(name)}`, {
+        method: "PUT",
+        body: JSON.stringify({ content }),
+      }),
+    reset: (name: string) =>
+      request<{ name: string; path: string; content: string; agent: string; variables: string[]; stage: string }>(`/prompts/${encodeURIComponent(name)}/reset`, {
+        method: "POST",
+      }),
+  },
   providers: {
     list: () => request<{ providers: Array<{ provider: string; label: string; status: string; account: string | null; credential_file: string }> }>("/providers"),
     login: (provider: string) => request<{ provider: string; oauth_url: string | null; status: string }>("/providers/login", { method: "POST", body: JSON.stringify({ provider }) }),

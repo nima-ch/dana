@@ -10,6 +10,7 @@ import { forumRouter } from "./routes/forum"
 import { pipelineRouter } from "./routes/pipeline"
 import { expertCouncilRouter } from "./routes/expertCouncil"
 import { settingsRouter } from "./routes/settings"
+import { promptsRouter } from "./routes/prompts"
 import { providersRouter } from "./routes/providers"
 import { fetchAvailableModels } from "./llm/proxyClient"
 
@@ -26,6 +27,7 @@ const app = new Elysia()
   .use(pipelineRouter)
   .use(expertCouncilRouter)
   .use(settingsRouter)
+  .use(promptsRouter)
   .use(providersRouter)
   .get("/health", () => ({ status: "ok" }))
   .get("/api/models", async () => {

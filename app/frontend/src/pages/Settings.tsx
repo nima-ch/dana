@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { Search, AlertTriangle, ExternalLink, Plug } from "lucide-react"
+import { ChevronDown, ChevronRight, Search, AlertTriangle, ExternalLink, Plug } from "lucide-react"
 import { useNavigate, useParams } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -11,6 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { api } from "@/api/client"
 
@@ -270,6 +271,9 @@ function ProvidersPanel({ active }: { active: boolean }) {
 }
 
 function SettingsPanel({ title, description, active }: { title: string; description: string; active: boolean }) {
+  if (title === "System Prompts") {
+    return <PromptsPanel active={active} />
+  }
   return (
     <Card className={cn("border-border/70 bg-card/80", active && "ring-1 ring-primary/30")}>
       <CardHeader>
@@ -284,6 +288,172 @@ function SettingsPanel({ title, description, active }: { title: string; descript
           <ShellCard title="Deep links" body="Direct routes open the matching tab immediately." />
           <ShellCard title="Navigation" body="Sidebar Settings link lands on the default shell." />
         </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+type PromptItem = {
+  name: string
+  path: string
+  content: string
+  agent: string
+  variables: string[]
+  stage: string
+}
+
+function PromptsPanel({ active }: { active: boolean }) {
+  const [prompts, setPrompts] = useState<PromptItem[]>([])
+  const [expandedStages, setExpandedStages] = useState<Record<string, boolean>>({})
+  const [selectedPrompt, setSelectedPrompt] = useState<string | null>(null)
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+
+  const loadPrompts = async () => {
+    setLoading(true)
+    try {
+      const data = await api.prompts.list()
+      setPrompts(data)
+      setExpandedStages(current => {
+        const next = { ...current }
+        for (const stage of Array.from(new Set(data.map(item => item.stage)))) {
+          if (next[stage] === undefined) next[stage] = true
+        }
+        return next
+      })
+      setDrafts(current => {
+        const next = { ...current }
+        for (const prompt of data) {
+          if (next[prompt.name] === undefined) next[prompt.name] = prompt.content
+        }
+        return next
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { void loadPrompts() }, [])
+
+  const stages = useMemo(() => {
+    const grouped = new Map<string, PromptItem[]>()
+    for (const prompt of prompts) {
+      if (!grouped.has(prompt.stage)) grouped.set(prompt.stage, [])
+      grouped.get(prompt.stage)!.push(prompt)
+    }
+    return Array.from(grouped.entries())
+  }, [prompts])
+
+  const selected = prompts.find(prompt => prompt.name === selectedPrompt) ?? null
+  const draft = selected ? drafts[selected.name] ?? selected.content : ""
+  const dirty = !!selected && draft !== selected.content
+
+  const toggleStage = (stage: string) => setExpandedStages(current => ({ ...current, [stage]: !current[stage] }))
+
+  const insertVariable = (variable: string) => {
+    if (!selected) return
+    setDrafts(current => {
+      const nextValue = `${current[selected.name] ?? selected.content}${current[selected.name]?.endsWith(" ") ? "" : " "}{${variable}}`
+      return { ...current, [selected.name]: nextValue }
+    })
+  }
+
+  const savePrompt = async () => {
+    if (!selected) return
+    setSaving(selected.name)
+    try {
+      const updated = await api.prompts.update(selected.name, draft)
+      setPrompts(current => current.map(prompt => prompt.name === updated.name ? updated : prompt))
+      setDrafts(current => ({ ...current, [updated.name]: updated.content }))
+      setMessage("Saved changes.")
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  const resetPrompt = async () => {
+    if (!selected) return
+    setSaving(`${selected.name}:reset`)
+    try {
+      const updated = await api.prompts.reset(selected.name)
+      setPrompts(current => current.map(prompt => prompt.name === updated.name ? updated : prompt))
+      setDrafts(current => ({ ...current, [updated.name]: updated.content }))
+      setMessage("Restored default prompt.")
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  return (
+    <Card className={cn("border-border/70 bg-card/80", active && "ring-1 ring-primary/30")}>
+      <CardHeader>
+        <CardTitle>System Prompts</CardTitle>
+        <CardDescription>Edit stage-grouped prompt templates with inline preview and variable chips.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {loading ? <div className="text-sm text-muted-foreground">Loading prompts…</div> : null}
+        {stages.map(([stage, items]) => (
+          <div key={stage} className="rounded-lg border border-border/70 bg-background/50">
+            <button type="button" onClick={() => toggleStage(stage)} className="flex w-full items-center justify-between px-4 py-3 text-left">
+              <div>
+                <div className="font-medium capitalize">{stage}</div>
+                <div className="text-xs text-muted-foreground">{items.length} prompt{items.length === 1 ? "" : "s"}</div>
+              </div>
+              {expandedStages[stage] ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+            </button>
+            {expandedStages[stage] && (
+              <div className="space-y-2 border-t border-border/70 p-3">
+                {items.map(prompt => (
+                  <button
+                    key={prompt.name}
+                    type="button"
+                    onClick={() => setSelectedPrompt(prompt.name)}
+                    className={cn("w-full rounded-md border px-3 py-2 text-left transition-colors", selectedPrompt === prompt.name ? "border-primary/50 bg-primary/5" : "border-border/70 hover:bg-accent/40")}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium">{prompt.name}</div>
+                        <div className="text-xs text-muted-foreground">{prompt.agent}</div>
+                      </div>
+                      <div className="flex flex-wrap justify-end gap-1">
+                        {prompt.variables.length === 0 ? <Badge variant="outline">No variables</Badge> : prompt.variables.map(variable => <Badge key={variable} variant="secondary">{`{${variable}}`}</Badge>)}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {selected ? (
+          <div className="rounded-lg border border-border/70 bg-background/60 p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium">{selected.name}</div>
+                <div className="text-xs text-muted-foreground">{selected.agent}</div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {selected.variables.map(variable => <Button key={variable} type="button" size="sm" variant="outline" onClick={() => insertVariable(variable)}>{`{${variable}}`}</Button>)}
+              </div>
+            </div>
+            <Textarea value={draft} onChange={e => setDrafts(current => ({ ...current, [selected.name]: e.target.value }))} className="min-h-72 font-mono text-sm" placeholder="Select a prompt to edit it." />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" onClick={() => void savePrompt()} disabled={!dirty || saving === selected.name}>{saving === selected.name ? "Saving..." : "Save"}</Button>
+              <Button type="button" variant="outline" onClick={() => void resetPrompt()} disabled={saving === `${selected.name}:reset`}>{saving === `${selected.name}:reset` ? "Resetting..." : "Reset to Default"}</Button>
+              {message && <span className="text-sm text-muted-foreground">{message}</span>}
+            </div>
+            <div className="rounded-md border border-dashed border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground">
+              Template variables are shown as chips and remain in the prompt text as `{` + "variable" + `}` tokens.
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed border-border/70 bg-background/40 p-4 text-sm text-muted-foreground">
+            Select a prompt to open the inline editor.
+          </div>
+        )}
       </CardContent>
     </Card>
   )
