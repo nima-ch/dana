@@ -1,24 +1,27 @@
 commands:
-  install_backend: cd /home/nima/dana/app/backend && /home/nima/.bun/bin/bun install
-  install_frontend: cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun install
-  install: cd /home/nima/dana/app/backend && /home/nima/.bun/bin/bun install && cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun install
-  build_frontend: cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run build
-  typecheck: cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run build
-  lint: cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run lint
-  test: cd /home/nima/dana/app/backend && /home/nima/.bun/bin/bun test tests/stream.test.ts tests/pipeline.test.ts
-  test_llm: cd /home/nima/dana/app/backend && /home/nima/.bun/bin/bun test tests/proxyClient.test.ts tests/clueProcessor.test.ts tests/weightCalculator.test.ts tests/forumAgents.test.ts
+  install: cd app/backend && bun install
+  test: cd app/backend && bun test
+  test-external: cd app/backend && bun test tests/externalTools.test.ts
+  build: cd app/frontend && bun run build
 
 services:
-  backend:
-    start: cd /home/nima/dana/app/backend && DATA_DIR=/home/nima/dana/data PROXY_BASE_URL=http://127.0.0.1:8317 PORT=3000 /home/nima/.bun/bin/bun run src/index.ts > /home/nima/dana/.logs/backend.log 2>&1 &
-    stop: lsof -ti :3000 | xargs kill 2>/dev/null || true
-    healthcheck: curl -sf http://localhost:3000/health
+  dana:
+    start: docker compose up -d dana
+    stop: docker compose down dana
+    healthcheck: curl -sf http://localhost:3000
     port: 3000
+    depends_on: [searxng]
+
+  searxng:
+    start: docker compose up -d searxng
+    stop: docker compose down searxng
+    healthcheck: curl -sf http://localhost:8080
+    port: 8080
     depends_on: []
 
-  frontend:
-    start: cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run dev > /home/nima/dana/.logs/frontend.log 2>&1 &
-    stop: lsof -ti :5173 | xargs kill 2>/dev/null || true
-    healthcheck: curl -sf http://localhost:5173
-    port: 5173
-    depends_on: [backend]
+  cli-proxy-api:
+    start: docker compose up -d cli-proxy-api 2>/dev/null || echo "standalone"
+    stop: docker stop cli-proxy-api
+    healthcheck: curl -sf http://localhost:8317
+    port: 8317
+    depends_on: []

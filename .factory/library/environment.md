@@ -1,37 +1,30 @@
 # Environment
 
-Environment variables, external dependencies, and setup notes.
-
-**What belongs here:** Required env vars, external API keys/services, dependency quirks, platform-specific notes.
-**What does NOT belong here:** Service ports/commands (use `.factory/services.yaml`).
-
----
-
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PORT` | `3000` | Backend server port |
-| `DATA_DIR` | `/home/nima/dana/data` | Data directory (SQLite DB + topic files) |
-| `PROXY_BASE_URL` | `http://127.0.0.1:8317` | CLIProxyAPI base URL |
-| `PROXY_API_KEY` | `sk-dummy` | API key for CLIProxyAPI (placeholder, auth via OAuth) |
+| Variable | Default | Purpose |
+|---|---|---|
+| PORT | 3000 | Backend listen port |
+| DATA_DIR | /data (Docker) / ./data (local) | SQLite DB + topic data |
+| PROXY_BASE_URL | http://127.0.0.1:8317 | CLIProxyAPI LLM proxy URL |
+| PROXY_API_KEY | sk-dummy | API key for proxy |
+| SEARXNG_URL | http://searxng:8080 | SearXNG search engine URL |
+| OAUTH_CALLBACK_PORT | 54545 | OAuth callback port |
 
-## External Dependencies
+## Dependencies
 
-- **CLIProxyAPI**: LLM relay proxy, runs in Docker container on host. Port 8317. Provides unified API for Claude, OpenAI, Gemini. OAuth-based authentication.
-- **Bun**: JavaScript runtime. Version 1.3.11. Located at `~/.bun/bin/bun`.
-- **SQLite**: Embedded via `bun:sqlite`. No external database process needed.
+### Backend (app/backend/package.json)
+- elysia, @elysiajs/cors, @elysiajs/swagger
+- New: cheerio, linkedom, @mozilla/readability, turndown, @types/turndown
 
-## Platform Notes
+### Frontend (app/frontend/package.json)
+- React 19, Vite, Tailwind CSS, zustand
 
-- Running on WSL2 (Ubuntu 24.04) with 32 cores, 15GB RAM
-- No sudo access available
-- Node.js installed via `fnm` for agent-browser
-- Chromium libraries in `~/.local/lib` (for agent-browser validation)
-- `LD_LIBRARY_PATH=~/.local/lib` needed for agent-browser
+## Runtime
+- Bun 1.3.11 on Alpine Linux (Docker)
+- Node.js-compatible APIs available via Bun
 
-## Package Management
-
-- Both frontend and backend use Bun as package manager
-- Frontend: `cd app/frontend && bun install`
-- Backend: `cd app/backend && bun install`
+## Docker
+- Base image: oven/bun:1-alpine
+- Ports: 3000 (app), 8317 (proxy), 8080 (SearXNG), 54545 (OAuth)
+- Volume: /data for SQLite + topic data persistence

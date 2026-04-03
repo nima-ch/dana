@@ -1,6 +1,6 @@
 ---
 name: implementation-worker
-description: Full-stack worker for frontend (React/shadcn/ui/Tailwind) and backend (Bun/Elysia) features
+description: Full-stack worker for Docker infrastructure, TypeScript tool replacement, and test updates
 ---
 
 # Implementation Worker
@@ -10,118 +10,101 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 ## When to Use This Skill
 
 Features involving:
-- React frontend components (shadcn/ui, Tailwind CSS v4, Zustand state)
-- Bun/Elysia backend API endpoints
-- SQLite database schema changes or queries
-- SSE streaming
-- Full-stack features spanning frontend + backend
+- Docker infrastructure (docker-compose.yml, SearXNG configuration, Dockerfile changes)
+- TypeScript tool implementations (webSearch.ts, httpFetch.ts replacements)
+- npm dependency management
+- Test file updates (externalTools.test.ts)
+- File deletion (manage.sh)
 
 ## Required Skills
 
-- **agent-browser**: For manual verification of UI features. Invoke when the feature has user-facing UI to verify. Use to navigate pages, interact with elements, take screenshots, and verify visual state.
+None — all work uses standard file editing tools and shell commands.
 
 ## Work Procedure
 
 ### 1. Understand the Feature
 
-Read the feature description, preconditions, expectedBehavior, and verificationSteps from features.json. Read `mission.md`, `AGENTS.md`, `.factory/library/architecture.md`, and any relevant `.factory/library/` files. Understand what this feature builds and how it fits into the system.
+Read the feature description, preconditions, expectedBehavior, and verificationSteps thoroughly. Read `AGENTS.md` for mission boundaries. Read `.factory/library/architecture.md` for system context.
 
-### 2. Investigate Existing Code
+### 2. Read Existing Code
 
-Before writing anything, read the existing code that this feature touches:
-- For frontend: read existing components in `app/frontend/src/`, the API client at `app/frontend/src/api/client.ts`, stores in `app/frontend/src/stores/`, and relevant pages.
-- For backend: read existing routes in `app/backend/src/routes/`, database queries in `app/backend/src/db/queries/`, agents in `app/backend/src/agents/`.
-- Match existing patterns, naming conventions, and code style.
+Before writing anything, read all files you will modify AND all files that import from those files. Understand the current interfaces, types, and calling patterns.
 
-### 3. Write Tests First (Red Phase)
+### 3. Write Tests First (TDD)
 
-Write failing tests BEFORE implementation:
-- **Backend tests**: Add to `app/backend/tests/` using `bun:test`. Test new API endpoints, database queries, business logic.
-- **Frontend**: If the feature has complex logic (state management, data transformation), add tests. For pure UI components, skip unit tests — verify via agent-browser instead.
-- Run tests to confirm they fail: `cd /home/nima/dana/app/backend && /home/nima/.bun/bin/bun test tests/<new-test-file>.ts`
+For TypeScript features:
+1. Read the existing test file (`app/backend/tests/externalTools.test.ts`) to understand conventions
+2. Write failing tests that cover the feature's expectedBehavior
+3. Run `cd app/backend && bun test tests/externalTools.test.ts` to confirm tests fail (red)
+4. If tests require infrastructure (SearXNG container), verify it's running first
+
+For Docker features:
+- Tests are verification commands (docker compose config, curl, etc.) — run them to establish baseline
 
 ### 4. Implement
 
-Write the implementation to make tests pass:
+Write the implementation to make tests pass. Key guidelines:
+- **Preserve interfaces exactly** — `SearchResult` and `FetchResult` types must not change
+- **Preserve function signatures exactly** — no new required parameters
+- **Use fallback pattern** — try primary, catch error, try secondary, throw if both fail
+- **Read env vars** — use `process.env.SEARXNG_URL` for SearXNG endpoint
+- **Handle errors gracefully** — network failures, timeouts, corrupted cache, empty responses
+- **Install dependencies** — add to package.json with `bun add <package>`
 
-**Frontend patterns:**
-- Use shadcn/ui components from `@/components/ui/` — check what's installed before using. If a component isn't installed, install it: `cd /home/nima/dana/app/frontend && bunx --bun shadcn@latest add <component>`
-- Use `cn()` from `@/lib/utils` for conditional classes
-- Use `@/` path aliases for imports
-- Follow existing component patterns in `app/frontend/src/components/`
-- Use Zustand stores for shared state, local useState for component-local state
-- Use the `api` object from `@/api/client.ts` for REST calls
-- Use `useSSE` hook from `@/hooks/useSSE.ts` for real-time events
-- Tailwind v4: use semantic color tokens (`bg-background`, `text-foreground`, `border-border`, etc.) — never hardcode colors
-- Dark mode: CSS variables handle theming automatically via `.dark` class. No manual dark: prefixes needed for semantic tokens.
+### 5. Verify (Green)
 
-**Backend patterns:**
-- Add routes in `app/backend/src/routes/` following existing Elysia patterns
-- Add database queries in `app/backend/src/db/queries/` following existing prepared statement patterns
-- Register new routes in `app/backend/src/index.ts`
-- Use `bun:sqlite` for database operations
-- SSE: use `emit()` and `subscribe()` from `routes/stream.ts`
-
-### 5. Run Tests (Green Phase)
-
-Run all tests to confirm they pass:
-```
-cd /home/nima/dana/app/backend && /home/nima/.bun/bin/bun test tests/topicManager.test.ts tests/storeClue.test.ts tests/stream.test.ts tests/internalTools.test.ts tests/contextBuilder.test.ts tests/stateManager.test.ts tests/forumTools.test.ts tests/pipeline.test.ts tests/expertAgent.test.ts tests/deltaPipeline.test.ts
-```
-Plus any new test files you created.
-
-### 6. Typecheck and Lint
-
-```
-cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run build
-cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run lint
+Run tests again to confirm they pass:
+```bash
+cd /home/nima/dana/app/backend && bun test tests/externalTools.test.ts
 ```
 
-Fix all errors before proceeding.
+Then run the full test suite to check for regressions:
+```bash
+cd /home/nima/dana/app/backend && bun test
+```
 
-### 7. Manual Verification with agent-browser
+### 6. Manual Verification
 
-For features with UI:
-1. Start services if not running (check ports first):
-   ```
-   # Check if backend is running
-   curl -sf http://localhost:3000/health || (cd /home/nima/dana/app/backend && DATA_DIR=/home/nima/dana/data PROXY_BASE_URL=http://127.0.0.1:8317 PORT=3000 /home/nima/.bun/bin/bun run src/index.ts > /home/nima/dana/.logs/backend.log 2>&1 &)
-   # Check if frontend is running
-   curl -sf http://localhost:5173 || (cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run dev > /home/nima/dana/.logs/frontend.log 2>&1 &)
-   ```
-2. Invoke the `agent-browser` skill
-3. Navigate to relevant pages
-4. Verify each expectedBehavior visually
-5. Take screenshots as evidence
-6. Record each check in `interactiveChecks`
+For search/fetch features:
+- Run a quick manual test: `cd /home/nima/dana/app/backend && bun -e "import { webSearch } from './src/tools/external/webSearch'; webSearch('test').then(r => console.log(JSON.stringify(r, null, 2)))"`
+- Verify results look correct (valid URLs, non-empty snippets)
 
-### 8. Commit
+For Docker features:
+- Run `docker compose config` to validate compose file
+- Run `docker compose up -d` and verify containers start
+- Test inter-container connectivity with `docker compose exec`
 
-Commit all changes with a descriptive message. Include test files, implementation files, and any config changes.
+### 7. Commit
+
+Commit with a clear message describing what was changed.
 
 ## Example Handoff
 
 ```json
 {
-  "salientSummary": "Implemented Settings page shell with 4-tab navigation (Providers, Prompts, Agents, Pipeline). Added /settings and /settings/:tab routes with lazy loading. Verified all tabs render correctly via agent-browser. Typecheck and lint pass.",
-  "whatWasImplemented": "Settings page component with shadcn/ui Tabs, route configuration in main.tsx with React.lazy, sidebar Settings link, tab-specific content panels (placeholder content for tabs not yet implemented).",
+  "salientSummary": "Replaced webSearch.ts with SearXNG primary + Brave fallback. Installed cheerio for HTML parsing. Tests pass: 8 test cases covering SearXNG results, Brave fallback, interface preservation, date extraction, and error handling.",
+  "whatWasImplemented": "Rewrote webSearch.ts to use SearXNG JSON API (SEARXNG_URL env var) as primary search engine with Brave HTML scraping as fallback. Added cheerio dependency for Brave HTML parsing. Preserved SearchResult interface and function signature exactly. All 8 consumer files compile without changes.",
   "whatWasLeftUndone": "",
   "verification": {
     "commandsRun": [
-      { "command": "cd /home/nima/dana/app/frontend && bun run build", "exitCode": 0, "observation": "TypeScript compilation and Vite build successful, no errors" },
-      { "command": "cd /home/nima/dana/app/frontend && bun run lint", "exitCode": 0, "observation": "No lint errors" },
-      { "command": "cd /home/nima/dana/app/backend && bun test tests/topicManager.test.ts tests/storeClue.test.ts tests/stream.test.ts tests/internalTools.test.ts tests/contextBuilder.test.ts tests/stateManager.test.ts tests/forumTools.test.ts tests/pipeline.test.ts tests/expertAgent.test.ts tests/deltaPipeline.test.ts", "exitCode": 0, "observation": "All 47 existing tests pass" }
+      { "command": "cd app/backend && bun test tests/externalTools.test.ts", "exitCode": 0, "observation": "12 tests pass, 0 fail" },
+      { "command": "cd app/backend && bun test", "exitCode": 0, "observation": "All 45 tests pass across 17 files" },
+      { "command": "bun -e \"import { webSearch } from './src/tools/external/webSearch'; webSearch('test').then(r => console.log(r.length))\"", "exitCode": 0, "observation": "Returns 5 results with valid URLs and snippets" }
     ],
-    "interactiveChecks": [
-      { "action": "Navigate to http://localhost:5173/settings", "observed": "Settings page loads with Providers & Models tab active. 4 tabs visible in navigation." },
-      { "action": "Click 'System Prompts' tab", "observed": "Tab switches to show prompt editor placeholder content. URL updates to /settings/prompts." },
-      { "action": "Click 'Agents & Tools' tab", "observed": "Tab switches correctly. URL updates to /settings/agents." },
-      { "action": "Navigate directly to http://localhost:5173/settings/pipeline", "observed": "Settings page loads with Pipeline tab active (deep linking works)." },
-      { "action": "Click sidebar 'Settings' link from Dashboard", "observed": "Navigates to /settings. Sidebar highlights Settings link." }
-    ]
+    "interactiveChecks": []
   },
   "tests": {
-    "added": []
+    "added": [
+      {
+        "file": "app/backend/tests/externalTools.test.ts",
+        "cases": [
+          { "name": "SearXNG returns results with correct shape", "verifies": "VAL-SEARCH-001" },
+          { "name": "respects numResults parameter", "verifies": "VAL-SEARCH-002" },
+          { "name": "falls back to Brave when SearXNG unreachable", "verifies": "VAL-SEARCH-004" },
+          { "name": "throws when both engines fail", "verifies": "VAL-SEARCH-008" }
+        ]
+      }
+    ]
   },
   "discoveredIssues": []
 }
@@ -129,8 +112,8 @@ Commit all changes with a descriptive message. Include test files, implementatio
 
 ## When to Return to Orchestrator
 
-- Feature depends on a backend API that doesn't exist yet (and isn't part of this feature)
-- shadcn/ui component behaves unexpectedly and needs architectural decision
-- Existing tests break due to unrelated changes
-- Database schema change conflicts with existing data
-- Feature scope significantly exceeds what's described
+- Feature depends on SearXNG container but it's not running and you can't start it
+- Consumer files need changes that contradict the "no consumer changes" requirement
+- New npm packages fail to install in the Bun/Alpine environment
+- Docker compose configuration requires changes to existing container (cli-proxy-api) that's out of scope
+- Existing tests fail for reasons unrelated to this feature

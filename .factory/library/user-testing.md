@@ -1,53 +1,27 @@
 # User Testing
 
-Testing surface, required testing skills/tools, and resource cost classification.
-
----
-
 ## Validation Surface
 
-**Primary surface:** Browser UI
-**Tool:** agent-browser v0.17.1
-**Setup:** Backend on port 3000, Frontend on port 5173 (Vite dev server), CLIProxyAPI on port 8317
-
-**Testing approach:**
-- Navigate to pages, interact with UI elements, take screenshots
-- Verify visual state, data display, navigation flows
-- LLM calls are mocked for validation (no real API costs)
-- Existing database with 4 topics provides real test data
-
-**Environment prerequisites:**
-- Node.js available (installed via fnm)
-- Chromium installed via `bunx playwright install chromium`
-- `LD_LIBRARY_PATH=/home/nima/.local/lib` must be set
-- agent-browser binary at `/home/nima/.factory/bin/agent-browser`
-
-**Mock data:**
-- 4 existing topics in SQLite database at `/home/nima/dana/data/dana.db`
-- Topics have parties, clues, forum sessions, expert councils, verdicts
-- No separate fixture setup needed — live database is the test fixture
+This mission's testing surface is API-level only (no browser UI testing needed):
+- **bun test** — Unit/integration tests with real HTTP calls
+- **curl** — HTTP probes from host and from within Docker containers
+- **docker compose exec** — Commands executed inside containers
 
 ## Validation Concurrency
 
-**Machine resources:** 15GB RAM, 32 CPU cores, ~12GB available
-**Per agent-browser instance:** ~350MB RAM (daemon + Chrome + renderer)
-**Dev server overhead:** ~200MB (Vite + Bun backend)
+- **Max concurrent validators:** 5
+- **Rationale:** API-level testing is lightweight. Each bun test instance uses ~100MB RAM. SearXNG container adds ~200MB. Machine has 9.5GB available RAM, 32 CPU cores. 5 concurrent validators = ~500MB additional, well within budget.
 
-**Max concurrent validators: 5**
-- 5 instances × 350MB = 1.75GB
-- Plus dev server ~200MB + system overhead ~2GB
-- Total: ~4GB of 12GB available headroom
-- Conservative limit with 70% headroom rule
+## Testing Requirements
 
-**Isolation notes:**
-- Each agent-browser instance gets its own Chrome session
-- API calls go to the same backend (shared state via SQLite)
-- SSE subscriptions are per-topic, so parallel tests on different topics are safe
-- Tests on the same topic may have state conflicts — isolate by topic
+- SearXNG container must be running for search tests
+- Jina Reader API (r.jina.ai) must be reachable for fetch tests
+- Brave search (search.brave.com) must be reachable for fallback tests
+- Tests use temp directories under /tmp/ for cache isolation
+- Tests set process.env.DATA_DIR to temp dirs to avoid touching real data
 
+## Known Constraints
 
-## Flow Validator Guidance: agent-browser
-- Use unique browser sessions per validator and stay within assigned topic/workflow scope.
-- Avoid mutating shared global settings unless the assigned assertions explicitly require it; if they do, restore prior state before finishing.
-- Prefer real existing topic data over creating/deleting shared records unless the assertions explicitly test creation/deletion flows.
-- Save screenshots and any exported evidence only inside the assigned evidence directory.
+- Brave search may rate-limit if too many tests run rapidly
+- Jina Reader free tier has ~20 RPM without API key
+- SearXNG startup takes a few seconds on first boot
