@@ -43,10 +43,10 @@ export function AppShell() {
         </nav>
 
         <div className="border-t border-border/70 p-3 space-y-3">
-          <Link to="/settings" className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm hover:bg-accent/60">
+          <NavLink to="/settings" className={({ isActive }) => cn("flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors", isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/60")}>
             <Settings size={16} />
             {!sidebarCollapsed && <span>Settings</span>}
-          </Link>
+          </NavLink>
           <div className="flex items-center justify-between px-3">
             {!sidebarCollapsed && <span className="text-sm">Theme</span>}
             <ThemeToggle />
