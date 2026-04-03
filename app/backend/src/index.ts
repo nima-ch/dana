@@ -23,7 +23,7 @@ function serveStatic(filePath: string) {
   if (!existsSync(filePath)) {
     return new Response("Not found", { status: 404 })
   }
-  return new Response(Bun.file(filePath).stream())
+  return new Response(Bun.file(filePath))
 }
 
 

@@ -1,0 +1,87 @@
+{
+  "surface": "docker-runtime",
+  "tool": "docker+http",
+  "assertions": [
+    {
+      "id": "VAL-DOCKER-001",
+      "status": "pass",
+      "evidence": "docker build -t dana-utest /home/nima/dana completed successfully and docker images reported dana-utest:latest size 233MB."
+    },
+    {
+      "id": "VAL-DOCKER-002",
+      "status": "pass",
+      "evidence": "docker run started container dana-utest-main and logs printed 'Dana available at http://localhost:3000'; container remained running."
+    },
+    {
+      "id": "VAL-DOCKER-003",
+      "status": "pass",
+      "evidence": "GET http://127.0.0.1:8080/ returned 200 with HTML containing <div id=\"root\"></div>."
+    },
+    {
+      "id": "VAL-DOCKER-004",
+      "status": "pass",
+      "evidence": "GET http://127.0.0.1:8080/health returned 200 application/json;charset=utf-8 with body {\"status\":\"ok\"}."
+    },
+    {
+      "id": "VAL-DOCKER-005",
+      "status": "fail",
+      "evidence": "Static asset URLs /assets/index-B-LYR2qN.js, /assets/index-ABSIREl5.css, and /favicon.svg returned 200 but empty Content-Type headers instead of JS/CSS/SVG MIME types."
+    },
+    {
+      "id": "VAL-DOCKER-006",
+      "status": "pass",
+      "evidence": "GET /topic/some-uuid returned 200 HTML shell while GET /api/topics returned 200 JSON array, confirming SPA fallback excludes API routes."
+    },
+    {
+      "id": "VAL-DOCKER-007",
+      "status": "pass",
+      "evidence": "Created topic docker-persistence-test-mnj2yvwu via POST /api/topics, restarted container with same dana-utest-data volume, then GET /api/topics/docker-persistence-test-mnj2yvwu returned the same topic payload."
+    },
+    {
+      "id": "VAL-DOCKER-008",
+      "status": "pass",
+      "evidence": "GET /api/models returned 200 application/json;charset=utf-8 with [] rather than a 500, even though internal CLIProxyAPI on 127.0.0.1:8317 was unreachable."
+    },
+    {
+      "id": "VAL-DOCKER-009",
+      "status": "fail",
+      "evidence": "docker inspect .State.Health.Status reported unhealthy because HEALTHCHECK runs curl but curl is not installed in the image."
+    },
+    {
+      "id": "VAL-DOCKER-010",
+      "status": "pass",
+      "evidence": "GET /api/topics returned JSON array, GET /api/settings returned JSON object with default_models, and GET /docs returned Elysia documentation HTML rather than the SPA shell."
+    },
+    {
+      "id": "VAL-DOCKER-011",
+      "status": "pass",
+      "evidence": "Running container with PORT=3101 and DATA_DIR=/custom-data served /health on port 3101 and logs showed Data: /custom-data; inspect confirmed /custom-data volume mount and env vars."
+    },
+    {
+      "id": "VAL-DOCKER-012",
+      "status": "pass",
+      "evidence": "docker stop dana-utest-main completed cleanly and, after restart on the same volume, previously created topic data was still readable."
+    },
+    {
+      "id": "VAL-DOCKER-013",
+      "status": "fail",
+      "evidence": "Container logs show CLIProxyAPI invocation fails immediately with 'flag provided but not defined: -port', yet backend still starts; internal port 8317 refused connections, so proxy does not become healthy before backend accepts requests."
+    }
+  ],
+  "frictions": [
+    "Docker runtime validation used direct docker/http commands instead of agent-browser because assertions are container/runtime focused.",
+    "Service startup is slow after restart; health endpoint became ready after 32 polling attempts in both default and custom-port runs."
+  ],
+  "blockers": [
+    "Entrypoint relies on curl for readiness checks but curl is absent from the runtime image.",
+    "Entrypoint starts CLIProxyAPI with unsupported flags (-port and -data-dir), so the bundled proxy never starts."
+  ],
+  "toolsUsed": [
+    "docker build",
+    "docker run",
+    "docker logs",
+    "docker inspect",
+    "docker stop",
+    "python urllib"
+  ]
+}

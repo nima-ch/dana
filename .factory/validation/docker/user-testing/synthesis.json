@@ -1,0 +1,40 @@
+{
+  "milestone": "docker",
+  "round": 1,
+  "status": "fail",
+  "assertionsSummary": {
+    "total": 13,
+    "passed": 10,
+    "failed": 3,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-DOCKER-001",
+    "VAL-DOCKER-002",
+    "VAL-DOCKER-003",
+    "VAL-DOCKER-004",
+    "VAL-DOCKER-006",
+    "VAL-DOCKER-007",
+    "VAL-DOCKER-008",
+    "VAL-DOCKER-010",
+    "VAL-DOCKER-011",
+    "VAL-DOCKER-012"
+  ],
+  "failedAssertions": [
+    {
+      "id": "VAL-DOCKER-005",
+      "reason": "Static asset URLs /assets/index-B-LYR2qN.js, /assets/index-ABSIREl5.css, and /favicon.svg returned 200 but empty Content-Type headers instead of JS/CSS/SVG MIME types."
+    },
+    {
+      "id": "VAL-DOCKER-009",
+      "reason": "docker inspect .State.Health.Status reported unhealthy because HEALTHCHECK runs curl but curl is not installed in the image."
+    },
+    {
+      "id": "VAL-DOCKER-013",
+      "reason": "Container logs show CLIProxyAPI invocation fails immediately with 'flag provided but not defined: -port', yet backend still starts; internal port 8317 refused connections, so proxy does not become healthy before backend accepts requests."
+    }
+  ],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null
+}

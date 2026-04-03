@@ -27,7 +27,7 @@ COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 3000 8317
-HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD curl -sf http://127.0.0.1:${PORT:-3000}/api/topics || exit 1
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD wget -qO- http://127.0.0.1:${PORT:-3000}/health || exit 1
 STOPSIGNAL SIGTERM
 VOLUME ["/data"]
 

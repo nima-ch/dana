@@ -12,13 +12,19 @@ cleanup() {
 
 trap cleanup TERM INT
 
-/usr/local/bin/CLIProxyAPI -port 8317 -data-dir "${DATA_DIR:-/data}" &
+mkdir -p "${DATA_DIR:-/data}"
+cat > /tmp/cli-proxy-config.yaml <<EOF
+port: 8317
+auth-dir: "${DATA_DIR:-/data}/.cli-proxy-api"
+EOF
+
+/usr/local/bin/CLIProxyAPI -config /tmp/cli-proxy-config.yaml &
 proxy_pid=$!
 child_pids="$child_pids $proxy_pid"
 
 i=0
 while [ "$i" -lt 30 ]; do
-  if curl -sf http://127.0.0.1:8317/v1/models >/dev/null; then
+  if wget -qO- http://127.0.0.1:8317/v1/models >/dev/null; then
     break
   fi
   i=$((i + 1))
