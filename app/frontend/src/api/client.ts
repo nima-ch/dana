@@ -137,6 +137,14 @@ export const api = {
     update: (data: { default_models?: Record<string, string> }) =>
       request<{ default_models: Record<string, string> }>("/settings", { method: "PUT", body: JSON.stringify(data) }),
   },
+  providers: {
+    list: () => request<{ providers: Array<{ provider: string; label: string; status: string; account: string | null; credential_file: string }> }>("/providers"),
+    login: (provider: string) => request<{ provider: string; oauth_url: string | null; status: string }>("/providers/login", { method: "POST", body: JSON.stringify({ provider }) }),
+    loginStatus: (provider: string) => request<{ provider: string; connected: boolean; timeout: boolean; oauth_url?: string | null; error?: string | null }>(`/providers/login/status?provider=${encodeURIComponent(provider)}`),
+    disconnect: (provider: string) => request<{ provider: string; removed: number }>(`/providers/${provider}`, { method: "DELETE" }),
+    models: () => request<{ providers: Array<{ provider: string; models: string[] }> }>("/providers/models"),
+    statuses: () => request<{ providers: Array<{ provider: string; connected: boolean; account?: string | null }> }>("/providers"),
+  },
   models: {
     list: () => request<{ id: string }[]>("/models"),
   },
