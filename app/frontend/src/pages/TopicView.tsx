@@ -1,3 +1,6 @@
+import { useParams } from "react-router-dom"
+
 export function TopicView() {
-  return <div className="min-h-screen bg-background text-foreground p-6">Topic workspace placeholder</div>
+  const { id } = useParams()
+  return <div className="min-h-screen bg-background p-6 text-foreground">Topic workspace placeholder for {id}</div>
 }

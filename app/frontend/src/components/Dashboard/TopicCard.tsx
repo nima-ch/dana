@@ -19,7 +19,7 @@ export function TopicCard({ topic, onDelete }: { topic: Topic; onDelete: (id: st
         </div>
       </Link>
       <div className="mt-4 flex justify-end">
-        <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => void onDelete(topic.id)}>Delete</Button>
+        <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={(e) => { e.preventDefault(); e.stopPropagation(); void onDelete(topic.id) }}>Delete</Button>
       </div>
     </article>
   )

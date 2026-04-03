@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Settings } from "lucide-react"
+import { ChevronLeft, ChevronRight, Search, Settings } from "lucide-react"
 import { Link, NavLink, Outlet, useLocation, useParams } from "react-router-dom"
 import { ThemeToggle } from "./theme-toggle"
 import { useTopicsStore } from "../stores/topicsStore"
@@ -58,7 +58,11 @@ export function AppShell() {
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Link to="/" className="hover:text-foreground">Dashboard</Link>
             <span>/</span>
-            {location.pathname.startsWith("/topic/") ? <span className="text-foreground">{activeLabel}</span> : <span className="text-foreground">{activeLabel}</span>}
+            <span className="text-foreground">{activeLabel}</span>
+          </div>
+          <div className="ml-auto flex items-center gap-2 rounded-full border border-border/70 bg-background px-3 py-2 text-muted-foreground">
+            <Search size={14} />
+            <span className="text-sm">Search</span>
           </div>
         </header>
         <main className="min-w-0 flex-1 overflow-auto"><Outlet /></main>

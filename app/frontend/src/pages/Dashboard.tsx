@@ -1,18 +1,15 @@
 import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { Loader2, Plus, Settings2 } from "lucide-react"
+import { Loader2, Plus } from "lucide-react"
 import { useTopicsStore } from "../stores/topicsStore"
 import { TopicCard } from "../components/Dashboard/TopicCard"
 import { NewTopicDialog } from "../components/Dashboard/NewTopicDialog"
-import { GlobalSettingsDialog } from "../components/Dashboard/GlobalSettingsDialog"
 import { Button } from "@/components/ui/button"
 
 export function Dashboard() {
   const navigate = useNavigate()
   const { topics, loading, error, fetch, create, delete: deleteTopic } = useTopicsStore()
   const [showDialog, setShowDialog] = useState(false)
-  const [showSettings] = useState(false)
-
   useEffect(() => { void fetch() }, [fetch])
 
   return (
@@ -23,7 +20,6 @@ export function Dashboard() {
           <p className="text-sm text-muted-foreground">Manage your geopolitical analyses.</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline"><Settings2 className="mr-2 h-4 w-4" /> Settings</Button>
           <Button onClick={() => setShowDialog(true)}><Plus className="mr-2 h-4 w-4" /> New Analysis</Button>
         </div>
       </div>
@@ -44,7 +40,6 @@ export function Dashboard() {
       )}
 
       <NewTopicDialog open={showDialog} onOpenChange={setShowDialog} onCreate={async (title, description) => { const topic = await create(title, description); navigate(`/topic/${topic.id}`) }} />
-      {showSettings && <GlobalSettingsDialog />}
     </main>
   )
 }
