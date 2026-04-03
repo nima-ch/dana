@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { Navigate, useParams, useSearchParams } from "react-router-dom"
 import { api, type Topic } from "@/api/client"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { PipelineActivityFeed } from "@/components/Pipeline/PipelineActivityFeed"
 
 const TAB_SLUGS = ["overview", "parties", "evidence", "forum", "analysis"] as const
 
@@ -28,20 +29,25 @@ export function TopicView() {
     api.topics.get(id).then(setTopic).catch((e) => setError(e instanceof Error ? e.message : String(e)))
   }, [id])
 
-  const content = useMemo(() => {
-    if (!topic) return null
-    return {
-      overview: <Card><CardHeader><CardTitle>Overview</CardTitle><CardDescription>{topic.description || "No description yet."}</CardDescription></CardHeader><CardContent><div className="grid gap-3 sm:grid-cols-3"><Meta label="Status" value={topic.status} /><Meta label="Version" value={`v${topic.current_version}`} /><Meta label="Topic ID" value={topic.id} /></div></CardContent></Card>,
-      parties: <TabEmpty title="Parties" description="No party data loaded yet." action="Open party profile" onAction={() => setPanel("party")} />,
-      evidence: <TabEmpty title="Evidence" description="No evidence loaded yet." action="Open clue detail" onAction={() => setPanel("clue")} />,
-      forum: <TabEmpty title="Forum" description="No forum session loaded yet." />,
-      analysis: <TabEmpty title="Analysis" description={topic.status === "draft" ? "Empty state for new topics." : "No analysis data available yet."} />,
-    }
-  }, [topic])
+  async function handlePipelineAction(action: "discover" | "analyze" | "reanalyze" | "update") {
+    if (!id) return
+    if (action === "discover") await api.pipeline.discover(id)
+    if (action === "analyze") await api.pipeline.analyze(id)
+    if (action === "reanalyze") await api.pipeline.reanalyze(id)
+    if (action === "update") await api.pipeline.update(id)
+  }
 
   if (error) return <div className="p-6 text-sm text-destructive">{error}</div>
   if (!id) return <Navigate to="/" replace />
   if (!topic) return <div className="p-6 text-sm text-muted-foreground">Loading topic…</div>
+
+  const content = {
+    overview: <Card><CardHeader><CardTitle>Overview</CardTitle><CardDescription>{topic.description || "No description yet."}</CardDescription></CardHeader><CardContent><div className="grid gap-3 sm:grid-cols-3"><Meta label="Status" value={topic.status} /><Meta label="Version" value={`v${topic.current_version}`} /><Meta label="Topic ID" value={topic.id} /></div></CardContent></Card>,
+    parties: <TabEmpty title="Parties" description="No party data loaded yet." action="Open party profile" onAction={() => setPanel("party")} />,
+    evidence: <TabEmpty title="Evidence" description="No evidence loaded yet." action="Open clue detail" onAction={() => setPanel("clue")} />,
+    forum: <TabEmpty title="Forum" description="No forum session loaded yet." />,
+    analysis: <div className="space-y-4"><TabEmpty title="Analysis" description={topic.status === "draft" ? "Start discovery to begin the pipeline." : "No analysis data available yet."} /><PipelineActivityFeed topicId={id} status={topic.status} active={topic.status !== "draft" && topic.status !== "complete"} onAction={handlePipelineAction} /></div>,
+  }
 
   return (
     <div className="space-y-6 p-6">
@@ -64,7 +70,7 @@ export function TopicView() {
           <TabsTrigger value="forum">Forum</TabsTrigger>
           <TabsTrigger value="analysis">Analysis</TabsTrigger>
         </TabsList>
-        {TAB_SLUGS.map(slug => <TabsContent key={slug} value={slug} className="mt-4">{content?.[slug]}</TabsContent>)}
+        {TAB_SLUGS.map(slug => <TabsContent key={slug} value={slug} className="mt-4">{content[slug]}</TabsContent>)}
       </Tabs>
 
       <Sheet open={panel !== null} onOpenChange={(open) => !open && setPanel(null)}>
