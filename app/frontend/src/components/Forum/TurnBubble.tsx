@@ -36,13 +36,13 @@ function parseStructuredFromStatement(turn: Turn): Turn {
       if (posMatch) position = posMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")
 
       const evMatch = cleaned.match(/"evidence"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"challenges)/s)
-      if (evMatch) try { evidence = JSON.parse(evMatch[1]) } catch {}
+      if (evMatch) try { evidence = JSON.parse(evMatch[1]) } catch { evidence = undefined }
 
       const chMatch = cleaned.match(/"challenges"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"concessions)/s)
-      if (chMatch) try { challenges = JSON.parse(chMatch[1]) } catch {}
+      if (chMatch) try { challenges = JSON.parse(chMatch[1]) } catch { challenges = undefined }
 
       const coMatch = cleaned.match(/"concessions"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"(?:statement|scenario))/s)
-      if (coMatch) try { concessions = JSON.parse(coMatch[1]) } catch {}
+      if (coMatch) try { concessions = JSON.parse(coMatch[1]) } catch { concessions = undefined }
 
       const seMatch = cleaned.match(/"scenario_endorsement"\s*:\s*"((?:[^"\\]|\\.)*)"/s)
       if (seMatch) scenario_endorsement = seMatch[1].replace(/\\"/g, '"')

@@ -118,7 +118,7 @@ export function AnalysisProgressView({
           // If statement looks like JSON (raw or in markdown fences), parse structured fields
           if (typeof rawStatement === "string" && (!position || !evidence.length)) {
             // Strip markdown code fences
-            let cleaned = rawStatement.replace(/```json\s*/gi, "").replace(/```\s*/g, "")
+            const cleaned = rawStatement.replace(/```json\s*/gi, "").replace(/```\s*/g, "")
             try {
               // Try full JSON parse first
               const jsonMatch = cleaned.match(/\{[\s\S]+\}/)
@@ -140,15 +140,15 @@ export function AnalysisProgressView({
                 }
                 if (!evidence.length) {
                   const evMatch = cleaned.match(/"evidence"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"challenges|$)/s)
-                  if (evMatch) try { evidence = JSON.parse(evMatch[1]) } catch {}
+                  if (evMatch) try { evidence = JSON.parse(evMatch[1]) } catch { evidence = [] }
                 }
                 if (!challenges.length) {
                   const chMatch = cleaned.match(/"challenges"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"concessions|$)/s)
-                  if (chMatch) try { challenges = JSON.parse(chMatch[1]) } catch {}
+                  if (chMatch) try { challenges = JSON.parse(chMatch[1]) } catch { challenges = [] }
                 }
                 if (!concessions.length) {
                   const coMatch = cleaned.match(/"concessions"\s*:\s*(\[[\s\S]*?\])\s*(?:,\s*"statement|$)/s)
-                  if (coMatch) try { concessions = JSON.parse(coMatch[1]) } catch {}
+                  if (coMatch) try { concessions = JSON.parse(coMatch[1]) } catch { concessions = [] }
                 }
                 const stmtMatch = cleaned.match(/"statement"\s*:\s*"((?:[^"\\]|\\.)*)/)
                 if (stmtMatch) rawStatement = stmtMatch[1].replace(/\\"/g, '"').replace(/\\n/g, "\n")

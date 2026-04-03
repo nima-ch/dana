@@ -113,7 +113,7 @@ function PartyCard({
     : "bg-gray-100 text-gray-600"
 
   const handleSave = () => {
-    const { id, auto_discovered, user_verified, ...fields } = draft
+    const { id: _id, auto_discovered: _auto_discovered, user_verified: _user_verified, ...fields } = draft
     onUpdate(party.id, fields)
     setEditing(false)
   }

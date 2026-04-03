@@ -3,38 +3,36 @@ import { useTopicsStore } from "../stores/topicsStore"
 import { TopicCard } from "../components/Dashboard/TopicCard"
 import { NewTopicDialog } from "../components/Dashboard/NewTopicDialog"
 import { GlobalSettingsDialog } from "../components/Dashboard/GlobalSettingsDialog"
+import { ThemeToggle } from "../components/theme-toggle"
 
 export function Dashboard() {
   const { topics, loading, error, fetch, create, delete: deleteTopic } = useTopicsStore()
   const [showDialog, setShowDialog] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
 
-  useEffect(() => { fetch() }, [])
+  useEffect(() => { void fetch() }, [fetch])
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-100 shadow-sm">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="border-b border-border/70 bg-card/80 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center shrink-0">
-              <span className="text-white text-sm font-bold">D</span>
-            </div>
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground font-semibold shadow-sm">D</div>
             <div>
-              <h1 className="text-base font-bold text-gray-900 leading-tight">Dana</h1>
-              <p className="text-[10px] text-gray-400 leading-tight">Geopolitical & Scenario Analysis</p>
+              <h1 className="text-base font-semibold leading-tight">Dana</h1>
+              <p className="text-xs text-muted-foreground leading-tight">Geopolitical & Scenario Analysis</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <ThemeToggle />
             <button
-              className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              className="rounded-md border border-border bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground"
               onClick={() => setShowSettings(true)}
-              title="Global Settings"
             >
-              ⚙
+              Global Settings
             </button>
             <button
-              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+              className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:opacity-90"
               onClick={() => setShowDialog(true)}
             >
               + New Topic
@@ -43,29 +41,29 @@ export function Dashboard() {
         </div>
       </header>
 
-      <main className="px-6 py-8 max-w-6xl mx-auto">
+      <main className="mx-auto max-w-6xl px-6 py-8">
         {loading && (
-          <div className="flex items-center justify-center py-20 gap-2 text-gray-400">
-            <div className="w-4 h-4 border-2 border-gray-300 border-t-blue-500 rounded-full animate-spin" />
+          <div className="flex items-center justify-center gap-2 py-20 text-muted-foreground">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted border-t-primary" />
             <span className="text-sm">Loading topics…</span>
           </div>
         )}
 
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm mb-6">
+          <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
             {error}
           </div>
         )}
 
         {!loading && topics.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-24 gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-gray-100 flex items-center justify-center text-2xl">🌍</div>
-            <div className="text-center">
-              <p className="text-gray-700 font-medium text-sm">No topics yet</p>
-              <p className="text-gray-400 text-xs mt-1">Create your first geopolitical analysis topic</p>
+          <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted text-2xl">🌍</div>
+            <div>
+              <p className="text-sm font-medium">No topics yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">Create your first geopolitical analysis topic</p>
             </div>
             <button
-              className="px-5 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+              className="rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:opacity-90"
               onClick={() => setShowDialog(true)}
             >
               Create first topic
@@ -75,24 +73,18 @@ export function Dashboard() {
 
         {topics.length > 0 && (
           <>
-            <div className="flex items-center justify-between mb-5">
-              <p className="text-xs text-gray-400">{topics.length} topic{topics.length !== 1 ? "s" : ""}</p>
+            <div className="mb-5 flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">{topics.length} topic{topics.length !== 1 ? "s" : ""}</p>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {topics.map(topic => (
-                <TopicCard key={topic.id} topic={topic} onDelete={deleteTopic} />
-              ))}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {topics.map(topic => <TopicCard key={topic.id} topic={topic} onDelete={deleteTopic} />)}
             </div>
           </>
         )}
       </main>
 
-      {showDialog && (
-        <NewTopicDialog onClose={() => setShowDialog(false)} onCreate={create} />
-      )}
-      {showSettings && (
-        <GlobalSettingsDialog onClose={() => setShowSettings(false)} />
-      )}
+      {showDialog && <NewTopicDialog onClose={() => setShowDialog(false)} onCreate={create} />}
+      {showSettings && <GlobalSettingsDialog onClose={() => setShowSettings(false)} />}
     </div>
   )
 }
