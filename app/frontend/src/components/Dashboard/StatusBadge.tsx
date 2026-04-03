@@ -1,28 +1,19 @@
-const STATUS_COLORS: Record<string, string> = {
-  draft: "bg-gray-100 text-gray-600",
-  discovery: "bg-blue-100 text-blue-700",
-  review_parties: "bg-amber-100 text-amber-700",
-  enrichment: "bg-indigo-100 text-indigo-700",
-  review_enrichment: "bg-amber-100 text-amber-700",
-  forum: "bg-purple-100 text-purple-700",
-  expert_council: "bg-yellow-100 text-yellow-700",
-  verdict: "bg-orange-100 text-orange-700",
-  complete: "bg-green-100 text-green-700",
-  stale: "bg-red-100 text-red-700",
-}
+import { Badge } from "@/components/ui/badge"
 
-const STATUS_LABELS: Record<string, string> = {
-  review_parties: "review parties",
-  review_enrichment: "review clues",
-  expert_council: "expert council",
+const STATUS_META: Record<string, { label: string; className: string }> = {
+  draft: { label: "Draft", className: "bg-muted text-muted-foreground border-border" },
+  discovery: { label: "Discovery", className: "bg-sky-500/15 text-sky-700 border-sky-500/20" },
+  review_parties: { label: "Review Parties", className: "bg-amber-500/15 text-amber-700 border-amber-500/20" },
+  enrichment: { label: "Enrichment", className: "bg-indigo-500/15 text-indigo-700 border-indigo-500/20" },
+  review_enrichment: { label: "Review Clues", className: "bg-amber-500/15 text-amber-700 border-amber-500/20" },
+  forum: { label: "Forum", className: "bg-violet-500/15 text-violet-700 border-violet-500/20" },
+  expert_council: { label: "Expert Council", className: "bg-yellow-500/15 text-yellow-700 border-yellow-500/20" },
+  verdict: { label: "Verdict", className: "bg-orange-500/15 text-orange-700 border-orange-500/20" },
+  complete: { label: "Complete", className: "bg-emerald-500/15 text-emerald-700 border-emerald-500/20" },
+  stale: { label: "Stale", className: "bg-red-500/15 text-red-700 border-red-500/20" },
 }
 
 export function StatusBadge({ status }: { status: string }) {
-  const color = STATUS_COLORS[status] ?? "bg-gray-100 text-gray-600"
-  const label = STATUS_LABELS[status] ?? status.replace("_", " ")
-  return (
-    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${color}`}>
-      {label}
-    </span>
-  )
+  const meta = STATUS_META[status] ?? { label: status.replaceAll("_", " "), className: "bg-muted text-muted-foreground border-border" }
+  return <Badge variant="outline" className={meta.className}>{meta.label}</Badge>
 }

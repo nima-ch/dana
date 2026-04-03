@@ -1,61 +1,50 @@
 import { useEffect, useState } from "react"
+import { useNavigate } from "react-router-dom"
+import { Loader2, Plus, Settings2 } from "lucide-react"
 import { useTopicsStore } from "../stores/topicsStore"
 import { TopicCard } from "../components/Dashboard/TopicCard"
 import { NewTopicDialog } from "../components/Dashboard/NewTopicDialog"
 import { GlobalSettingsDialog } from "../components/Dashboard/GlobalSettingsDialog"
+import { Button } from "@/components/ui/button"
 
 export function Dashboard() {
+  const navigate = useNavigate()
   const { topics, loading, error, fetch, create, delete: deleteTopic } = useTopicsStore()
   const [showDialog, setShowDialog] = useState(false)
-  const [showSettings, setShowSettings] = useState(false)
+  const [showSettings] = useState(false)
 
   useEffect(() => { void fetch() }, [fetch])
 
   return (
-    <>
-      <main className="mx-auto max-w-6xl px-6 py-8">
-        {loading && (
-          <div className="flex items-center justify-center gap-2 py-20 text-muted-foreground">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted border-t-primary" />
-            <span className="text-sm">Loading topics…</span>
-          </div>
-        )}
+    <main className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">Dashboard</h1>
+          <p className="text-sm text-muted-foreground">Manage your geopolitical analyses.</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline"><Settings2 className="mr-2 h-4 w-4" /> Settings</Button>
+          <Button onClick={() => setShowDialog(true)}><Plus className="mr-2 h-4 w-4" /> New Analysis</Button>
+        </div>
+      </div>
 
-        {error && (
-          <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-            {error}
-          </div>
-        )}
+      {loading && <div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading topics…</div>}
+      {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
 
-        {!loading && topics.length === 0 && (
-          <div className="flex flex-col items-center justify-center gap-4 py-24 text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted text-2xl">🌍</div>
-            <div>
-              <p className="text-sm font-medium">No topics yet</p>
-              <p className="mt-1 text-xs text-muted-foreground">Create your first geopolitical analysis topic</p>
-            </div>
-            <button
-              className="rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:opacity-90"
-              onClick={() => setShowDialog(true)}
-            >
-              Create first topic
-            </button>
-          </div>
-        )}
+      {!loading && topics.length === 0 ? (
+        <div className="flex min-h-[40vh] flex-col items-center justify-center rounded-2xl border border-dashed p-10 text-center">
+          <h2 className="text-lg font-semibold">No analyses yet</h2>
+          <p className="mt-2 text-sm text-muted-foreground">Create your first analysis to begin tracking parties, clues, and outcomes.</p>
+          <Button className="mt-6" onClick={() => setShowDialog(true)}>Create your first analysis</Button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {topics.map(topic => <div key={topic.id} onClick={() => navigate(`/topic/${topic.id}`)}><TopicCard topic={topic} onDelete={deleteTopic} /></div>)}
+        </div>
+      )}
 
-        {topics.length > 0 && (
-          <>
-            <div className="mb-5 flex items-center justify-between">
-              <p className="text-xs text-muted-foreground">{topics.length} topic{topics.length !== 1 ? "s" : ""}</p>
-            </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {topics.map(topic => <TopicCard key={topic.id} topic={topic} onDelete={deleteTopic} />)}
-            </div>
-          </>
-        )}
-      </main>
-      {showDialog && <NewTopicDialog onClose={() => setShowDialog(false)} onCreate={create} />}
-      {showSettings && <GlobalSettingsDialog onClose={() => setShowSettings(false)} />}
-    </>
+      <NewTopicDialog open={showDialog} onOpenChange={setShowDialog} onCreate={async (title, description) => { const topic = await create(title, description); navigate(`/topic/${topic.id}`) }} />
+      {showSettings && <GlobalSettingsDialog />}
+    </main>
   )
 }

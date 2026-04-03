@@ -1,71 +1,44 @@
 import { useState } from "react"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
 
-interface Props {
-  onClose: () => void
-  onCreate: (title: string, description: string) => Promise<unknown>
-}
-
-export function NewTopicDialog({ onClose, onCreate }: Props) {
+export function NewTopicDialog({ open, onOpenChange, onCreate }: { open: boolean; onOpenChange: (open: boolean) => void; onCreate: (title: string, description: string) => Promise<unknown> }) {
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false)
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!title.trim()) return
+    if (!title.trim()) return setError("Title is required")
     setLoading(true)
     setError("")
-    try {
-      await onCreate(title.trim(), description.trim())
-      onClose()
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setLoading(false)
-    }
+    try { await onCreate(title.trim(), description.trim()); onOpenChange(false) } catch (err) { setError(err instanceof Error ? err.message : String(err)) } finally { setLoading(false) }
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">New Topic</h2>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Topic / Question</label>
-            <input
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="e.g. IRI regime collapse and formation of a new Iranian state"
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-              autoFocus
-            />
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>New Analysis</DialogTitle>
+          <DialogDescription>Create a new topic to start an analysis.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Title</label>
+            <input className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={title} onChange={e => setTitle(e.target.value)} placeholder="Required" autoFocus />
+            {error && <p className="text-sm text-destructive">{error}</p>}
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-            <textarea
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-              rows={4}
-              placeholder="Provide context and scope for the analysis..."
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-            />
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Description</label>
+            <textarea className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={description} onChange={e => setDescription(e.target.value)} placeholder="Optional context" />
           </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <div className="flex justify-end gap-2">
-            <button type="button" className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900" onClick={onClose}>
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={loading || !title.trim()}
-              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-            >
-              {loading ? "Creating…" : "Create Topic"}
-            </button>
-          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" disabled={loading}>{loading ? "Creating…" : "Create Analysis"}</Button>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
