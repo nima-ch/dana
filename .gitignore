@@ -1,5 +1,5 @@
 .env
-.factory/
+.factory/settings.json
 node_modules/
 data/topics/
 data/

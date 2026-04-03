@@ -1,0 +1,24 @@
+commands:
+  install_backend: cd /home/nima/dana/app/backend && /home/nima/.bun/bin/bun install
+  install_frontend: cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun install
+  install: cd /home/nima/dana/app/backend && /home/nima/.bun/bin/bun install && cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun install
+  build_frontend: cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run build
+  typecheck: cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run build
+  lint: cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run lint
+  test: cd /home/nima/dana/app/backend && /home/nima/.bun/bin/bun test tests/topicManager.test.ts tests/storeClue.test.ts tests/stream.test.ts tests/internalTools.test.ts tests/contextBuilder.test.ts tests/stateManager.test.ts tests/forumTools.test.ts tests/pipeline.test.ts tests/expertAgent.test.ts tests/deltaPipeline.test.ts
+  test_llm: cd /home/nima/dana/app/backend && /home/nima/.bun/bin/bun test tests/proxyClient.test.ts tests/clueProcessor.test.ts tests/weightCalculator.test.ts tests/forumAgents.test.ts
+
+services:
+  backend:
+    start: cd /home/nima/dana/app/backend && DATA_DIR=/home/nima/dana/data PROXY_BASE_URL=http://127.0.0.1:8317 PORT=3000 /home/nima/.bun/bin/bun run src/index.ts > /home/nima/dana/.logs/backend.log 2>&1 &
+    stop: lsof -ti :3000 | xargs kill 2>/dev/null || true
+    healthcheck: curl -sf http://localhost:3000/health
+    port: 3000
+    depends_on: []
+
+  frontend:
+    start: cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run dev > /home/nima/dana/.logs/frontend.log 2>&1 &
+    stop: lsof -ti :5173 | xargs kill 2>/dev/null || true
+    healthcheck: curl -sf http://localhost:5173
+    port: 5173
+    depends_on: [backend]
