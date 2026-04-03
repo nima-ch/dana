@@ -158,6 +158,28 @@ export const api = {
     models: () => request<{ providers: Array<{ provider: string; models: string[] }> }>("/providers/models"),
     statuses: () => request<{ providers: Array<{ provider: string; connected: boolean; account?: string | null }> }>("/providers"),
   },
+  agents: {
+    list: () => request<any[]>("/agents"),
+    updateTools: (name: string, tools: string[]) =>
+      request<any>(`/agents/${encodeURIComponent(name)}/tools`, {
+        method: "PUT",
+        body: JSON.stringify({ tools }),
+      }),
+    updateModel: (name: string, model: string) =>
+      request<any>(`/agents/${encodeURIComponent(name)}/model`, {
+        method: "PUT",
+        body: JSON.stringify({ model }),
+      }),
+  },
+  tools: {
+    list: () => request<any[]>("/tools"),
+    create: (data: Record<string, unknown>) =>
+      request<any>("/tools", { method: "POST", body: JSON.stringify(data) }),
+    remove: (name: string) =>
+      request<{ success: boolean }>(`/tools/${encodeURIComponent(name)}`, {
+        method: "DELETE",
+      }),
+  },
   models: {
     list: () => request<{ id: string }[]>("/models"),
   },

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import type { ReactNode } from "react"
-import { ChevronDown, ChevronRight, Search, AlertTriangle, ExternalLink, Plug, RotateCcw } from "lucide-react"
+import { ChevronDown, ChevronRight, Search, AlertTriangle, ExternalLink, Plug, RotateCcw, Plus, Trash2 } from "lucide-react"
 import { useNavigate, useParams } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -128,11 +128,176 @@ export function SettingsPage() {
 
         {Object.entries(tabMap).map(([value, meta]) => (
           <TabsContent key={value} value={value} className="mt-0">
-            {value === "providers" ? <ProvidersPanel active={activeTab === value} /> : <SettingsPanel title={meta.label} description={meta.description} active={activeTab === value} />}
+            {value === "providers" ? <ProvidersPanel active={activeTab === value} /> : value === "agents" ? <AgentsToolsPanel active={activeTab === value} /> : <SettingsPanel title={meta.label} description={meta.description} active={activeTab === value} />}
           </TabsContent>
         ))}
       </Tabs>
     </div>
+  )
+}
+
+type AgentItem = {
+  name: string
+  task_category: string
+  model: string
+  tools: string[]
+}
+
+type ToolItem = {
+  name: string
+  description: string
+  schema?: string
+  custom?: boolean
+}
+
+function AgentsToolsPanel({ active }: { active: boolean }) {
+  const [agents, setAgents] = useState<AgentItem[]>([])
+  const [tools, setTools] = useState<ToolItem[]>([])
+  const [models, setModels] = useState<string[]>([])
+  const [adding, setAdding] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<ToolItem | null>(null)
+  const [customTool, setCustomTool] = useState({ name: "", description: "", endpoint: "", input_schema: "{}" })
+
+  useEffect(() => {
+    void (async () => {
+      const [agentList, toolList, modelList] = await Promise.all([api.agents.list(), api.tools.list(), api.models.list()])
+      setAgents(agentList)
+      setTools(toolList)
+      setModels(modelList.map(model => model.id))
+    })()
+  }, [])
+
+  const toggleTool = async (agent: AgentItem, tool: string) => {
+    const nextTools = agent.tools.includes(tool) ? agent.tools.filter(item => item !== tool) : [...agent.tools, tool]
+    await api.agents.updateTools(agent.name, nextTools)
+    setAgents(current => current.map(item => item.name === agent.name ? { ...item, tools: nextTools } : item))
+  }
+
+  const updateModel = async (agent: AgentItem, model: string) => {
+    await api.agents.updateModel(agent.name, model)
+    setAgents(current => current.map(item => item.name === agent.name ? { ...item, model } : item))
+  }
+
+  const createTool = async () => {
+    setAdding(true)
+    try {
+      const next = await api.tools.create(customTool)
+      setTools(current => [...current, next])
+      setCustomTool({ name: "", description: "", endpoint: "", input_schema: "{}" })
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  const removeTool = async () => {
+    if (!deleteTarget) return
+    await api.tools.remove(deleteTarget.name)
+    setTools(current => current.filter(tool => tool.name !== deleteTarget.name))
+    setDeleteTarget(null)
+  }
+
+  return (
+    <Card className={cn("border-border/70 bg-card/80", active && "ring-1 ring-primary/30")}>
+      <CardHeader>
+        <CardTitle>Agents & Tools</CardTitle>
+        <CardDescription>Toggle tool access per agent, override agent models, and manage the custom tool registry.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="grid gap-4 xl:grid-cols-2">
+          {agents.map(agent => (
+            <Card key={agent.name} className="border-border/70 bg-background/70">
+              <CardHeader className="space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-base">{agent.name}</CardTitle>
+                    <CardDescription>{agent.task_category}</CardDescription>
+                  </div>
+                  <Badge variant="outline">{agent.tools.length} tools</Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Select value={agent.model} onValueChange={value => void updateModel(agent, value)}>
+                  <SelectTrigger><SelectValue placeholder="Select model" /></SelectTrigger>
+                  <SelectContent>
+                    {models.map(model => <SelectItem key={model} value={model}>{model}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <div className="flex flex-wrap gap-2">
+                  {tools.map(tool => (
+                    <button key={tool.name} type="button" onClick={() => void toggleTool(agent, tool.name)} className={cn("rounded-full border px-3 py-1 text-xs transition-colors", agent.tools.includes(tool.name) ? "border-primary bg-primary/10 text-primary" : "border-border/70 bg-background hover:bg-accent/40")}>
+                      {tool.name}
+                    </button>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-sm font-medium">Tool registry</div>
+              <div className="text-sm text-muted-foreground">Custom tools are listed with delete confirmation and schema previews.</div>
+            </div>
+            <Dialog open={false}>
+              <Button onClick={() => setAdding(true)}><Plus className="mr-2 size-4" />Add Custom Tool</Button>
+            </Dialog>
+          </div>
+          <div className="overflow-hidden rounded-lg border border-border/70">
+            <div className="grid grid-cols-12 gap-3 border-b border-border/70 bg-muted/30 px-4 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="col-span-3">Name</div>
+              <div className="col-span-5">Description</div>
+              <div className="col-span-3">Schema</div>
+              <div className="col-span-1 text-right">Action</div>
+            </div>
+            {tools.map(tool => (
+              <div key={tool.name} className="grid grid-cols-12 gap-3 border-b border-border/70 px-4 py-3 text-sm last:border-b-0">
+                <div className="col-span-3 font-medium">{tool.name}{tool.custom ? <Badge className="ml-2" variant="secondary">Custom</Badge> : null}</div>
+                <div className="col-span-5 text-muted-foreground">{tool.description}</div>
+                <div className="col-span-3 truncate font-mono text-xs text-muted-foreground">{tool.schema ?? "—"}</div>
+                <div className="col-span-1 text-right">
+                  {tool.custom ? <Button size="icon" variant="ghost" onClick={() => setDeleteTarget(tool)}><Trash2 className="size-4" /></Button> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {adding && (
+          <Card className="border-border/70 bg-background/70">
+            <CardHeader>
+              <CardTitle className="text-base">Add Custom Tool</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3 md:grid-cols-2">
+              <Input placeholder="Name" value={customTool.name} onChange={e => setCustomTool(current => ({ ...current, name: e.target.value }))} />
+              <Input placeholder="Endpoint" value={customTool.endpoint} onChange={e => setCustomTool(current => ({ ...current, endpoint: e.target.value }))} />
+              <Input className="md:col-span-2" placeholder="Description" value={customTool.description} onChange={e => setCustomTool(current => ({ ...current, description: e.target.value }))} />
+              <Textarea className="md:col-span-2 font-mono text-xs" placeholder="Input schema JSON" value={customTool.input_schema} onChange={e => setCustomTool(current => ({ ...current, input_schema: e.target.value }))} />
+              <div className="md:col-span-2 flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setAdding(false)}>Cancel</Button>
+                <Button onClick={() => void createTool()} disabled={adding}>Save</Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {deleteTarget && (
+          <Dialog open onOpenChange={() => setDeleteTarget(null)}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Delete custom tool?</DialogTitle>
+                <DialogDescription>This removes {deleteTarget.name} from the registry. This action cannot be undone.</DialogDescription>
+              </DialogHeader>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+                <Button variant="destructive" onClick={() => void removeTool()}>Delete</Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
