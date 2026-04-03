@@ -83,10 +83,14 @@ export async function httpFetch(url: string, topicId?: string): Promise<FetchRes
     const cachePath = getCachePath(topicId, url)
     const cacheFile = Bun.file(cachePath)
     if (await cacheFile.exists()) {
-      const cached = await cacheFile.json() as FetchResult & { cached_at: string }
-      const age = Date.now() - new Date(cached.cached_at).getTime()
-      if (age < CACHE_TTL_MS) {
-        return { ...cached, cached: true }
+      try {
+        const cached = await cacheFile.json() as FetchResult & { cached_at: string }
+        const age = Date.now() - new Date(cached.cached_at).getTime()
+        if (age < CACHE_TTL_MS) {
+          return { ...cached, cached: true }
+        }
+      } catch {
+        // Corrupted cache; ignore and fetch a fresh copy
       }
     }
   }

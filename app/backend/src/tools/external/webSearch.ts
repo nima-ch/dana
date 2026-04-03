@@ -1,3 +1,5 @@
+import * as cheerio from "cheerio"
+
 export interface SearchResult {
   title: string
   url: string
@@ -5,89 +7,177 @@ export interface SearchResult {
   date?: string  // ISO date string, extracted from snippet text or URL path when detectable
 }
 
-// Uses DuckDuckGo HTML search — no API key required
 export async function webSearch(
   query: string,
   numResults: number = 5,
   dateFilter?: string
 ): Promise<SearchResult[]> {
-  const q = dateFilter ? `${query} ${dateFilter}` : query
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`
+  const searxngUrl = process.env.SEARXNG_URL || "http://searxng:8080"
 
-  const res = await fetch(url, {
+  try {
+    return await searchWithSearXNG(searxngUrl, query, numResults, dateFilter)
+  } catch (searxngError) {
+    try {
+      return await searchWithBrave(query, numResults)
+    } catch (braveError) {
+      const primaryMessage = getErrorMessage(searxngError)
+      const fallbackMessage = getErrorMessage(braveError)
+      throw new Error(
+        `webSearch failed: SearXNG error: ${primaryMessage}; Brave fallback error: ${fallbackMessage}`
+      )
+    }
+  }
+}
+
+async function searchWithSearXNG(
+  searxngBaseUrl: string,
+  query: string,
+  numResults: number,
+  dateFilter?: string
+): Promise<SearchResult[]> {
+  const url = new URL("/search", normalizeBaseUrl(searxngBaseUrl))
+  url.searchParams.set("q", query)
+  url.searchParams.set("format", "json")
+  url.searchParams.set("pageno", "1")
+
+  const timeRange = mapDateFilterToTimeRange(dateFilter)
+  if (timeRange) {
+    url.searchParams.set("time_range", timeRange)
+  }
+
+  const res = await fetch(url.toString(), {
     headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; Dana/1.0)",
-      Accept: "text/html",
+      Accept: "application/json",
+      "User-Agent": "Mozilla/5.0 (compatible; Dana/1.0; +https://dana.local)",
     },
   })
 
-  if (!res.ok) throw new Error(`webSearch failed: HTTP ${res.status}`)
-
-  const html = await res.text()
-
-  // DDG returns 202 or a JS-challenge page when rate-limiting bots — detect and retry once
-  if (!html.includes("result__a")) {
-    // Back off and retry once after a short delay
-    await new Promise(r => setTimeout(r, 1500))
-    const retry = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-      },
-    })
-    const retryHtml = await retry.text()
-    if (!retryHtml.includes("result__a")) {
-      throw new Error(`webSearch blocked: DDG returned no results (rate-limited or bot-detected)`)
-    }
-    return parseResults(retryHtml, numResults)
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} from ${url.origin}`)
   }
 
-  return parseResults(html, numResults)
+  const data = await res.json() as { results?: SearxngResult[] }
+  const results = Array.isArray(data.results) ? data.results : []
+
+  return results
+    .filter(result => typeof result.url === "string" && result.url.startsWith("http"))
+    .slice(0, numResults)
+    .map(result => {
+      const snippet = typeof result.content === "string" ? decodeHtmlEntities(result.content.trim()) : ""
+      const title = typeof result.title === "string" ? decodeHtmlEntities(result.title.trim()) : ""
+      const derivedDate = extractDate(result.url, snippet)
+      return {
+        title,
+        url: result.url,
+        snippet,
+        date: normalizePublishedDate(result.publishedDate) ?? derivedDate,
+      }
+    })
 }
 
-function parseResults(html: string, numResults: number): SearchResult[] {
+async function searchWithBrave(query: string, numResults: number): Promise<SearchResult[]> {
+  const url = new URL("https://search.brave.com/search")
+  url.searchParams.set("q", query)
+
+  const res = await fetch(url.toString(), {
+    headers: {
+      Accept: "text/html,application/xhtml+xml",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+  })
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} from Brave`)
+  }
+
+  const html = await res.text()
+  const $ = cheerio.load(html)
   const results: SearchResult[] = []
-  const resultRegex = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/g
-  const snippetRegex = /<a[^>]+class="result__snippet"[^>]*>([^<]+)<\/a>/g
 
-  const urls: string[] = []
-  const titles: string[] = []
-  const snippets: string[] = []
+  $("div[data-type='web']").each((_, element) => {
+    if (results.length >= numResults) return false
 
-  let m: RegExpExecArray | null
-  while ((m = resultRegex.exec(html)) !== null && urls.length < numResults) {
-    const href = m[1]
-    const title = m[2].trim()
-    const uddg = href.match(/uddg=([^&]+)/)
-    const actualUrl = uddg ? decodeURIComponent(uddg[1]) : href
-    if (actualUrl.startsWith("http")) {
-      urls.push(actualUrl)
-      titles.push(title)
+    const link = $(element).find("a[href^='http']").first()
+    const href = link.attr("href")
+    if (!href?.startsWith("http")) return
+
+    const title =
+      link.find("[class*='title']").first().text().trim() ||
+      link.attr("title")?.trim() ||
+      link.text().trim()
+
+    const snippet = $(element)
+      .find(".generic-snippet .content, [class*='description'], [class*='snippet-content']")
+      .first()
+      .text()
+      .replace(/\s+/g, " ")
+      .trim()
+
+    if (title) {
+      results.push({
+        title: decodeHtmlEntities(title),
+        url: href,
+        snippet: decodeHtmlEntities(snippet),
+        date: extractDate(href, snippet),
+      })
     }
-  }
+  })
 
-  let si = 0
-  while ((m = snippetRegex.exec(html)) !== null && si < urls.length) {
-    snippets.push(m[1].trim())
-    si++
-  }
-
-  for (let i = 0; i < Math.min(urls.length, numResults); i++) {
-    results.push({
-      title: titles[i] || "",
-      url: urls[i],
-      snippet: snippets[i] || "",
-      date: extractDate(urls[i], snippets[i] || ""),
-    })
+  if (results.length === 0) {
+    throw new Error("No Brave results parsed")
   }
 
   return results
 }
 
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`
+}
+
+function mapDateFilterToTimeRange(dateFilter?: string): "day" | "week" | "month" | "year" | undefined {
+  if (!dateFilter?.startsWith("after:")) return undefined
+
+  const isoDate = dateFilter.slice("after:".length)
+  const parsed = new Date(isoDate)
+  if (Number.isNaN(parsed.getTime())) return undefined
+
+  const diffDays = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / (1000 * 60 * 60 * 24)))
+  if (diffDays <= 1) return "day"
+  if (diffDays <= 7) return "week"
+  if (diffDays <= 31) return "month"
+  return "year"
+}
+
+function normalizePublishedDate(publishedDate: unknown): string | undefined {
+  if (typeof publishedDate !== "string" || !publishedDate.trim()) return undefined
+
+  const dateOnly = publishedDate.match(/\d{4}-\d{2}-\d{2}/)
+  if (dateOnly) return dateOnly[0]
+
+  const parsed = new Date(publishedDate)
+  if (Number.isNaN(parsed.getTime())) return undefined
+  return parsed.toISOString().slice(0, 10)
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 // Extract a date from the URL path or snippet text
 // Covers common patterns: /2026/03/27/, /2026-03-27, "March 27, 2026", "27 Mar 2026"
-function extractDate(url: string, snippet: string): string | undefined {
+export function extractDate(url: string, snippet: string): string | undefined {
   // URL path: /YYYY/MM/DD/ or /YYYY-MM-DD
   const urlDate = url.match(/[\/\-](\d{4})[\/\-](0[1-9]|1[0-2])[\/\-](0[1-9]|[12]\d|3[01])/)
   if (urlDate) return `${urlDate[1]}-${urlDate[2]}-${urlDate[3]}`
@@ -111,4 +201,11 @@ function extractDate(url: string, snippet: string): string | undefined {
   }
 
   return undefined
+}
+
+interface SearxngResult {
+  url: string
+  title?: string
+  content?: string
+  publishedDate?: string | null
 }
