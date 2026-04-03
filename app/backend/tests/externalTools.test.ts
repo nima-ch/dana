@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, mock } from "bun
 import { webSearch, extractDate } from "../src/tools/external/webSearch"
 import { httpFetch } from "../src/tools/external/httpFetch"
 import { timelineLookup } from "../src/tools/external/timelineLookup"
+import { scoreResult, selectBestResults, selectRecentResults } from "../src/tools/external/searchUtils"
 import { mkdir, rm, writeFile, stat } from "fs/promises"
 import { join } from "path"
 import { createHash } from "crypto"
@@ -279,6 +280,27 @@ describe("httpFetch", () => {
         sawJina = true
         throw new Error("Jina unavailable")
       }
+      if (requestUrl === "https://example.com") {
+        return new Response(
+          `
+          <!doctype html>
+          <html>
+            <head><title>Example Domain</title></head>
+            <body>
+              <main>
+                <h1>Example Domain</h1>
+                <p>This domain is for use in documentation examples without needing permission.</p>
+                <p><a href="https://iana.org/domains/example">Learn more</a></p>
+              </main>
+            </body>
+          </html>
+          `,
+          {
+            status: 200,
+            headers: { "Content-Type": "text/html" },
+          },
+        )
+      }
       return originalFetch(input as RequestInfo, init)
     }) as typeof fetch
 
@@ -415,5 +437,51 @@ describe("timelineLookup", () => {
       expect(typeof e.relevance).toBe("number")
     }
     console.log(`timelineLookup returned ${events.length} events`)
+  })
+})
+
+describe("cross-area integration", () => {
+  it("feeds webSearch URLs into httpFetch for markdown content", async () => {
+    const results = await webSearch("example domain", 3)
+    expect(results.length).toBeGreaterThan(0)
+
+    const fetched = await httpFetch(results[0].url)
+    expect(fetched.url).toBe(results[0].url)
+    expect(fetched.raw_content.length).toBeGreaterThan(50)
+    expect(fetched.raw_content).not.toMatch(/<[^>]+>/)
+    console.log(`search→fetch succeeded for ${results[0].url}`)
+  })
+})
+
+describe("searchUtils", () => {
+  it("scores recent dated results higher and keeps recent items in selections", () => {
+    const recent = {
+      title: "Fresh geopolitical briefing",
+      url: "https://example.com/fresh",
+      snippet: "Latest regional developments and analysis",
+      date: "2026-03-20",
+    }
+    const old = {
+      title: "Older geopolitical briefing",
+      url: "https://example.com/old",
+      snippet: "Latest regional developments and analysis",
+      date: "2024-01-15",
+    }
+    const undated = {
+      title: "Undated backgrounder",
+      url: "https://example.com/background",
+      snippet: "Regional overview and context",
+    }
+
+    const recentScore = scoreResult(recent, ["geopolitical", "latest"])
+    const oldScore = scoreResult(old, ["geopolitical", "latest"])
+    expect(recentScore - oldScore).toBeGreaterThanOrEqual(15)
+
+    const best = selectBestResults([old, recent, undated], ["geopolitical", "latest"], 2)
+    expect(best.some(result => result.url === recent.url)).toBe(true)
+
+    const recentOnly = selectRecentResults([old, recent, undated], ["regional"], 3, 90)
+    expect(recentOnly.some(result => result.url === recent.url)).toBe(true)
+    expect(recentOnly.some(result => result.url === old.url)).toBe(false)
   })
 })
