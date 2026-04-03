@@ -44,6 +44,7 @@ const app = new Elysia()
   .use(providersRouter)
   .use(agentToolsRouter)
   .get("/health", () => ({ status: "ok" }))
+  .get("/api/health", () => ({ status: "ok" }))
   .get("/api/models", async () => {
     return fetchAvailableModels()
   })
