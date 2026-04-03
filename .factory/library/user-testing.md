@@ -25,3 +25,11 @@ This mission's testing surface is API-level only (no browser UI testing needed):
 - Brave search may rate-limit if too many tests run rapidly
 - Jina Reader free tier has ~20 RPM without API key
 - SearXNG startup takes a few seconds on first boot
+
+## Flow Validator Guidance: api-level
+
+- Use only API-level validation surfaces for this milestone: `bun test`, host `curl`, and `docker compose exec`.
+- Reuse the shared `docker compose` stack at `http://localhost:3000` and `http://localhost:8080`; do not start alternate app instances on new ports.
+- Avoid mutating shared app state beyond temporary `/data` persistence markers and temp cache directories under `/tmp`.
+- Prefer serial execution for commands that restart containers (`docker compose down` / `up`) because they interrupt every other validator.
+- Container-internal probes should use `bun -e` for HTTP fetches because `curl` is not installed in the Dana container.

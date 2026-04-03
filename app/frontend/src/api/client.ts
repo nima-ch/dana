@@ -157,6 +157,7 @@ export const api = {
     disconnect: (provider: string) => request<{ provider: string; removed: number }>(`/providers/${provider}`, { method: "DELETE" }),
     models: () => request<{ providers: Array<{ provider: string; models: string[] }> }>("/providers/models"),
     statuses: () => request<{ providers: Array<{ provider: string; connected: boolean; account?: string | null }> }>("/providers"),
+    health: () => request<{ proxy_online: boolean; connected_providers: string[]; model_count: number; credential_files: number }>("/providers/health"),
   },
   agents: {
     list: () => request<any[]>("/agents"),

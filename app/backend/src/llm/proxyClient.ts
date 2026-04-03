@@ -102,8 +102,9 @@ export async function fetchAvailableModels(): Promise<ModelInfo[]> {
 }
 
 export function isProxyAvailable(): Promise<boolean> {
-  return fetchWithTimeout(`${PROXY_BASE_URL}/health`, {
-    method: "GET"
+  return fetchWithTimeout(`${PROXY_BASE_URL}/v1/models`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${process.env.PROXY_API_KEY || "sk-dummy"}` },
   }).then(res => res.ok).catch(() => false)
 }
 

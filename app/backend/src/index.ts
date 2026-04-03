@@ -19,11 +19,33 @@ import { fetchAvailableModels } from "./llm/proxyClient"
 
 const DIST_DIR = join(import.meta.dir, "../../frontend/dist")
 
+const MIME_TYPES: Record<string, string> = {
+  ".js": "application/javascript",
+  ".mjs": "application/javascript",
+  ".css": "text/css",
+  ".html": "text/html",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".ico": "image/x-icon",
+  ".json": "application/json",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+}
+
+function getMimeType(filePath: string): string {
+  const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase()
+  return MIME_TYPES[ext] || "application/octet-stream"
+}
+
 function serveStatic(filePath: string) {
   if (!existsSync(filePath)) {
     return new Response("Not found", { status: 404 })
   }
-  return new Response(Bun.file(filePath))
+  return new Response(Bun.file(filePath), {
+    headers: { "Content-Type": getMimeType(filePath) },
+  })
 }
 
 

@@ -1,16 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { AlertCircle, ChevronDown, ChevronRight, GripVertical, Pencil, Plus, Search, SplitSquareVertical, Trash2, Users } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { AlertCircle, ChevronDown, ChevronRight, Loader2, Pencil, Plus, Search, Sparkles, SplitSquareVertical, Trash2, Users } from "lucide-react"
 import { api } from "@/api/client"
+import { useSSE } from "@/hooks/useSSE"
 import { RadarChart } from "@/components/Common/RadarChart"
 import { ConfirmationBanner } from "@/components/Topic/ConfirmationBanner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
+
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
@@ -78,11 +79,70 @@ function bannerMessage(count: number) {
   return `Review ${count} parties before continuing analysis.`
 }
 
-function FieldValue({ value }: { value: unknown }) {
+function parseCircle(value: unknown): { visible: string[]; shadow: string[] } {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const obj = value as Record<string, unknown>
+    return {
+      visible: Array.isArray(obj.visible) ? obj.visible.map(String) : [],
+      shadow: Array.isArray(obj.shadow) ? obj.shadow.map(String) : [],
+    }
+  }
+  if (Array.isArray(value)) return { visible: value.map(String), shadow: [] }
+  if (typeof value === "string" && value.trim()) return { visible: [value], shadow: [] }
+  return { visible: [], shadow: [] }
+}
+
+function CircleDisplay({ value }: { value: unknown }) {
+  const circle = parseCircle(value)
+  return (
+    <div className="space-y-2 text-sm">
+      <div>
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Visible</span>
+        {circle.visible.length > 0 ? (
+          <ul className="mt-1 list-inside list-disc space-y-0.5 text-foreground">
+            {circle.visible.map((item, i) => <li key={i}>{item}</li>)}
+          </ul>
+        ) : (
+          <p className="mt-1 text-muted-foreground">—</p>
+        )}
+      </div>
+      <div>
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Shadow</span>
+        {circle.shadow.length > 0 ? (
+          <ul className="mt-1 list-inside list-disc space-y-0.5 text-foreground">
+            {circle.shadow.map((item, i) => <li key={i}>{item}</li>)}
+          </ul>
+        ) : (
+          <p className="mt-1 text-muted-foreground">—</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function CircleEditor({ value, onChange }: { value: unknown; onChange: (circle: { visible: string[]; shadow: string[] }) => void }) {
+  const circle = parseCircle(value)
+  return (
+    <div className="space-y-3">
+      <div>
+        <Label className="text-xs text-muted-foreground">Visible (one per line)</Label>
+        <Textarea value={circle.visible.join("\n")} onChange={(e) => onChange({ ...circle, visible: e.target.value.split("\n").filter(Boolean) })} className="mt-1 min-h-20" placeholder="Known allies, public partners..." />
+      </div>
+      <div>
+        <Label className="text-xs text-muted-foreground">Shadow (one per line)</Label>
+        <Textarea value={circle.shadow.join("\n")} onChange={(e) => onChange({ ...circle, shadow: e.target.value.split("\n").filter(Boolean) })} className="mt-1 min-h-20" placeholder="Covert supporters, proxy actors..." />
+      </div>
+    </div>
+  )
+}
+
+function FieldValue({ field, value }: { field: string; value: unknown }) {
+  if (field === "circle") return <CircleDisplay value={value} />
   return <div className="whitespace-pre-wrap text-sm text-foreground">{asText(value) || "—"}</div>
 }
 
-function PartyFieldEditor({ field, value, onChange }: { field: EditableField; value: unknown; onChange: (value: string) => void }) {
+function PartyFieldEditor({ field, value, onChange, onCircleChange }: { field: EditableField; value: unknown; onChange: (value: string) => void; onCircleChange?: (circle: { visible: string[]; shadow: string[] }) => void }) {
+  if (field === "circle" && onCircleChange) return <CircleEditor value={value} onChange={onCircleChange} />
   if (field === "means" || field === "vulnerabilities") {
     return <Textarea value={asText(value)} onChange={(e) => onChange(e.target.value)} className="min-h-24" />
   }
@@ -93,11 +153,11 @@ function PartyCard({
   party,
   expanded,
   selected,
-  editingField,
+  editing,
   draft,
   onToggleExpanded,
   onToggleSelected,
-  onEditField,
+  onStartEdit,
   onDraftChange,
   onSave,
   onCancel,
@@ -108,11 +168,11 @@ function PartyCard({
   party: Party
   expanded: boolean
   selected: boolean
-  editingField: EditableField | null
+  editing: boolean
   draft: Partial<Party>
   onToggleExpanded: () => void
   onToggleSelected: () => void
-  onEditField: (field: EditableField) => void
+  onStartEdit: () => void
   onDraftChange: (patch: Partial<Party>) => void
   onSave: () => void
   onCancel: () => void
@@ -122,83 +182,124 @@ function PartyCard({
 }) {
   const factors = safeWeightFactors(party)
   const sortedFactors = Object.entries(factors).slice(0, 5)
-  const isEditing = editingField !== null
 
   return (
-    <Card className={cn("border-border bg-card transition-colors", selected && "ring-2 ring-primary/40")}> 
-      <CardHeader className="gap-3 border-b border-border/60 pb-4">
-        <div className="flex items-start gap-3">
-          <button className="flex flex-1 items-start gap-3 text-left" onClick={onToggleExpanded}>
-            <GripVertical className="mt-1 size-4 shrink-0 text-muted-foreground" />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <CardTitle className="truncate text-base">{party.name}</CardTitle>
-                <Badge variant="outline">{formatType(party.type)}</Badge>
-                <Badge>{Math.round(weightValue(party))}</Badge>
-              </div>
-              <CardDescription className="mt-1 truncate">{party.description || "No description"}</CardDescription>
-            </div>
-          </button>
-          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            <input type="checkbox" checked={selected} onChange={onToggleSelected} />
-            Select
-          </label>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={onToggleExpanded}>
-            {expanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />} Details
-          </Button>
-          <Button variant="outline" size="sm" onClick={onSmartEdit}><Pencil className="size-4" /> Smart edit</Button>
-          <Button variant="outline" size="sm" onClick={onSplit}><SplitSquareVertical className="size-4" /> Split</Button>
-          <Button variant="destructive" size="sm" onClick={onDelete}><Trash2 className="size-4" /> Delete</Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4 pt-4">
-        <div className="grid gap-4 lg:grid-cols-[auto_1fr]">
-          <div className="rounded-lg border border-border bg-background p-3">
-            <RadarChart data={factors} size={140} color="hsl(var(--primary))" />
+    <div className={cn("rounded-lg border border-border bg-card transition-colors", selected && "ring-2 ring-primary/40")}>
+      <button className="flex w-full items-center gap-3 px-4 py-3 text-left" onClick={onToggleExpanded}>
+        <input type="checkbox" checked={selected} onChange={(e) => { e.stopPropagation(); onToggleSelected() }} onClick={(e) => e.stopPropagation()} className="size-4 shrink-0 rounded border-border" />
+        {expanded ? <ChevronDown className="size-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-sm font-medium">{party.name}</span>
+            <Badge variant="outline" className="shrink-0">{formatType(party.type)}</Badge>
+            <Badge className="shrink-0 tabular-nums">{Math.round(weightValue(party))}</Badge>
           </div>
-          <div className="space-y-2">
-            {sortedFactors.map(([key, value]) => (
-              <div key={key} className="space-y-1">
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>{DIMENSION_LABELS[key] ?? key}</span>
-                  <span>{Math.round(value)}</span>
-                </div>
-                <div className="h-2 rounded-full bg-muted">
-                  <div className="h-2 rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
-                </div>
-              </div>
-            ))}
-          </div>
+          {!expanded && party.description && (
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">{party.description}</p>
+          )}
         </div>
+      </button>
 
-        {expanded && (
+      {expanded && (
+        <div className="space-y-4 border-t border-border/60 px-4 pb-4 pt-4">
+          {party.description && <p className="text-sm text-muted-foreground">{party.description}</p>}
+
+          <div className="flex flex-wrap gap-2">
+            {!editing && <Button variant="outline" size="sm" onClick={onStartEdit}><Pencil className="size-4" /> Edit</Button>}
+            <Button variant="outline" size="sm" onClick={onSmartEdit}><Pencil className="size-4" /> Smart edit</Button>
+            <Button variant="outline" size="sm" onClick={onSplit}><SplitSquareVertical className="size-4" /> Split</Button>
+            <Button variant="destructive" size="sm" onClick={onDelete}><Trash2 className="size-4" /> Delete</Button>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-[auto_1fr]">
+            <div className="rounded-lg border border-border bg-background p-3">
+              <RadarChart data={factors} size={140} color="hsl(var(--primary))" />
+            </div>
+            <div className="space-y-2">
+              {sortedFactors.map(([key, value]) => (
+                <div key={key} className="space-y-1">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>{DIMENSION_LABELS[key] ?? key}</span>
+                    <span>{Math.round(value)}</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-muted">
+                    <div className="h-2 rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="space-y-3">
             <Separator />
             {(["name", "type", "agenda", "means", "stance", "vulnerabilities", "circle"] as EditableField[]).map((field) => (
               <div key={field} className="rounded-lg border border-border bg-background p-3">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <Label className="capitalize text-muted-foreground">{field}</Label>
-                  <Button variant="ghost" size="sm" onClick={() => onEditField(field)} disabled={isEditing && editingField !== field}>Edit</Button>
-                </div>
-                {editingField === field ? (
-                  <PartyFieldEditor field={field} value={draft[field] ?? party[field]} onChange={(value) => onDraftChange({ [field]: field === "means" || field === "vulnerabilities" ? parseArray(value) : value })} />
+                <Label className="mb-2 block capitalize text-muted-foreground">{field}</Label>
+                {editing ? (
+                  <PartyFieldEditor field={field} value={draft[field] ?? party[field]} onChange={(value) => onDraftChange({ [field]: field === "means" || field === "vulnerabilities" ? parseArray(value) : value })} onCircleChange={(circle) => onDraftChange({ circle })} />
                 ) : (
-                  <FieldValue value={party[field]} />
+                  <FieldValue field={field} value={party[field]} />
                 )}
               </div>
             ))}
-            {editingField && (
+            {editing && (
               <div className="flex gap-2">
                 <Button onClick={onSave}>Save</Button>
                 <Button variant="outline" onClick={onCancel}>Cancel</Button>
               </div>
             )}
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SmartEditDialog({ topicId, party, busy, feedback, onFeedbackChange, onApply, onClose }: {
+  topicId: string
+  party: Party | null
+  busy: boolean
+  feedback: string
+  onFeedbackChange: (v: string) => void
+  onApply: () => void | Promise<void>
+  onClose: () => void
+}) {
+  const [events, setEvents] = useState<{ id: string; label: string; detail?: string }[]>([])
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => { if (!party) setEvents([]) }, [party])
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }) }, [events])
+
+  useSSE(busy && party ? topicId : null, (event) => {
+    if (event.type === "think") {
+      setEvents((prev) => [...prev, { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, label: event.label, detail: event.detail }])
+    }
+  })
+
+  return (
+    <Dialog open={Boolean(party)} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Smart edit</DialogTitle>
+          <DialogDescription>Give feedback for {party?.name}.</DialogDescription>
+        </DialogHeader>
+        <Textarea value={feedback} onChange={(e) => onFeedbackChange(e.target.value)} placeholder="What should change?" className="min-h-28" disabled={busy} />
+        {events.length > 0 && (
+          <div ref={scrollRef} className="max-h-40 space-y-1.5 overflow-y-auto rounded-lg border border-border bg-muted/30 p-3">
+            {events.map((evt) => (
+              <div key={evt.id} className="flex items-start gap-2 text-xs">
+                {busy ? <Loader2 className="mt-0.5 size-3 shrink-0 animate-spin text-primary" /> : <Sparkles className="mt-0.5 size-3 shrink-0 text-primary" />}
+                <div><span className="font-medium">{evt.label}</span>{evt.detail && <span className="ml-1 text-muted-foreground">{evt.detail}</span>}</div>
+              </div>
+            ))}
+          </div>
         )}
-      </CardContent>
-    </Card>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={() => void onApply()} disabled={busy || !feedback.trim()}>{busy ? "Working..." : "Apply"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -217,7 +318,7 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [editingPartyId, setEditingPartyId] = useState<string | null>(null)
   const [draft, setDraft] = useState<Partial<Party>>({})
-  const [activeParty, setActiveParty] = useState<Party | null>(null)
+
   const [smartAddOpen, setSmartAddOpen] = useState(false)
   const [smartAddName, setSmartAddName] = useState("")
   const [smartEditParty, setSmartEditParty] = useState<Party | null>(null)
@@ -283,9 +384,8 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
     setActionBusy(true)
     const previous = parties
     try {
-      const created = await api.parties.smartAdd(topicId, smartAddName.trim())
+      await api.parties.smartAdd(topicId, smartAddName.trim())
       await load()
-      if (created?.id) setActiveParty(created)
       setSmartAddName("")
       setSmartAddOpen(false)
     } catch (err) {
@@ -424,7 +524,7 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
                 party={party}
                 expanded={isExpanded}
                 selected={selected}
-                editingField={editingPartyId === party.id ? (Object.keys(draft)[0] as EditableField | null) : null}
+                editing={editingPartyId === party.id}
                 draft={draft}
                 onToggleExpanded={() => {
                   setExpandedIds((current) => {
@@ -433,7 +533,6 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
                     else next.add(party.id)
                     return next
                   })
-                  setActiveParty(party)
                 }}
                 onToggleSelected={() => setSelectedIds((current) => {
                   const next = new Set(current)
@@ -441,10 +540,9 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
                   else next.add(party.id)
                   return next
                 })}
-                onEditField={(field) => {
+                onStartEdit={() => {
                   setEditingPartyId(party.id)
                   setDraft({ ...party })
-                  setDraft((current) => ({ ...current, [field]: party[field] }))
                 }}
                 onDraftChange={(patch) => setDraft((current) => ({ ...current, ...patch }))}
                 onSave={() => { void updateParty(party.id, draft) }}
@@ -458,39 +556,7 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
         </div>
       )}
 
-      <Sheet open={Boolean(activeParty)} onOpenChange={(open) => !open && setActiveParty(null)}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>{activeParty?.name}</SheetTitle>
-            <SheetDescription>{formatType(activeParty?.type)}</SheetDescription>
-          </SheetHeader>
-          <div className="px-4 pb-4 space-y-4">
-            <Separator />
-            <div className="space-y-3">
-              <div>
-                <div className="text-sm font-medium">Agenda</div>
-                <div className="text-sm text-muted-foreground">{asText(activeParty?.agenda) || "—"}</div>
-              </div>
-              <div>
-                <div className="text-sm font-medium">Means</div>
-                <div className="text-sm text-muted-foreground">{asText(activeParty?.means) || "—"}</div>
-              </div>
-              <div>
-                <div className="text-sm font-medium">Stance</div>
-                <div className="text-sm text-muted-foreground">{asText(activeParty?.stance) || "—"}</div>
-              </div>
-              <div>
-                <div className="text-sm font-medium">Vulnerabilities</div>
-                <div className="text-sm text-muted-foreground">{asText(activeParty?.vulnerabilities) || "—"}</div>
-              </div>
-              <div>
-                <div className="text-sm font-medium">Circle</div>
-                <div className="text-sm text-muted-foreground">{asText(activeParty?.circle) || "—"}</div>
-              </div>
-            </div>
-          </div>
-        </SheetContent>
-      </Sheet>
+
 
       <Dialog open={smartAddOpen} onOpenChange={setSmartAddOpen}>
         <DialogContent>
@@ -506,19 +572,15 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(smartEditParty)} onOpenChange={(open) => !open && setSmartEditParty(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Smart edit</DialogTitle>
-            <DialogDescription>Give feedback for {smartEditParty?.name}.</DialogDescription>
-          </DialogHeader>
-          <Textarea value={smartEditFeedback} onChange={(e) => setSmartEditFeedback(e.target.value)} placeholder="What should change?" className="min-h-28" />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSmartEditParty(null)}>Cancel</Button>
-            <Button onClick={() => void handleSmartEdit()} disabled={actionBusy}>Apply</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <SmartEditDialog
+        topicId={topicId}
+        party={smartEditParty}
+        busy={actionBusy}
+        onApply={handleSmartEdit}
+        feedback={smartEditFeedback}
+        onFeedbackChange={setSmartEditFeedback}
+        onClose={() => setSmartEditParty(null)}
+      />
 
       <Dialog open={Boolean(deleteParty)} onOpenChange={(open) => !open && setDeleteParty(null)}>
         <DialogContent>

@@ -8,8 +8,10 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { PipelineActivityFeed } from "@/components/Pipeline/PipelineActivityFeed"
+import { PartiesPanel } from "@/components/Topic/PartiesPanel"
+import { CluesPanel } from "@/components/Topic/CluesPanel"
 
-const TAB_SLUGS = ["overview", "parties", "evidence", "forum", "analysis"] as const
+const TAB_SLUGS = ["overview", "parties", "evidence", "forum"] as const
 
 type TabSlug = typeof TAB_SLUGS[number]
 
@@ -31,22 +33,37 @@ export function TopicView() {
 
   async function handlePipelineAction(action: "discover" | "analyze" | "reanalyze" | "update") {
     if (!id) return
-    if (action === "discover") await api.pipeline.discover(id)
-    if (action === "analyze") await api.pipeline.analyze(id)
-    if (action === "reanalyze") await api.pipeline.reanalyze(id)
-    if (action === "update") await api.pipeline.update(id)
+    if (action === "discover") {
+      await api.pipeline.discover(id)
+      setTopic(current => current ? { ...current, status: "discovery" } : current)
+      return
+    }
+    if (action === "analyze") {
+      await api.pipeline.analyze(id)
+      setTopic(current => current ? { ...current, status: "enrichment" } : current)
+      return
+    }
+    if (action === "reanalyze") {
+      await api.pipeline.reanalyze(id)
+      setTopic(current => current ? { ...current, status: "discovery" } : current)
+      return
+    }
+    if (action === "update") {
+      await api.pipeline.update(id)
+      setTopic(current => current ? { ...current, status: "discovery" } : current)
+    }
   }
 
   if (error) return <div className="p-6 text-sm text-destructive">{error}</div>
   if (!id) return <Navigate to="/" replace />
   if (!topic) return <div className="p-6 text-sm text-muted-foreground">Loading topic…</div>
 
+  const pipelineFeed = <PipelineActivityFeed topicId={id} status={topic.status} active={topic.status !== "draft" && topic.status !== "complete"} onAction={handlePipelineAction} />
   const content = {
-    overview: <Card><CardHeader><CardTitle>Overview</CardTitle><CardDescription>{topic.description || "No description yet."}</CardDescription></CardHeader><CardContent><div className="grid gap-3 sm:grid-cols-3"><Meta label="Status" value={topic.status} /><Meta label="Version" value={`v${topic.current_version}`} /><Meta label="Topic ID" value={topic.id} /></div></CardContent></Card>,
-    parties: <TabEmpty title="Parties" description="No party data loaded yet." action="Open party profile" onAction={() => setPanel("party")} />,
-    evidence: <TabEmpty title="Evidence" description="No evidence loaded yet." action="Open clue detail" onAction={() => setPanel("clue")} />,
-    forum: <TabEmpty title="Forum" description="No forum session loaded yet." />,
-    analysis: <div className="space-y-4"><TabEmpty title="Analysis" description={topic.status === "draft" ? "Start discovery to begin the pipeline." : "No analysis data available yet."} /><PipelineActivityFeed topicId={id} status={topic.status} active={topic.status !== "draft" && topic.status !== "complete"} onAction={handlePipelineAction} /></div>,
+    overview: <div className="space-y-4"><Card><CardHeader><CardTitle>Overview</CardTitle><CardDescription>{topic.description || "No description yet."}</CardDescription></CardHeader><CardContent><div className="grid gap-3 sm:grid-cols-3"><Meta label="Status" value={topic.status} /><Meta label="Version" value={`v${topic.current_version}`} /><Meta label="Topic ID" value={topic.id} /></div></CardContent></Card>{pipelineFeed}</div>,
+    parties: <div className="space-y-4">{pipelineFeed}<PartiesPanel topicId={id} status={topic.status} /></div>,
+    evidence: <div className="space-y-4">{pipelineFeed}<CluesPanel topicId={id} status={topic.status} /></div>,
+    forum: <div className="space-y-4">{pipelineFeed}<TabEmpty title="Forum" description="No forum session loaded yet." /></div>,
   }
 
   return (
@@ -63,12 +80,11 @@ export function TopicView() {
       </div>
 
       <Tabs value={activeTab} onValueChange={(value) => setParams(value === "overview" ? {} : { tab: value })}>
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="parties">Parties</TabsTrigger>
           <TabsTrigger value="evidence">Evidence</TabsTrigger>
           <TabsTrigger value="forum">Forum</TabsTrigger>
-          <TabsTrigger value="analysis">Analysis</TabsTrigger>
         </TabsList>
         {TAB_SLUGS.map(slug => <TabsContent key={slug} value={slug} className="mt-4">{content[slug]}</TabsContent>)}
       </Tabs>

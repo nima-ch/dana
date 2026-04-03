@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react"
+import { useEffect, useRef } from "react"
 
 export type SSEEvent =
   | { type: "think"; icon: string; label: string; detail?: string }
@@ -16,31 +16,39 @@ export type SSEEvent =
 export function useSSE(topicId: string | null, onEvent: (event: SSEEvent) => void) {
   const esRef = useRef<EventSource | null>(null)
   const onEventRef = useRef(onEvent)
-  onEventRef.current = onEvent
+  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const connect = useCallback(() => {
-    if (!topicId) return
-    if (esRef.current) { esRef.current.close(); esRef.current = null }
-
-    const es = new EventSource(`/api/topics/${topicId}/stream`)
-    esRef.current = es
-
-    es.onmessage = (e) => {
-      try {
-        const event = JSON.parse(e.data) as SSEEvent
-        if (event.type !== "ping") onEventRef.current(event)
-      } catch { /* ignore malformed */ }
-    }
-
-    es.onerror = () => {
-      es.close()
-      esRef.current = null
-      setTimeout(connect, 3000)
-    }
-  }, [topicId])
+  useEffect(() => { onEventRef.current = onEvent })
 
   useEffect(() => {
+    if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null }
+    if (esRef.current) { esRef.current.close(); esRef.current = null }
+    if (!topicId) return
+
+    function connect() {
+      if (esRef.current) { esRef.current.close(); esRef.current = null }
+
+      const es = new EventSource(`/api/topics/${topicId}/stream`)
+      esRef.current = es
+
+      es.onmessage = (e) => {
+        try {
+          const event = JSON.parse(e.data) as SSEEvent
+          if (event.type !== "ping") onEventRef.current(event)
+        } catch { /* ignore malformed */ }
+      }
+
+      es.onerror = () => {
+        es.close()
+        esRef.current = null
+        retryRef.current = setTimeout(connect, 3000)
+      }
+    }
+
     connect()
-    return () => { esRef.current?.close(); esRef.current = null }
-  }, [connect])
+    return () => {
+      if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null }
+      if (esRef.current) { esRef.current.close(); esRef.current = null }
+    }
+  }, [topicId])
 }

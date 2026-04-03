@@ -6,7 +6,7 @@ import { fetchAvailableModels, isProxyAvailable } from "../llm/proxyClient"
 
 const credentialsDir = () => join(process.env.DATA_DIR || "/home/nima/dana/data", ".cli-proxy-api")
 const loginTimeoutMs = Number(process.env.PROVIDER_LOGIN_TIMEOUT_MS || 120000)
-const activeLogins = new Map<string, { startedAt: number; oauthUrl?: string; done: boolean; error?: string }>()
+const activeLogins = new Map<string, { startedAt: number; oauthUrl?: string; done: boolean; error?: string; proc?: ReturnType<typeof spawn> }>()
 
 function ensureCredentialsDir() {
   mkdirSync(credentialsDir(), { recursive: true })
@@ -26,9 +26,23 @@ function normalizeProvider(provider: string) {
   return provider.toLowerCase().trim()
 }
 
+function loginFlagForProvider(provider: string) {
+  if (provider === "openai") return "codex"
+  if (provider === "gemini") return "login"
+  return provider
+}
+
 function providerFromFile(name: string) {
-  const base = name.split(".")[0]
-  return base.replace(/^(credentials-|auth-|token-)/, "")
+  const normalized = name.replace(/\.(json|yaml|yml|token)$/i, "")
+  const base = normalized.replace(/^(credentials-|auth-|token-)/, "")
+  if (base.startsWith("claude-")) return "claude"
+  if (base.startsWith("codex-") || base.startsWith("openai-") || base.startsWith("gpt-")) return "openai"
+  if (base.startsWith("gemini-") || base.startsWith("google-") || base === "google") return "gemini"
+  if (base.startsWith("qwen-")) return "qwen"
+  if (base.startsWith("kimi-")) return "kimi"
+  if (base.startsWith("iflow-")) return "iflow"
+  if (base.startsWith("antigravity-")) return "antigravity"
+  return base.split("-")[0]
 }
 
 export const providersRouter = new Elysia({ prefix: "/api/providers" })
@@ -54,9 +68,21 @@ export const providersRouter = new Elysia({ prefix: "/api/providers" })
 
     const provider = normalizeProvider(body.provider)
     ensureCredentialsDir()
-    const command = `CLIProxyAPI -${provider}-login -no-browser`
+
+    // Kill any previous login process for this provider
+    const existing = activeLogins.get(provider)
+    if (existing?.proc) {
+      try { existing.proc.kill() } catch {}
+    }
+
+    const configFlag = process.env.CLIPROXY_CONFIG ? `-config ${process.env.CLIPROXY_CONFIG}` : "-config /tmp/cli-proxy-config.yaml"
+    const callbackPort = process.env.OAUTH_CALLBACK_PORT || "54545"
+    const loginFlag = loginFlagForProvider(provider)
+    const callbackArg = loginFlag === "codex" ? "" : `-oauth-callback-port ${callbackPort} `
+    const loginArg = loginFlag === "login" ? "-login" : `-${loginFlag}-login`
+    const command = `CLIProxyAPI ${configFlag} ${callbackArg}${loginArg} -no-browser`
     const proc = spawn(command, { shell: true, env: process.env })
-    const state = { startedAt: Date.now(), done: false, oauthUrl: undefined as string | undefined, error: undefined as string | undefined }
+    const state = { startedAt: Date.now(), done: false, oauthUrl: undefined as string | undefined, error: undefined as string | undefined, proc }
     activeLogins.set(provider, state)
 
     proc.stdout.on("data", chunk => {
@@ -97,9 +123,28 @@ export const providersRouter = new Elysia({ prefix: "/api/providers" })
     const models = await fetchAvailableModels()
     const grouped = new Map<string, string[]>()
     for (const model of models) {
-      const provider = model.owned_by || model.id.split("/")[0] || "unknown"
+      const rawProvider = (model.owned_by || model.id.split("/")[0] || "unknown").toLowerCase()
+      const provider = rawProvider === "anthropic" ? "claude"
+        : rawProvider === "google" ? "gemini"
+        : rawProvider
       if (!grouped.has(provider)) grouped.set(provider, [])
       grouped.get(provider)!.push(model.id)
     }
     return { providers: Array.from(grouped.entries()).map(([provider, models]) => ({ provider, models })) }
+  })
+  .get("/health", async () => {
+    const proxyUp = await isProxyAvailable()
+    const credentials = scanProviderCredentials()
+    const connectedProviders = [...new Set(credentials.map(f => providerFromFile(f)))]
+    let modelCount = 0
+    if (proxyUp) {
+      const models = await fetchAvailableModels()
+      modelCount = models.length
+    }
+    return {
+      proxy_online: proxyUp,
+      connected_providers: connectedProviders,
+      model_count: modelCount,
+      credential_files: credentials.length,
+    }
   })

@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
-import { useSSE, type SSEEvent } from "@/hooks/useSSE"
+import { useSSE } from "@/hooks/useSSE"
+import { usePipelineStore, type PipelineFeedItem } from "@/stores/pipelineStore"
 
 export type PipelineStage = "discovery" | "enrichment" | "weight" | "forum" | "expert_council" | "verdict"
 
@@ -28,44 +29,29 @@ interface Props {
   onAction: (action: PipelineAction) => void | Promise<void>
 }
 
-type FeedItem =
-  | { id: string; type: "think"; icon: string; label: string; detail?: string; ts: number }
-  | { id: string; type: "progress"; stage: string; pct: number; msg: string; ts: number }
-  | { id: string; type: "forum_turn"; turn: Record<string, unknown>; ts: number }
-  | { id: string; type: "clue_discovered"; clue_id: string; title: string; source: string; relevance: number; ts: number }
-  | { id: string; type: "stage_complete"; stage: string; ts: number }
-  | { id: string; type: "error"; message: string; ts: number }
-  | { id: string; type: "weight_result"; parties: { name: string; weight: number }[]; ts: number }
-  | { id: string; type: "expert_assessment"; expert: string; domain: string; summary: string; ts: number }
-  | { id: string; type: "verdict_content"; headline: string; scenarios?: { title: string; probability: number }[]; ts: number }
-
 export function PipelineActivityFeed({ topicId, status, active = false, onAction }: Props) {
   const [collapsed, setCollapsed] = useState(false)
-  const [items, setItems] = useState<FeedItem[]>([])
-  const [liveStages, setLiveStages] = useState<Record<string, number>>({})
   const topicRef = useRef(topicId)
+  const pushEvent = usePipelineStore((state) => state.pushEvent)
+  const session = usePipelineStore((state) => (topicId ? state.sessions[topicId] : undefined))
+  const items = session?.items ?? []
 
   useEffect(() => {
     if (topicRef.current !== topicId) {
       topicRef.current = topicId
-      setItems([])
-      setLiveStages({})
       setCollapsed(false)
     }
   }, [topicId])
 
   useSSE(active && topicId ? topicId : null, (event) => {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
-    if (event.type === "ping") return
-    setItems(prev => [...prev.slice(-99), normalizeEvent(id, event)])
-    if (event.type === "progress") setLiveStages(prev => ({ ...prev, [event.stage]: event.pct }))
-    if (event.type === "stage_complete") setLiveStages(prev => ({ ...prev, [event.stage]: 100 }))
+    if (!topicId) return
+    pushEvent(topicId, event)
   })
 
   const stageState = useMemo(() => STAGES.map(stage => ({
     ...stage,
-    pct: liveStages[stage.key] ?? (status === "complete" ? 100 : 0),
-  })), [liveStages, status])
+    pct: session?.liveStages?.[stage.key] ?? (status === "complete" ? 100 : 0),
+  })), [session, status])
 
   const idle = !active && items.length === 0
   const minimized = collapsed || idle
@@ -106,7 +92,7 @@ function StageProgress({ label, pct }: { label: string; pct: number }) {
   return <div className="rounded-lg border border-border/60 bg-background p-3"><div className="mb-2 flex items-center justify-between gap-2 text-xs"><span className="font-medium">{label}</span><span className="tabular-nums text-muted-foreground">{Math.round(pct)}%</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all" style={{ width: `${Math.min(100, Math.max(0, pct))}%` }} /></div></div>
 }
 
-function FeedRow({ item }: { item: FeedItem }) {
+function FeedRow({ item }: { item: PipelineFeedItem }) {
   const meta = (() => {
     switch (item.type) {
       case "think": return { icon: <Sparkles size={14} />, title: item.label, detail: item.detail }
@@ -127,15 +113,3 @@ function stringifyTurn(turn: Record<string, unknown>) {
   return String(turn.statement ?? turn.content ?? turn.position ?? "Forum update")
 }
 
-function normalizeEvent(id: string, event: SSEEvent): FeedItem {
-  const ts = Date.now()
-  if (event.type === "think") return { id, ts, ...event }
-  if (event.type === "progress") return { id, ts, ...event }
-  if (event.type === "forum_turn") return { id, ts, ...event }
-  if (event.type === "clue_discovered") return { id, ts, ...event }
-  if (event.type === "stage_complete") return { id, ts, ...event }
-  if (event.type === "error") return { id, ts, ...event }
-  if (event.type === "weight_result") return { id, ts, ...event }
-  if (event.type === "expert_assessment") return { id, ts, ...event }
-  return { id, ts, type: "verdict_content", headline: "", scenarios: [] }
-}

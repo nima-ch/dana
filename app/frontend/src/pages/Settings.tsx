@@ -301,12 +301,28 @@ function AgentsToolsPanel({ active }: { active: boolean }) {
   )
 }
 
+type HealthStatus = { proxy_online: boolean; connected_providers: string[]; model_count: number; credential_files: number } | null
+
 function ProvidersPanel({ active }: { active: boolean }) {
   const [providers, setProviders] = useState<ProviderState[]>([{ provider: "claude", label: "Claude / Anthropic", description: "Claude models for analysis and reasoning.", icon: Plug, status: "disconnected", models: [] }, { provider: "openai", label: "OpenAI / Codex", description: "OpenAI and Codex-compatible models.", icon: ExternalLink, status: "disconnected", models: [] }, { provider: "gemini", label: "Google Gemini", description: "Gemini models for general-purpose reasoning.", icon: ExternalLink, status: "disconnected", models: [] }])
   const [login, setLogin] = useState<{ provider: ProviderId; oauthUrl: string | null } | null>(null)
   const [settings, setSettings] = useState<Record<string, string>>(DEFAULT_MODELS)
   const [search, setSearch] = useState("")
   const [savingKey, setSavingKey] = useState<string | null>(null)
+  const [health, setHealth] = useState<HealthStatus>(null)
+  const [healthLoading, setHealthLoading] = useState(false)
+
+  const loadHealth = async () => {
+    setHealthLoading(true)
+    try {
+      const h = await api.providers.health()
+      setHealth(h)
+    } catch {
+      setHealth({ proxy_online: false, connected_providers: [], model_count: 0, credential_files: 0 })
+    } finally {
+      setHealthLoading(false)
+    }
+  }
 
   const loadProviders = async () => {
     const [connections, modelGroups, appSettings] = await Promise.all([api.providers.list(), api.providers.models(), api.settings.get()])
@@ -323,7 +339,12 @@ function ProvidersPanel({ active }: { active: boolean }) {
     setSettings({ ...DEFAULT_MODELS, ...appSettings.default_models })
   }
 
-  useEffect(() => { void loadProviders() }, [])
+  const refreshAll = async () => {
+    await Promise.all([loadProviders(), loadHealth()])
+  }
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount
+  useEffect(() => { void refreshAll() }, [])
 
   const allModels = useMemo(() => providers.flatMap(provider => provider.models.map(model => ({ id: model, provider: provider.label }))), [providers])
   const filteredModels = useMemo(() => allModels.filter(model => model.id.toLowerCase().includes(search.toLowerCase()) || model.provider.toLowerCase().includes(search.toLowerCase())), [allModels, search])
@@ -370,18 +391,20 @@ function ProvidersPanel({ active }: { active: boolean }) {
       const poll = setInterval(async () => {
         try {
           const status = await api.providers.loginStatus(providerId)
-          if (status.oauth_url && !login?.oauthUrl) {
+          if (status.oauth_url) {
             setLogin({ provider: providerId as ProviderId, oauthUrl: status.oauth_url })
           }
           if (status.connected) {
             clearInterval(poll)
             setLogin(null)
             await loadProviders()
+            return
           }
           if (status.timeout) {
             clearInterval(poll)
             setLogin(null)
             setProviders(cur => cur.map(p => p.provider === providerId ? { ...p, status: "error" as const } : p))
+            return
           }
         } catch {
           clearInterval(poll)
@@ -402,10 +425,32 @@ function ProvidersPanel({ active }: { active: boolean }) {
   return (
     <Card className={cn("border-border/70 bg-card/80", active && "ring-1 ring-primary/30")}>
       <CardHeader>
-        <CardTitle>Providers & Models</CardTitle>
-        <CardDescription>Connect Claude, OpenAI/Codex, or Google Gemini to unlock model access.</CardDescription>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle>Providers & Models</CardTitle>
+            <CardDescription>Connect Claude, OpenAI/Codex, or Google Gemini to unlock model access.</CardDescription>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => void refreshAll()} disabled={healthLoading}>
+            <RotateCcw className={cn("mr-2 size-4", healthLoading && "animate-spin")} />
+            {healthLoading ? "Checking..." : "Refresh"}
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-6">
+        {health && (
+          <div className={cn("flex items-center justify-between rounded-lg border p-3 text-sm", health.proxy_online ? "border-emerald-500/40 bg-emerald-500/10" : "border-destructive/40 bg-destructive/10")}>
+            <div className="flex items-center gap-2">
+              <div className={cn("size-2 rounded-full", health.proxy_online ? "bg-emerald-500" : "bg-destructive")} />
+              <span className={health.proxy_online ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"}>
+                {health.proxy_online ? "LLM proxy online" : "LLM proxy offline"}
+              </span>
+            </div>
+            <div className="flex items-center gap-4 text-muted-foreground">
+              <span>{health.credential_files} credential{health.credential_files !== 1 ? "s" : ""}</span>
+              <span>{health.model_count} model{health.model_count !== 1 ? "s" : ""} available</span>
+            </div>
+          </div>
+        )}
         <div className="grid gap-4 md:grid-cols-3">
           {providers.map(provider => (
             <Card key={provider.provider} className="border-border/70 bg-background/70">
@@ -511,6 +556,9 @@ function ProvidersPanel({ active }: { active: boolean }) {
               </DialogHeader>
               <div className="space-y-2 text-sm">
                 <div className="rounded-md border border-border/70 bg-muted/40 p-3 break-all">{login.oauthUrl}</div>
+                <a href={login.oauthUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline underline-offset-4">
+                  Open authorization link in a new tab
+                </a>
                 <Button onClick={() => window.open(login.oauthUrl!, "_blank", "noopener,noreferrer")}>Open authorization page</Button>
               </div>
             </DialogContent>

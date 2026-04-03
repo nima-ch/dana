@@ -4,6 +4,7 @@ import { loadPrompt } from "../llm/promptLoader"
 import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { log } from "../utils/logger"
+import { emitThink } from "../routes/stream"
 import type { Party } from "./DiscoveryAgent"
 
 function slugify(name: string): string {
@@ -90,11 +91,14 @@ export async function smartEditParty(
   model: string,
 ): Promise<Party> {
   log.discovery(`Smart edit: researching feedback for "${currentParty.name}"`)
+  emitThink(topicId, "🔍", `Researching "${currentParty.name}"`, feedback.slice(0, 100))
 
   const research = await gatherResearch([
     `${currentParty.name} ${feedback.slice(0, 80)}`,
     `${currentParty.name} ${topicTitle} latest developments ${new Date().getFullYear()}`,
   ], topicId)
+
+  emitThink(topicId, "🧠", `Applying edits to "${currentParty.name}"`, "Sending to LLM...")
 
   const raw = await chatCompletionText({
     model,
@@ -130,6 +134,7 @@ Update the party profile based on the feedback. Output ONLY valid JSON, no markd
   updated.auto_discovered = false
   updated.user_verified = true
 
+  emitThink(topicId, "✅", `Smart edit complete: ${updated.name}`)
   log.discovery(`Smart edit complete: ${updated.name}`)
   return updated
 }

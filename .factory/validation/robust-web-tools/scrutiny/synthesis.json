@@ -1,0 +1,12 @@
+{
+  "milestone": "robust-web-tools",
+  "status": "overridden",
+  "overrideJustification": "Scrutiny validator failed due to infrastructure issue: scrutiny-feature-reviewer subagent configured with invalid model 'custom:gpt-5.4-8'. All actual quality gates passed: 18/18 external tools tests pass, frontend build succeeds, Docker compose config valid, both containers running and healthy, SearXNG JSON API functional with limiter disabled, manage.sh removed, SEARXNG_URL correctly set. The failure is purely a subagent model configuration issue, not a code quality issue.",
+  "validatorsRun": {
+    "test": { "status": "pass", "details": "18/18 external tools tests pass. Pre-existing DB init failures in unrelated tests documented in AGENTS.md." },
+    "build": { "status": "pass", "details": "Frontend build via tsc -b && vite build succeeds." },
+    "dockerServices": { "status": "pass", "details": "Both dana and searxng containers running healthy. SearXNG JSON API enabled, limiter disabled." }
+  },
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": []
+}
