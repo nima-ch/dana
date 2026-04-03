@@ -44,3 +44,10 @@ Testing surface, required testing skills/tools, and resource cost classification
 - API calls go to the same backend (shared state via SQLite)
 - SSE subscriptions are per-topic, so parallel tests on different topics are safe
 - Tests on the same topic may have state conflicts — isolate by topic
+
+
+## Flow Validator Guidance: agent-browser
+- Use unique browser sessions per validator and stay within assigned topic/workflow scope.
+- Avoid mutating shared global settings unless the assigned assertions explicitly require it; if they do, restore prior state before finishing.
+- Prefer real existing topic data over creating/deleting shared records unless the assertions explicitly test creation/deletion flows.
+- Save screenshots and any exported evidence only inside the assigned evidence directory.

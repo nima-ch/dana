@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react"
-import { api } from "../../api/client"
+import { api } from "@/api/client"
 import { ConfirmationBanner } from "./ConfirmationBanner"
 import { CredibilityRing } from "../Common/CredibilityRing"
 

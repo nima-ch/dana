@@ -19,9 +19,7 @@ export function Dashboard() {
           <h1 className="text-2xl font-semibold">Dashboard</h1>
           <p className="text-sm text-muted-foreground">Manage your geopolitical analyses.</p>
         </div>
-        <div className="flex gap-2">
-          <Button onClick={() => setShowDialog(true)}><Plus className="mr-2 h-4 w-4" /> New Analysis</Button>
-        </div>
+        <Button onClick={() => setShowDialog(true)}><Plus className="mr-2 h-4 w-4" /> New Analysis</Button>
       </div>
 
       {loading && <div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading topics…</div>}
@@ -35,7 +33,7 @@ export function Dashboard() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {topics.map(topic => <div key={topic.id} onClick={() => navigate(`/topic/${topic.id}`)}><TopicCard topic={topic} onDelete={deleteTopic} /></div>)}
+          {topics.map(topic => <TopicCard key={topic.id} topic={topic} onDelete={deleteTopic} onOpen={() => navigate(`/topic/${topic.id}`)} />)}
         </div>
       )}
 

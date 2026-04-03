@@ -3,10 +3,10 @@ import { Button } from "@/components/ui/button"
 import { StatusBadge } from "./StatusBadge"
 import type { Topic } from "@/api/client"
 
-export function TopicCard({ topic, onDelete }: { topic: Topic; onDelete: (id: string) => Promise<void> }) {
+export function TopicCard({ topic, onDelete, onOpen }: { topic: Topic; onDelete: (id: string) => Promise<void>; onOpen: () => void }) {
   return (
     <article className="group rounded-xl border bg-card p-4 shadow-sm transition-shadow hover:shadow-md">
-      <Link to={`/topic/${topic.id}`} className="block space-y-3">
+      <Link to={`/topic/${topic.id}`} onClick={(e) => { e.preventDefault(); onOpen() }} className="block space-y-3">
         <div className="flex items-start justify-between gap-3">
           <h3 className="line-clamp-2 text-base font-semibold leading-snug">{topic.title}</h3>
           <StatusBadge status={topic.status} />
