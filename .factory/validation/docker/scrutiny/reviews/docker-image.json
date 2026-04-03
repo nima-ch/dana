@@ -1,0 +1,7 @@
+{
+  "featureId": "docker-image",
+  "status": "pass",
+  "summary": "Docker image packaging looks correct and was verified with a successful build, image size check, and container filesystem inspection.",
+  "issues": [],
+  "sharedStateObservations": []
+}

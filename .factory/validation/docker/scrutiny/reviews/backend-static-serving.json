@@ -1,0 +1,13 @@
+{
+  "featureId": "backend-static-serving",
+  "status": "fail",
+  "summary": "Static serving implementation is present, but live verification showed the SPA fallback did not serve index.html at /.",
+  "issues": [
+    {
+      "severity": "blocking",
+      "description": "The feature handoff recorded that `curl -I http://localhost:3000/` still returned `404 Not Found`, so the intended SPA fallback for non-API routes is not verified as working and may be broken in runtime.",
+      "suggestedFix": "Run the backend against a built frontend dist and fix the catch-all route/static file resolution until GET / returns index.html and deep links resolve through the SPA fallback."
+    }
+  ],
+  "sharedStateObservations": []
+}
