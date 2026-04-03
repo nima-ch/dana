@@ -1,8 +1,16 @@
-import { useEffect, useState, useCallback } from "react"
-import { api } from "../../api/client"
-import { ConfirmationBanner } from "./ConfirmationBanner"
-import { RadarChart } from "../Common/RadarChart"
-import { partyColor } from "../../utils/partyColor"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { AlertCircle, ChevronDown, ChevronUp, Pencil, Plus, RotateCcw, Trash2, Workflow } from "lucide-react"
+import { api } from "@/api/client"
+import { RadarChart } from "@/components/Common/RadarChart"
+import { ConfirmationBanner } from "@/components/Topic/ConfirmationBanner"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { cn } from "@/lib/utils"
+import { partyColor } from "@/utils/partyColor"
 
 interface WeightFactors {
   military_capacity: number
@@ -28,8 +36,6 @@ interface Party {
   user_verified: boolean
 }
 
-const PARTY_TYPES = ["state", "state_military", "non_state", "individual", "media", "economic", "alliance"]
-const STANCES = ["active", "passive", "covert", "overt", "defensive_active"]
 const WEIGHT_FACTORS: { key: keyof WeightFactors; label: string }[] = [
   { key: "military_capacity", label: "Military" },
   { key: "economic_control", label: "Economic" },
@@ -38,352 +44,84 @@ const WEIGHT_FACTORS: { key: keyof WeightFactors; label: string }[] = [
   { key: "internal_legitimacy", label: "Legitimacy" },
 ]
 
+type EditableFieldKey = "agenda" | "means" | "stance" | "vulnerabilities" | "circle"
+
 function WeightBar({ label, value, color }: { label: string; value: number; color?: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs text-gray-500 w-28 shrink-0">{label}</span>
-      <div className="flex-1 bg-gray-100 rounded-full h-1.5 overflow-hidden">
-        <div
-          className="h-1.5 rounded-full transition-all duration-500"
-          style={{ width: `${value}%`, backgroundColor: color ?? "#3b82f6", opacity: 0.75 }}
-        />
-      </div>
-      <span className="text-xs text-gray-500 w-6 text-right tabular-nums">{value}</span>
-    </div>
-  )
+  return <div className="flex items-center gap-2 text-xs"><span className="w-24 shrink-0 text-muted-foreground">{label}</span><div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full" style={{ width: `${value}%`, backgroundColor: color ?? "hsl(var(--primary))" }} /></div><span className="w-8 tabular-nums text-right text-muted-foreground">{value}</span></div>
 }
 
-// Editable tag list
-function TagListEditor({ label, tags, onChange }: { label: string; tags: string[]; onChange: (t: string[]) => void }) {
-  const [input, setInput] = useState("")
-  const add = () => {
-    if (input.trim() && !tags.includes(input.trim())) {
-      onChange([...tags, input.trim()])
-      setInput("")
-    }
-  }
-  return (
-    <div>
-      <label className="text-xs text-gray-500 block mb-1">{label}</label>
-      <div className="flex flex-wrap gap-1 mb-1">
-        {tags.map((t, i) => (
-          <span key={i} className="text-xs bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded flex items-center gap-1">
-            {t}
-            <button className="text-red-400 hover:text-red-600" onClick={() => onChange(tags.filter((_, j) => j !== i))}>x</button>
-          </span>
-        ))}
-      </div>
-      <div className="flex gap-1">
-        <input className="flex-1 text-xs border border-gray-300 rounded px-2 py-0.5"
-          value={input} onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && (e.preventDefault(), add())}
-          placeholder={`Add ${label.toLowerCase()}...`} />
-        <button className="text-xs text-blue-500" onClick={add}>+</button>
-      </div>
-    </div>
-  )
+function tagText(value: string[] | undefined) {
+  return (value ?? []).join(", ")
 }
 
 function PartyCard({
-  party, topicId, onDelete, onUpdate, onReload, selected, onToggleSelect,
+  party, onDelete, onUpdate, selected, onToggleSelect, onSplit, onSmartEdit,
 }: {
   party: Party
-  topicId: string
   onDelete: (id: string) => void
   onUpdate: (id: string, data: Partial<Party>) => void
-  onReload: () => void
-  reviewMode?: boolean
   selected: boolean
   onToggleSelect: (id: string) => void
+  onSplit: (party: Party) => void
+  onSmartEdit: (party: Party) => void
 }) {
   const [expanded, setExpanded] = useState(false)
-  const [editing, setEditing] = useState(false)
-  const [smartEditing, setSmartEditing] = useState(false)
-  const [splitting, setSplitting] = useState(false)
-  const [feedback, setFeedback] = useState("")
-  const [splitNames, setSplitNames] = useState(["", ""])
-  const [busy, setBusy] = useState("")
-  const [draft, setDraft] = useState<Party>({ ...party })
-
-  // Reset draft when party changes
-  useEffect(() => { setDraft({ ...party }) }, [party])
-
-  const weightColor = party.weight >= 70 ? "bg-red-100 text-red-700"
-    : party.weight >= 40 ? "bg-yellow-100 text-yellow-700"
-    : "bg-gray-100 text-gray-600"
-
-  const handleSave = () => {
-    const { id: _id, auto_discovered: _auto_discovered, user_verified: _user_verified, ...fields } = draft
-    onUpdate(party.id, fields)
-    setEditing(false)
-  }
-
-  const handleSmartEdit = async () => {
-    if (!feedback.trim()) return
-    setBusy("Researching...")
-    try {
-      await api.parties.smartEdit(topicId, party.id, feedback)
-      setFeedback("")
-      setSmartEditing(false)
-      onReload()
-    } catch (e) {
-      alert(`Smart edit failed: ${e}`)
-    }
-    setBusy("")
-  }
-
-  const handleSplit = async () => {
-    const names = splitNames.filter(n => n.trim())
-    if (names.length < 2) return
-    setBusy("Splitting...")
-    try {
-      await api.parties.split(topicId, party.id, names.map(n => ({ name: n })))
-      setSplitting(false)
-      onReload()
-    } catch (e) {
-      alert(`Split failed: ${e}`)
-    }
-    setBusy("")
-  }
-
+  const [editingField, setEditingField] = useState<EditableFieldKey | null>(null)
+  const [draft, setDraft] = useState<Party>(party)
+  useEffect(() => setDraft(party), [party])
   const color = partyColor(party.name)
+  const save = async () => { await onUpdate(party.id, draft); setEditingField(null) }
+  const cancel = () => { setDraft(party); setEditingField(null) }
 
   return (
-    <div
-      className={`bg-white border rounded-xl p-4 space-y-2 transition-shadow hover:shadow-sm ${selected ? "border-amber-400 ring-1 ring-amber-200" : "border-gray-200"}`}
-      style={{ borderLeftWidth: 3, borderLeftColor: color }}
-    >
-      {busy && (
-        <div className="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 rounded px-3 py-1.5">
-          <div className="animate-spin w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full" />
-          {busy}
-        </div>
-      )}
-
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-start gap-2 flex-1 min-w-0">
-          <input type="checkbox" className="mt-1 shrink-0" checked={selected}
-            onChange={() => onToggleSelect(party.id)} />
-          <div className="flex-1 min-w-0">
-            {editing ? (
-              <div className="space-y-3">
-                {/* Name + Type */}
-                <div className="flex gap-2">
-                  <input className="flex-1 text-sm font-medium border border-gray-300 rounded px-2 py-1"
-                    value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} />
-                  <select className="text-xs border border-gray-300 rounded px-2 py-1"
-                    value={draft.type} onChange={e => setDraft(d => ({ ...d, type: e.target.value }))}>
-                    {PARTY_TYPES.map(t => <option key={t} value={t}>{t.replace("_", " ")}</option>)}
-                  </select>
-                </div>
-                {/* Description */}
-                <div>
-                  <label className="text-xs text-gray-500 block mb-0.5">Description</label>
-                  <textarea className="w-full text-xs border border-gray-300 rounded px-2 py-1 h-20"
-                    value={draft.description} onChange={e => setDraft(d => ({ ...d, description: e.target.value }))} />
-                </div>
-                {/* Agenda */}
-                <div>
-                  <label className="text-xs text-gray-500 block mb-0.5">Agenda</label>
-                  <textarea className="w-full text-xs border border-gray-300 rounded px-2 py-1 h-12"
-                    value={draft.agenda} onChange={e => setDraft(d => ({ ...d, agenda: e.target.value }))} />
-                </div>
-                {/* Stance */}
-                <div>
-                  <label className="text-xs text-gray-500 block mb-0.5">Stance</label>
-                  <select className="text-xs border border-gray-300 rounded px-2 py-1"
-                    value={draft.stance} onChange={e => setDraft(d => ({ ...d, stance: e.target.value }))}>
-                    {STANCES.map(s => <option key={s} value={s}>{s.replace("_", " ")}</option>)}
-                  </select>
-                </div>
-                {/* Weight + Weight Factors */}
-                <div>
-                  <label className="text-xs text-gray-500 block mb-1">Overall Weight: {draft.weight}</label>
-                  <input type="range" min={0} max={100} value={draft.weight}
-                    className="w-full h-1.5 accent-blue-600"
-                    onChange={e => setDraft(d => ({ ...d, weight: parseInt(e.target.value) }))} />
-                </div>
-                <div className="space-y-1">
-                  {WEIGHT_FACTORS.map(wf => (
-                    <div key={wf.key} className="flex items-center gap-2">
-                      <span className="text-xs text-gray-500 w-24 shrink-0">{wf.label}: {draft.weight_factors[wf.key]}</span>
-                      <input type="range" min={0} max={100} value={draft.weight_factors[wf.key]}
-                        className="flex-1 h-1 accent-blue-600"
-                        onChange={e => setDraft(d => ({
-                          ...d,
-                          weight_factors: { ...d.weight_factors, [wf.key]: parseInt(e.target.value) },
-                        }))} />
-                    </div>
-                  ))}
-                </div>
-                {/* Means */}
-                <TagListEditor label="Means" tags={draft.means}
-                  onChange={means => setDraft(d => ({ ...d, means }))} />
-                {/* Circle */}
-                <TagListEditor label="Circle: Visible" tags={draft.circle?.visible ?? []}
-                  onChange={visible => setDraft(d => ({ ...d, circle: { ...d.circle, visible } }))} />
-                <TagListEditor label="Circle: Shadow" tags={draft.circle?.shadow ?? []}
-                  onChange={shadow => setDraft(d => ({ ...d, circle: { ...d.circle, shadow } }))} />
-                {/* Vulnerabilities */}
-                <TagListEditor label="Vulnerabilities" tags={draft.vulnerabilities}
-                  onChange={vulnerabilities => setDraft(d => ({ ...d, vulnerabilities }))} />
-                {/* Save/Cancel */}
-                <div className="flex gap-2 pt-1">
-                  <button className="text-xs px-3 py-1 bg-blue-600 text-white rounded" onClick={handleSave}>Save</button>
-                  <button className="text-xs text-gray-400" onClick={() => { setEditing(false); setDraft({ ...party }) }}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 rounded-full shrink-0" style={{ backgroundColor: color }} />
-                  <span className="font-semibold text-sm text-gray-900">{party.name}</span>
-                  <span className="text-xs text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded">{party.type.replace(/_/g, " ")}</span>
-                  {party.user_verified && <span className="text-xs bg-green-50 text-green-600 px-1.5 py-0.5 rounded">✓ verified</span>}
-                </div>
-                <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{party.description}</p>
-              </>
-            )}
+    <Card className={cn("overflow-hidden border-border transition-shadow hover:shadow-md", selected && "ring-1 ring-primary/40")}>
+      <CardHeader className="gap-3 border-b bg-card/40">
+        <div className="flex items-start justify-between gap-3">
+          <button className="flex min-w-0 flex-1 items-start gap-3 text-left" onClick={() => setExpanded(v => !v)}>
+            <div className="mt-1 size-3 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+            <div className="min-w-0">
+              <CardTitle className="truncate text-base">{party.name}</CardTitle>
+              <CardDescription className="mt-1">{party.description || "No description"}</CardDescription>
+            </div>
+          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <input type="checkbox" checked={selected} onChange={() => onToggleSelect(party.id)} />
+            <Badge variant="outline">{party.type.replace(/_/g, " ")}</Badge>
+            <Badge>{party.weight}</Badge>
           </div>
         </div>
-        {!editing && (
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button title="Weight breakdown"
-              className={`text-xs px-2 py-0.5 rounded font-medium cursor-pointer ${weightColor}`}
-              onClick={() => setExpanded(e => !e)}>
-              {party.weight}
-            </button>
-            <button className="text-xs text-blue-400 hover:text-blue-600" onClick={() => setEditing(true)}>edit</button>
-            <button className="text-xs text-purple-400 hover:text-purple-600" onClick={() => setSmartEditing(s => !s)}
-              title="AI-assisted edit with feedback">smart</button>
-            <button className="text-xs text-amber-400 hover:text-amber-600" onClick={() => setSplitting(s => !s)}
-              title="Split into sub-parties">split</button>
-            <button className="text-xs text-red-400 hover:text-red-600" onClick={() => onDelete(party.id)}>✕</button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={() => setExpanded(v => !v)}>{expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}Details</Button>
+          <Button variant="outline" size="sm" onClick={() => { setDraft(party); setEditingField("agenda") }}><Pencil className="size-4" />Edit</Button>
+          <Button variant="outline" size="sm" onClick={() => onSmartEdit(party)}><Workflow className="size-4" />Smart edit</Button>
+          <Button variant="outline" size="sm" onClick={() => onSplit(party)}><RotateCcw className="size-4" />Split</Button>
+          <Button variant="destructive" size="sm" onClick={() => onDelete(party.id)}><Trash2 className="size-4" />Delete</Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4 p-4">
+        <div className="flex items-start gap-4">
+          <RadarChart data={party.weight_factors as unknown as Record<string, number>} size={96} color={color} />
+          <div className="flex-1 space-y-2">
+            {WEIGHT_FACTORS.map((wf) => <WeightBar key={wf.key} label={wf.label} value={party.weight_factors[wf.key] ?? 0} color={color} />)}
+          </div>
+        </div>
+        {expanded && (
+          <div className="grid gap-3 md:grid-cols-2">
+            {(["agenda", "means", "stance", "vulnerabilities", "circle"] as const).map((field) => (
+              <FieldRow key={field} field={field} party={party} draft={draft} editingField={editingField} setEditingField={setEditingField} setDraft={setDraft} />
+            ))}
           </div>
         )}
-      </div>
-
-      {/* Smart edit feedback area */}
-      {smartEditing && !editing && (
-        <div className="border-t border-gray-100 pt-2 space-y-2">
-          <p className="text-xs text-gray-500">Describe what needs to change. The system will research and update automatically.</p>
-          <textarea className="w-full text-xs border border-gray-300 rounded px-2 py-1 h-16"
-            placeholder="e.g. 'Their military capacity increased significantly after the 2026 arms deal with Russia...'"
-            value={feedback} onChange={e => setFeedback(e.target.value)} />
-          <div className="flex gap-2">
-            <button className="text-xs px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
-              onClick={handleSmartEdit} disabled={!!busy || !feedback.trim()}>
-              {busy ? "Researching..." : "Research & Update"}
-            </button>
-            <button className="text-xs text-gray-400" onClick={() => { setSmartEditing(false); setFeedback("") }}>Cancel</button>
-          </div>
-        </div>
-      )}
-
-      {/* Split dialog */}
-      {splitting && !editing && (
-        <div className="border-t border-gray-100 pt-2 space-y-2">
-          <p className="text-xs text-gray-500">Split "{party.name}" into separate parties. Enter names for each sub-party.</p>
-          {splitNames.map((name, i) => (
-            <div key={i} className="flex gap-1">
-              <input className="flex-1 text-xs border border-gray-300 rounded px-2 py-1"
-                placeholder={`Sub-party ${i + 1} name`}
-                value={name} onChange={e => setSplitNames(ns => ns.map((n, j) => j === i ? e.target.value : n))} />
-              {splitNames.length > 2 && (
-                <button className="text-xs text-red-400" onClick={() => setSplitNames(ns => ns.filter((_, j) => j !== i))}>✕</button>
-              )}
-            </div>
-          ))}
-          <div className="flex gap-2">
-            <button className="text-xs text-blue-500" onClick={() => setSplitNames(ns => [...ns, ""])}>+ Add</button>
-            <button className="text-xs px-3 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50"
-              onClick={handleSplit} disabled={!!busy || splitNames.filter(n => n.trim()).length < 2}>
-              {busy ? "Splitting..." : "Split"}
-            </button>
-            <button className="text-xs text-gray-400" onClick={() => setSplitting(false)}>Cancel</button>
-          </div>
-        </div>
-      )}
-
-      {/* Read-only details */}
-      {!editing && !smartEditing && !splitting && (
-        <>
-          <p className="text-xs text-gray-600"><span className="font-medium">Agenda:</span> {party.agenda}</p>
-          <p className="text-xs text-gray-600"><span className="font-medium">Stance:</span> {party.stance?.replace(/_/g, " ")}</p>
-
-          {party.means?.length > 0 && (
-            <div className="flex gap-1 flex-wrap">
-              {party.means.map((m, i) => (
-                <span key={i} className="text-xs bg-blue-50 text-blue-700 px-1.5 rounded">{m}</span>
-              ))}
-            </div>
-          )}
-
-          {(party.circle?.visible?.length > 0 || party.circle?.shadow?.length > 0) && (
-            <div className="text-xs space-y-1">
-              {party.circle.visible?.length > 0 && (
-                <div><span className="text-gray-400">Visible: </span>{party.circle.visible.join(", ")}</div>
-              )}
-              {party.circle.shadow?.length > 0 && (
-                <div><span className="text-gray-400">Shadow: </span>
-                  <span className="italic">{party.circle.shadow.join(", ")}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {expanded && party.weight_factors && (
-            <div className="border-t border-gray-100 pt-3 flex items-start gap-4">
-              <RadarChart
-                data={party.weight_factors as unknown as Record<string, number>}
-                size={88}
-                color={partyColor(party.name)}
-              />
-              <div className="flex-1 space-y-1.5">
-                {WEIGHT_FACTORS.map(wf => (
-                  <WeightBar key={wf.key} label={wf.label} value={party.weight_factors[wf.key] ?? 0} color={partyColor(party.name)} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {party.vulnerabilities?.length > 0 && (
-            <div className="text-xs text-gray-500">
-              <span className="font-medium">Vulnerabilities:</span> {party.vulnerabilities.join("; ")}
-            </div>
-          )}
-        </>
-      )}
-    </div>
+        {editingField && <div className="flex gap-2"><Button onClick={save} size="sm">Save</Button><Button variant="outline" onClick={cancel} size="sm">Cancel</Button></div>}
+      </CardContent>
+    </Card>
   )
 }
 
-// Merge dialog
-function MergeDialog({
-  parties, onMerge, onCancel, loading,
-}: { parties: Party[]; onMerge: (name: string) => void; onCancel: () => void; loading: boolean }) {
-  const [name, setName] = useState(parties.map(p => p.name).join(" / "))
-
-  return (
-    <div className="bg-white border border-amber-300 rounded-lg p-4 space-y-3">
-      <p className="text-sm font-medium text-gray-800">Smart Merge {parties.length} parties</p>
-      <p className="text-xs text-gray-500">
-        Merging: {parties.map(p => p.name).join(", ")}
-      </p>
-      <p className="text-xs text-gray-400">
-        The system will use AI to synthesize descriptions, agendas, means, and weight factors into a coherent merged profile.
-      </p>
-      <input className="w-full text-sm border border-gray-300 rounded px-2 py-1"
-        placeholder="Merged party name" value={name} onChange={e => setName(e.target.value)} />
-      <div className="flex gap-2">
-        <button className="text-xs px-3 py-1 bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50"
-          onClick={() => onMerge(name)} disabled={loading || !name.trim()}>
-          {loading ? "Merging..." : "Merge"}
-        </button>
-        <button className="text-xs text-gray-400" onClick={onCancel}>Cancel</button>
-      </div>
-    </div>
-  )
+function FieldRow({ field, party, draft, editingField, setEditingField, setDraft }: any) {
+  const editing = editingField === field
+  const value = editing ? draft[field] : party[field]
+  return <Card className="gap-2 p-3"><div className="flex items-center justify-between gap-2"><div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{field}</div><Button variant="ghost" size="sm" onClick={() => setEditingField(field)}><Pencil className="size-4" /></Button></div>{editing ? <Textarea value={typeof value === "string" ? value : JSON.stringify(value, null, 2)} onChange={(e) => setDraft((d: Party) => ({ ...d, [field]: e.target.value } as Party))} /> : <div className="text-sm text-foreground">{typeof value === "string" ? value : tagText((value as any)?.visible ?? value)}</div>}</Card>
 }
 
 interface PartiesPanelProps {
@@ -396,151 +134,61 @@ interface PartiesPanelProps {
 export function PartiesPanel({ topicId, status, onApprove, approveLoading }: PartiesPanelProps) {
   const [parties, setParties] = useState<Party[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [showAdd, setShowAdd] = useState(false)
   const [newName, setNewName] = useState("")
   const [addBusy, setAddBusy] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [merging, setMerging] = useState(false)
+  const [smartEditParty, setSmartEditParty] = useState<Party | null>(null)
+  const [splitParty, setSplitParty] = useState<Party | null>(null)
+  const [mergeOpen, setMergeOpen] = useState(false)
   const [mergeBusy, setMergeBusy] = useState(false)
+  const [smartFeedback, setSmartFeedback] = useState("")
+  const [splitNames, setSplitNames] = useState(["", ""])
 
   const reviewMode = status === "review_parties"
 
   const load = useCallback(() => {
-    api.parties.list(topicId)
-      .then(d => { setParties(d); setLoading(false) })
-      .catch(() => setLoading(false))
+    setLoading(true)
+    api.parties.list(topicId).then((d) => { setParties(d); setError(null) }).catch((e) => setError(e instanceof Error ? e.message : "Failed to load parties")).finally(() => setLoading(false))
   }, [topicId])
 
   useEffect(load, [load])
 
-  const handleDelete = async (id: string) => {
-    await api.parties.delete(topicId, id)
-    setParties(ps => ps.filter(p => p.id !== id))
-    setSelected(s => { const n = new Set(s); n.delete(id); return n })
-  }
-
-  const handleUpdate = async (id: string, data: Partial<Party>) => {
-    const updated = await api.parties.update(topicId, id, data)
-    setParties(ps => ps.map(p => p.id === id ? { ...p, ...updated } : p))
-  }
-
-  // Smart add: just a name → LLM researches and populates
+  const handleUpdate = async (id: string, data: Partial<Party>) => { await api.parties.update(topicId, id, data); setParties((current) => current.map((party) => party.id === id ? { ...party, ...data } : party)) }
+  const handleDelete = async (id: string) => { await api.parties.delete(topicId, id); setParties((ps) => ps.filter((p) => p.id !== id)) }
   const handleSmartAdd = async () => {
     if (!newName.trim()) return
     setAddBusy(true)
-    try {
-      const party = await api.parties.smartAdd(topicId, newName.trim())
-      setParties(ps => [...ps, party])
-      setNewName("")
-      setShowAdd(false)
-    } catch (e) {
-      alert(`Smart add failed: ${e}`)
-    }
-    setAddBusy(false)
+    try { const party = await api.parties.smartAdd(topicId, newName.trim()); setParties((ps) => [...ps, party]); setShowAdd(false); setNewName("") } catch (e) { setError(e instanceof Error ? e.message : "Smart add failed") } finally { setAddBusy(false) }
   }
+  const handleSmartEdit = async () => { if (!smartEditParty || !smartFeedback.trim()) return; await api.parties.smartEdit(topicId, smartEditParty.id, smartFeedback); setSmartEditParty(null); setSmartFeedback(""); load() }
+  const handleSplit = async () => { if (!splitParty) return; await api.parties.split(topicId, splitParty.id, splitNames.filter((n) => n.trim()).map((name) => ({ name }))); setSplitParty(null); setSplitNames(["", ""]); load() }
+  const handleMerge = async () => { const ids = [...selected]; if (ids.length < 2) return; setMergeBusy(true); try { await api.parties.merge(topicId, ids, { name: ids.map((id) => parties.find((p) => p.id === id)?.name).filter(Boolean).join(" / ") }); setSelected(new Set()); setMergeOpen(false); load() } finally { setMergeBusy(false) } }
+  const selectedCount = selected.size
+  const sortedParties = useMemo(() => [...parties].sort((a, b) => b.weight - a.weight), [parties])
 
-  const handleToggleSelect = (id: string) => {
-    setSelected(s => {
-      const n = new Set(s)
-      if (n.has(id)) n.delete(id); else n.add(id)
-      return n
-    })
-  }
-
-  const handleMerge = async (name: string) => {
-    const sourceIds = [...selected]
-    setMergeBusy(true)
-    try {
-      await api.parties.merge(topicId, sourceIds, { name })
-      setSelected(new Set())
-      setMerging(false)
-      load()
-    } catch (e) {
-      alert(`Merge failed: ${e}`)
-    }
-    setMergeBusy(false)
-  }
-
-  const selectedParties = parties.filter(p => selected.has(p.id))
-
-  if (loading) return <div className="text-gray-400 text-sm text-center py-8">Loading parties...</div>
+  if (loading) return <div className="py-8 text-center text-sm text-muted-foreground">Loading parties…</div>
 
   return (
     <div className="space-y-4">
       {reviewMode && onApprove && (
-        <ConfirmationBanner
-          message={`Discovery found ${parties.length} parties. Review, merge, or edit before enrichment.`}
-          detail="Merge duplicates, edit descriptions, remove irrelevant parties, or add missing ones."
-          actionLabel="Approve & Continue to Enrichment"
-          onConfirm={onApprove}
-          loading={approveLoading}
-        />
+        <ConfirmationBanner message={`Review ${parties.length} parties before continuing analysis.`} detail="Merge duplicates, edit fields, or remove incorrect parties." actionLabel="Continue Analysis" onConfirm={onApprove} loading={approveLoading} />
       )}
-
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-gray-700">Parties ({parties.length})</h2>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2"><h2 className="text-sm font-semibold">Parties</h2><Badge variant="secondary">{parties.length}</Badge></div>
         <div className="flex gap-2">
-          {selected.size >= 2 && (
-            <button className="text-xs px-3 py-1 bg-amber-600 text-white rounded hover:bg-amber-700"
-              onClick={() => setMerging(true)}>
-              Merge Selected ({selected.size})
-            </button>
-          )}
-          <button className="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
-            onClick={() => setShowAdd(s => !s)}>
-            + Add Party
-          </button>
+          {selectedCount >= 2 && <Button variant="secondary" onClick={() => setMergeOpen(true)}>Merge selected</Button>}
+          <Button onClick={() => setShowAdd(true)}><Plus className="size-4" />Smart add</Button>
         </div>
       </div>
+      {error && <div className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"><AlertCircle className="size-4" />{error}</div>}
+      {sortedParties.length === 0 ? <Card className="border-dashed"><CardContent className="p-8 text-center text-sm text-muted-foreground">No parties found yet.</CardContent></Card> : <div className="max-h-[70vh] space-y-3 overflow-auto pr-2">{sortedParties.map((party) => <PartyCard key={party.id} party={party} onDelete={handleDelete} onUpdate={handleUpdate} selected={selected.has(party.id)} onToggleSelect={(id) => setSelected((s) => { const next = new Set(s); if (next.has(id)) next.delete(id); else next.add(id); return next })} onSplit={setSplitParty} onSmartEdit={setSmartEditParty} />)}</div>}
 
-      {merging && selectedParties.length >= 2 && (
-        <MergeDialog parties={selectedParties} onMerge={handleMerge}
-          onCancel={() => setMerging(false)} loading={mergeBusy} />
-      )}
-
-      {showAdd && (
-        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">
-          <p className="text-xs text-gray-500">Enter a party name. The system will research and auto-populate all fields.</p>
-          <div className="flex gap-2">
-            <input className="flex-1 text-xs border border-gray-300 rounded px-2 py-1"
-              placeholder="e.g. Hezbollah, European Union, Reza Pahlavi..."
-              value={newName} onChange={e => setNewName(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && handleSmartAdd()}
-              autoFocus disabled={addBusy} />
-            <button className="text-xs px-3 py-1 bg-blue-600 text-white rounded disabled:opacity-50"
-              onClick={handleSmartAdd} disabled={addBusy || !newName.trim()}>
-              {addBusy ? "Researching..." : "Add"}
-            </button>
-            <button className="text-xs text-gray-400" onClick={() => { setShowAdd(false); setNewName("") }}>Cancel</button>
-          </div>
-          {addBusy && (
-            <div className="flex items-center gap-2 text-xs text-blue-600">
-              <div className="animate-spin w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full" />
-              Searching and analyzing "{newName}"...
-            </div>
-          )}
-        </div>
-      )}
-
-      {parties.length === 0 ? (
-        <div className="text-gray-400 text-sm text-center py-8">No parties discovered yet.</div>
-      ) : (
-        <div className="space-y-3">
-          {[...parties].sort((a, b) => b.weight - a.weight).map(party => (
-            <PartyCard
-              key={party.id}
-              party={party}
-              topicId={topicId}
-              onDelete={handleDelete}
-              onUpdate={handleUpdate}
-              onReload={load}
-              reviewMode={reviewMode}
-              selected={selected.has(party.id)}
-              onToggleSelect={handleToggleSelect}
-            />
-          ))}
-        </div>
-      )}
+      <Dialog open={showAdd} onOpenChange={setShowAdd}><DialogContent><DialogHeader><DialogTitle>Smart add party</DialogTitle><DialogDescription>Enter a party name and let the backend generate a full profile.</DialogDescription></DialogHeader><div className="space-y-2"><Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Party name" /></div><DialogFooter><Button variant="outline" onClick={() => setShowAdd(false)}>Cancel</Button><Button onClick={handleSmartAdd} disabled={addBusy}>{addBusy ? "Adding..." : "Add"}</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={!!smartEditParty} onOpenChange={(open) => !open && setSmartEditParty(null)}><DialogContent><DialogHeader><DialogTitle>Smart edit</DialogTitle><DialogDescription>Provide feedback for {smartEditParty?.name}.</DialogDescription></DialogHeader><Textarea value={smartFeedback} onChange={(e) => setSmartFeedback(e.target.value)} placeholder="What should change?" /><DialogFooter><Button variant="outline" onClick={() => setSmartEditParty(null)}>Cancel</Button><Button onClick={handleSmartEdit}>Apply</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={!!splitParty} onOpenChange={(open) => !open && setSplitParty(null)}><DialogContent><DialogHeader><DialogTitle>Split party</DialogTitle><DialogDescription>Split {splitParty?.name} into multiple parties.</DialogDescription></DialogHeader><div className="space-y-2">{splitNames.map((name, idx) => <Input key={idx} value={name} onChange={(e) => setSplitNames((curr) => curr.map((v, i) => i === idx ? e.target.value : v))} placeholder={`Sub-party ${idx + 1}`} />)}</div><DialogFooter><Button variant="outline" onClick={() => setSplitParty(null)}>Cancel</Button><Button onClick={handleSplit}>Split</Button></DialogFooter></DialogContent></Dialog>
+      <Dialog open={mergeOpen} onOpenChange={setMergeOpen}><DialogContent><DialogHeader><DialogTitle>Merge parties</DialogTitle><DialogDescription>Merge {selectedCount} selected parties.</DialogDescription></DialogHeader><div className="space-y-2">{[...selected].map((id) => <div key={id} className="rounded-md border p-2 text-sm">{parties.find((p) => p.id === id)?.name}</div>)}</div><DialogFooter><Button variant="outline" onClick={() => setMergeOpen(false)}>Cancel</Button><Button onClick={handleMerge} disabled={mergeBusy}>{mergeBusy ? "Merging..." : "Merge"}</Button></DialogFooter></DialogContent></Dialog>
     </div>
   )
 }

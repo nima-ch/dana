@@ -101,6 +101,12 @@ export async function fetchAvailableModels(): Promise<ModelInfo[]> {
   }
 }
 
+export function isProxyAvailable(): Promise<boolean> {
+  return fetchWithTimeout(`${PROXY_BASE_URL}/health`, {
+    method: "GET"
+  }).then(res => res.ok).catch(() => false)
+}
+
 export async function chatCompletion(options: ChatCompletionOptions): Promise<ChatCompletionResponse> {
   const limiter = getRateLimiter(options.model)
   const startTime = Date.now()
