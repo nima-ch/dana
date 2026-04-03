@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import type { ReactNode } from "react"
 import { ChevronDown, ChevronRight, Search, AlertTriangle, ExternalLink, Plug, RotateCcw } from "lucide-react"
 import { useNavigate, useParams } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
@@ -310,6 +311,7 @@ function SettingsPanel({ title, description, active }: { title: string; descript
 
 function PipelinePanel({ active }: { active: boolean }) {
   const [settings, setSettings] = useState(PIPELINE_DEFAULTS)
+  const [savedSettings, setSavedSettings] = useState(PIPELINE_DEFAULTS)
   const [customTopics, setCustomTopics] = useState<Array<{ id: string; title: string; settings: Record<string, unknown> }>>([])
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
@@ -317,8 +319,11 @@ function PipelinePanel({ active }: { active: boolean }) {
 
   useEffect(() => {
     void (async () => {
-      const topics = await api.topics.list()
-      const custom = topics.filter(topic => Object.keys(topic.settings || {}).length > 0)
+      const [appSettings, topics] = await Promise.all([api.settings.get(), api.topics.list()])
+      const next = { ...PIPELINE_DEFAULTS, ...(appSettings.pipeline_settings ?? {}) }
+      setSettings(next)
+      setSavedSettings(next)
+      const custom = topics.filter(topic => topic.settings && Object.keys(topic.settings).length > 0)
       setCustomTopics(custom.map(topic => ({ id: topic.id, title: topic.title, settings: topic.settings })))
     })()
   }, [])
@@ -343,7 +348,10 @@ function PipelinePanel({ active }: { active: boolean }) {
     if (!validate()) return
     setSaving(true)
     try {
-      await api.settings.update(settings)
+      const updated = await api.settings.update({ pipeline_settings: settings })
+      const next = { ...PIPELINE_DEFAULTS, ...(updated.pipeline_settings ?? settings) }
+      setSettings(next)
+      setSavedSettings(next)
       setMessage("Saved pipeline settings.")
     } finally {
       setSaving(false)
@@ -362,6 +370,8 @@ function PipelinePanel({ active }: { active: boolean }) {
     setSettings(next)
     validate(next)
   }
+
+  const isDirty = JSON.stringify(settings) !== JSON.stringify(savedSettings)
 
   return (
     <Card className={cn("border-border/70 bg-card/80", active && "ring-1 ring-primary/30")}>
@@ -403,7 +413,7 @@ function PipelinePanel({ active }: { active: boolean }) {
           <input type="checkbox" checked={settings.auto_refresh_clues} onChange={e => setSettings(current => ({ ...current, auto_refresh_clues: e.target.checked }))} className="h-4 w-4" />
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button onClick={() => void save()} disabled={saving}>{saving ? "Saving..." : "Save"}</Button>
+          <Button onClick={() => void save()} disabled={saving || !isDirty}>{saving ? "Saving..." : "Save"}</Button>
           <Button variant="outline" onClick={reset}><RotateCcw className="mr-2 size-4" />Reset to defaults</Button>
           {message && <span className="self-center text-sm text-muted-foreground">{message}</span>}
         </div>
@@ -432,7 +442,7 @@ function PipelinePanel({ active }: { active: boolean }) {
   )
 }
 
-function SettingField({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
+function SettingField({ label, error, children }: { label: string; error?: string; children: ReactNode }) {
   return (
     <div className="space-y-2">
       <Label>{label}</Label>
