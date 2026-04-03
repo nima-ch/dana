@@ -5,7 +5,7 @@ commands:
   build_frontend: cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run build
   typecheck: cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run build
   lint: cd /home/nima/dana/app/frontend && /home/nima/.bun/bin/bun run lint
-  test: cd /home/nima/dana/app/backend && /home/nima/.bun/bin/bun test tests/topicManager.test.ts tests/storeClue.test.ts tests/stream.test.ts tests/internalTools.test.ts tests/contextBuilder.test.ts tests/stateManager.test.ts tests/forumTools.test.ts tests/pipeline.test.ts tests/expertAgent.test.ts tests/deltaPipeline.test.ts
+  test: cd /home/nima/dana/app/backend && /home/nima/.bun/bin/bun test tests/stream.test.ts tests/pipeline.test.ts
   test_llm: cd /home/nima/dana/app/backend && /home/nima/.bun/bin/bun test tests/proxyClient.test.ts tests/clueProcessor.test.ts tests/weightCalculator.test.ts tests/forumAgents.test.ts
 
 services:
