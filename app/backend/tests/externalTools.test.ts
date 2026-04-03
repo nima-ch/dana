@@ -1,12 +1,18 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test"
+import { describe, it, expect, beforeAll, afterAll, beforeEach, mock } from "bun:test"
 import { webSearch, extractDate } from "../src/tools/external/webSearch"
 import { httpFetch } from "../src/tools/external/httpFetch"
 import { timelineLookup } from "../src/tools/external/timelineLookup"
-import { mkdir, rm, writeFile } from "fs/promises"
+import { mkdir, rm, writeFile, stat } from "fs/promises"
 import { join } from "path"
+import { createHash } from "crypto"
 
 const TEST_DATA_DIR = "/tmp/dana-tools-test"
 const TEST_TOPIC_ID = "test-topic"
+
+function getCacheFilePath(url: string): string {
+  const hash = createHash("md5").update(url).digest("hex")
+  return join(TEST_DATA_DIR, "topics", TEST_TOPIC_ID, "sources", "cache", `${hash}.json`)
+}
 
 beforeAll(async () => {
   process.env.DATA_DIR = TEST_DATA_DIR
@@ -21,32 +27,94 @@ afterAll(async () => {
 
 beforeEach(() => {
   process.env.SEARXNG_URL = "http://localhost:8080"
+  mock.restore()
 })
 
 describe("webSearch", () => {
   it("returns array of results with correct shape", async () => {
-    const results = await webSearch("Bun.js runtime", 3)
-    expect(Array.isArray(results)).toBe(true)
-    expect(results.length).toBeGreaterThanOrEqual(1)
-    expect(results.length).toBeLessThanOrEqual(3)
-    for (const r of results) {
-      expect(r.title.length).toBeGreaterThan(0)
-      expect(typeof r.title).toBe("string")
-      expect(typeof r.url).toBe("string")
-      expect(r.url).toMatch(/^https?:\/\//)
-      expect(typeof r.snippet).toBe("string")
-      if (r.date !== undefined) {
-        expect(r.date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    const originalFetch = globalThis.fetch
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+      if (url.startsWith("http://localhost:8080/")) {
+        return new Response(JSON.stringify({
+          results: [
+            {
+              title: "Bun runtime update",
+              url: "https://example.com/2026/03/27/bun-runtime",
+              content: "March 27, 2026 Bun runtime update",
+              publishedDate: "2026-03-27T00:00:00Z",
+            },
+            {
+              title: "Bun release notes",
+              url: "https://example.com/2026/03/26/release-notes",
+              content: "Release notes for Bun runtime",
+            },
+            {
+              title: "Bun benchmarks",
+              url: "https://example.com/2026/03/25/benchmarks",
+              content: "Benchmark details",
+            },
+          ],
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
       }
+
+      return originalFetch(input as RequestInfo, init)
+    }) as typeof fetch
+
+    try {
+      const results = await webSearch("Bun.js runtime", 3)
+      expect(Array.isArray(results)).toBe(true)
+      expect(results.length).toBeGreaterThanOrEqual(1)
+      expect(results.length).toBeLessThanOrEqual(3)
+      for (const r of results) {
+        expect(r.title.length).toBeGreaterThan(0)
+        expect(typeof r.title).toBe("string")
+        expect(typeof r.url).toBe("string")
+        expect(r.url).toMatch(/^https?:\/\//)
+        expect(typeof r.snippet).toBe("string")
+        if (r.date !== undefined) {
+          expect(r.date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+        }
+      }
+      console.log(`webSearch returned ${results.length} results`)
+    } finally {
+      globalThis.fetch = originalFetch
     }
-    console.log(`webSearch returned ${results.length} results`)
   })
 
   it("respects numResults and returns at least one result for common queries", async () => {
-    for (const numResults of [1, 3, 8]) {
-      const results = await webSearch("Bun.js runtime", numResults)
-      expect(results.length).toBeGreaterThanOrEqual(1)
-      expect(results.length).toBeLessThanOrEqual(numResults)
+    const originalFetch = globalThis.fetch
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+      if (url.startsWith("http://localhost:8080/")) {
+        return new Response(JSON.stringify({
+          results: Array.from({ length: 10 }, (_, index) => ({
+            title: `Result ${index + 1}`,
+            url: `https://example.com/result-${index + 1}`,
+            content: `Snippet ${index + 1}`,
+          })),
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
+
+      return originalFetch(input as RequestInfo, init)
+    }) as typeof fetch
+
+    try {
+      for (const numResults of [1, 3, 8]) {
+        const results = await webSearch("Bun.js runtime", numResults)
+        expect(results.length).toBeGreaterThanOrEqual(1)
+        expect(results.length).toBeLessThanOrEqual(numResults)
+      }
+    } finally {
+      globalThis.fetch = originalFetch
     }
   })
 
@@ -182,12 +250,12 @@ describe("webSearch", () => {
 })
 
 describe("httpFetch", () => {
-  it("fetches a page and extracts text content", async () => {
+  it("fetches markdown content via Jina Reader with preserved shape", async () => {
     const result = await httpFetch("https://example.com", TEST_TOPIC_ID)
     expect(result.url).toBe("https://example.com")
-    expect(typeof result.title).toBe("string")
-    expect(typeof result.raw_content).toBe("string")
-    expect(result.raw_content.length).toBeGreaterThan(0)
+    expect(result.title.length).toBeGreaterThan(0)
+    expect(result.raw_content).toContain("[Learn more](https://iana.org/domains/example)")
+    expect(result.raw_content).not.toMatch(/<[^>]+>/)
     expect(result.cached).toBe(false)
     expect(typeof result.fetched_at).toBe("string")
     console.log(`Fetched title: "${result.title}", content length: ${result.raw_content.length}`)
@@ -199,6 +267,78 @@ describe("httpFetch", () => {
     expect(result2.cached).toBe(true)
     expect(result2.raw_content).toBe(result1.raw_content)
     console.log("Cache hit confirmed")
+  })
+
+  it("falls back to readability + turndown when Jina fails", async () => {
+    const originalFetch = globalThis.fetch
+    let sawJina = false
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+      if (requestUrl.startsWith("https://r.jina.ai/")) {
+        sawJina = true
+        throw new Error("Jina unavailable")
+      }
+      return originalFetch(input as RequestInfo, init)
+    }) as typeof fetch
+
+    try {
+      const result = await httpFetch("https://example.com")
+      expect(sawJina).toBe(true)
+      expect(result.cached).toBe(false)
+      expect(result.title).toBe("Example Domain")
+      expect(result.raw_content).toContain("[Learn more](https://iana.org/domains/example)")
+      expect(result.raw_content).not.toMatch(/<[^>]+>/)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it("throws immediately for paywalled domains", async () => {
+    const originalFetch = globalThis.fetch
+    let fetchCalls = 0
+
+    globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+      fetchCalls += 1
+      return originalFetch(...args)
+    }) as typeof fetch
+
+    try {
+      for (const url of [
+        "https://www.reuters.com/world/example",
+        "https://www.wsj.com/world/example",
+        "https://www.ft.com/content/example",
+      ]) {
+        await expect(httpFetch(url, TEST_TOPIC_ID)).rejects.toThrow(/paywalled domain/)
+      }
+      expect(fetchCalls).toBe(0)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it("re-fetches when cached entry is older than 48 hours", async () => {
+    const targetUrl = "https://example.com"
+    await httpFetch(targetUrl, TEST_TOPIC_ID)
+    const cacheFilePath = getCacheFilePath(targetUrl)
+    const cachePayload = await Bun.file(cacheFilePath).json() as Record<string, unknown>
+    cachePayload.cached_at = new Date(Date.now() - 49 * 60 * 60 * 1000).toISOString()
+    await writeFile(cacheFilePath, JSON.stringify(cachePayload, null, 2))
+
+    const refreshed = await httpFetch(targetUrl, TEST_TOPIC_ID)
+    expect(refreshed.cached).toBe(false)
+    const refreshedCache = await Bun.file(cacheFilePath).json() as Record<string, unknown>
+    expect(new Date(String(refreshedCache.cached_at)).getTime()).toBeGreaterThan(Date.now() - 60_000)
+  })
+
+  it("works without topicId and does not write cache files", async () => {
+    const targetUrl = "https://example.com"
+    const cacheFilePath = getCacheFilePath(targetUrl)
+    await rm(cacheFilePath, { force: true })
+
+    const result = await httpFetch(targetUrl)
+    expect(result.cached).toBe(false)
+    await expect(stat(cacheFilePath)).rejects.toThrow()
   })
 
   it("re-fetches when cache file is corrupted", async () => {
@@ -215,15 +355,59 @@ describe("httpFetch", () => {
     expect(refreshed.raw_content.length).toBeGreaterThan(0)
     expect(refreshed.url).toBe(existing.url)
   })
+
+  it("surfaces timeout errors when both Jina and fallback hang", async () => {
+    const originalFetch = globalThis.fetch
+    const originalSetTimeout = globalThis.setTimeout
+
+    globalThis.setTimeout = ((handler: TimerHandler) => originalSetTimeout(handler, 10)) as typeof setTimeout
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal
+        if (signal) {
+          signal.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted.", "AbortError"))
+          }, { once: true })
+        }
+      })
+    }) as typeof fetch
+
+    try {
+      await expect(httpFetch("https://example.com")).rejects.toThrow(/timeout after 15000ms/)
+    } finally {
+      globalThis.fetch = originalFetch
+      globalThis.setTimeout = originalSetTimeout
+    }
+  })
 })
 
 describe("timelineLookup", () => {
   it("returns array of timeline events with correct shape", async () => {
+    const webSearchModule = await import("../src/tools/external/webSearch")
+    mock.module("../src/tools/external/webSearch", () => ({
+      ...webSearchModule,
+      webSearch: async () => [
+        {
+          title: "Iran protests timeline update",
+          url: "https://example.com/2024/01/15/protests",
+          snippet: "January 15, 2024 protests update",
+          date: "2024-01-15",
+        },
+        {
+          title: "Iran protests follow-up",
+          url: "https://example.com/2024/03/20/follow-up",
+          snippet: "March 20, 2024 follow-up",
+          date: "2024-03-20",
+        },
+      ],
+    }))
+
     const events = await timelineLookup("Iran", "protests", {
       from: "2024-01-01",
       to: "2025-01-01",
     })
     expect(Array.isArray(events)).toBe(true)
+    expect(events.length).toBeGreaterThan(0)
     for (const e of events) {
       expect(typeof e.date).toBe("string")
       expect(typeof e.event).toBe("string")

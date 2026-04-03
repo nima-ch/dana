@@ -1,8 +1,12 @@
 import { join } from "path"
 import { createHash } from "crypto"
+import { parseHTML } from "linkedom"
+import { Readability } from "@mozilla/readability"
+import TurndownService from "turndown"
 
 const CACHE_TTL_MS = 48 * 60 * 60 * 1000 // 48 hours
-const FETCH_TIMEOUT_MS = 10_000 // 10 seconds
+const FETCH_TIMEOUT_MS = 15_000 // 15 seconds
+const JINA_READER_URL = "https://r.jina.ai/"
 
 // Domains known to require a subscription or return 401/403 to bots
 const PAYWALLED_DOMAINS = new Set([
@@ -36,49 +40,12 @@ function getCachePath(topicId: string, url: string): string {
   return join(dataDir, "topics", topicId, "sources", "cache", `${urlHash(url)}.json`)
 }
 
-// Strip HTML tags and collapse whitespace — lightweight readability
-function extractText(html: string): { title: string; content: string } {
-  // Extract title
-  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)
-  const title = titleMatch ? titleMatch[1].trim() : ""
-
-  // Remove script, style, nav, header, footer, aside blocks
-  let text = html
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, " ")
-    .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, " ")
-    .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, " ")
-    .replace(/<aside[^>]*>[\s\S]*?<\/aside>/gi, " ")
-    // Replace block elements with newlines
-    .replace(/<\/(p|div|h[1-6]|li|br|tr|blockquote)>/gi, "\n")
-    // Strip remaining tags
-    .replace(/<[^>]+>/g, " ")
-    // Decode common HTML entities
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ")
-    // Collapse whitespace
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim()
-
-  // Keep first ~8000 chars to stay within LLM context
-  if (text.length > 8000) text = text.slice(0, 8000) + "..."
-
-  return { title, content: text }
-}
-
 export async function httpFetch(url: string, topicId?: string): Promise<FetchResult> {
   // Reject known paywalled domains immediately — no network round-trip
   if (isPaywalled(url)) {
     throw new Error(`httpFetch skipped: paywalled domain for ${url}`)
   }
 
-  // Check cache if topicId provided
   if (topicId) {
     const cachePath = getCachePath(topicId, url)
     const cacheFile = Bun.file(cachePath)
@@ -95,41 +62,129 @@ export async function httpFetch(url: string, topicId?: string): Promise<FetchRes
     }
   }
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
-
-  let res: Response
   try {
-    res = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; Dana/1.0)",
-        Accept: "text/html,application/xhtml+xml",
-      },
-      redirect: "follow",
-      signal: controller.signal,
-    })
-  } finally {
-    clearTimeout(timer)
+    const fresh = await fetchWithJina(url)
+    return await finalizeResult(fresh, topicId)
+  } catch (jinaError) {
+    try {
+      const fallback = await fetchWithReadability(url)
+      return await finalizeResult(fallback, topicId)
+    } catch (fallbackError) {
+      throw new Error(
+        `httpFetch failed: Jina error: ${getErrorMessage(jinaError)}; fallback error: ${getErrorMessage(fallbackError)}`,
+      )
+    }
+  }
+}
+
+async function fetchWithJina(url: string): Promise<Omit<FetchResult, "cached">> {
+  const res = await fetchWithTimeout(`${JINA_READER_URL}${url}`, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent": "Mozilla/5.0 (compatible; Dana/1.0)",
+    },
+  })
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} from Jina Reader`)
   }
 
-  if (!res.ok) throw new Error(`httpFetch failed: HTTP ${res.status} for ${url}`)
+  const payload = await res.json() as JinaResponse
+  const title = payload.data?.title?.trim()
+  const raw_content = payload.data?.content?.trim()
 
-  const html = await res.text()
-  const { title, content: raw_content } = extractText(html)
+  if (!title || !raw_content) {
+    throw new Error("Jina Reader response missing title or content")
+  }
 
-  const result: FetchResult = {
+  return {
     url,
     title,
     raw_content,
     fetched_at: new Date().toISOString(),
+  }
+}
+
+async function fetchWithReadability(url: string): Promise<Omit<FetchResult, "cached">> {
+  const res = await fetchWithTimeout(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (compatible; Dana/1.0)",
+      Accept: "text/html,application/xhtml+xml",
+    },
+    redirect: "follow",
+  })
+
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status} for ${url}`)
+  }
+
+  const html = await res.text()
+  const { document } = parseHTML(html)
+
+  const article = new Readability(document).parse()
+  const title = article?.title?.trim() || document.title?.trim()
+  const contentHtml = article?.content?.trim()
+
+  if (!title || !contentHtml) {
+    throw new Error("Readability could not extract article content")
+  }
+
+  const raw_content = new TurndownService().turndown(contentHtml).trim()
+  if (!raw_content) {
+    throw new Error("Turndown produced empty markdown")
+  }
+
+  return {
+    url,
+    title,
+    raw_content,
+    fetched_at: new Date().toISOString(),
+  }
+}
+
+async function fetchWithTimeout(input: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`timeout after ${FETCH_TIMEOUT_MS}ms`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function finalizeResult(
+  result: Omit<FetchResult, "cached">,
+  topicId?: string,
+): Promise<FetchResult> {
+  const finalResult: FetchResult = {
+    ...result,
     cached: false,
   }
 
-  // Write to cache
   if (topicId) {
-    const cachePath = getCachePath(topicId, url)
+    const cachePath = getCachePath(topicId, result.url)
     await Bun.write(cachePath, JSON.stringify({ ...result, cached_at: new Date().toISOString() }, null, 2))
   }
 
-  return result
+  return finalResult
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+interface JinaResponse {
+  data?: {
+    title?: string
+    content?: string
+  }
 }
