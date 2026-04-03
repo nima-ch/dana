@@ -97,8 +97,8 @@ export const agentToolsRouter = new Elysia({ prefix: "/api" })
   .get("/agents", () => {
     return agents.map(agent => ({
       name: agent.name,
-      taskCategory: agent.taskCategory,
-      defaultTools: agentTools(agent),
+      task_category: agent.taskCategory,
+      tools: agentTools(agent),
       model: agentModel(agent),
       prompts: agent.prompts,
     }))

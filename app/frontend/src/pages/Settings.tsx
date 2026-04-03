@@ -360,6 +360,45 @@ function ProvidersPanel({ active }: { active: boolean }) {
     }
   }
 
+  const connectProvider = async (providerId: string) => {
+    setProviders(cur => cur.map(p => p.provider === providerId ? { ...p, status: "connecting" as const } : p))
+    try {
+      const res = await api.providers.login(providerId)
+      if (res.oauth_url) {
+        setLogin({ provider: providerId as ProviderId, oauthUrl: res.oauth_url })
+      }
+      const poll = setInterval(async () => {
+        try {
+          const status = await api.providers.loginStatus(providerId)
+          if (status.oauth_url && !login?.oauthUrl) {
+            setLogin({ provider: providerId as ProviderId, oauthUrl: status.oauth_url })
+          }
+          if (status.connected) {
+            clearInterval(poll)
+            setLogin(null)
+            await loadProviders()
+          }
+          if (status.timeout) {
+            clearInterval(poll)
+            setLogin(null)
+            setProviders(cur => cur.map(p => p.provider === providerId ? { ...p, status: "error" as const } : p))
+          }
+        } catch {
+          clearInterval(poll)
+          setLogin(null)
+          setProviders(cur => cur.map(p => p.provider === providerId ? { ...p, status: "error" as const } : p))
+        }
+      }, 2000)
+    } catch {
+      setProviders(cur => cur.map(p => p.provider === providerId ? { ...p, status: "error" as const } : p))
+    }
+  }
+
+  const disconnectProvider = async (providerId: string) => {
+    await api.providers.disconnect(providerId)
+    await loadProviders()
+  }
+
   return (
     <Card className={cn("border-border/70 bg-card/80", active && "ring-1 ring-primary/30")}>
       <CardHeader>
@@ -367,7 +406,41 @@ function ProvidersPanel({ active }: { active: boolean }) {
         <CardDescription>Connect Claude, OpenAI/Codex, or Google Gemini to unlock model access.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-                <div className="rounded-lg border border-border/70 bg-background/40 p-4 space-y-4">
+        <div className="grid gap-4 md:grid-cols-3">
+          {providers.map(provider => (
+            <Card key={provider.provider} className="border-border/70 bg-background/70">
+              <CardHeader className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base">{provider.label}</CardTitle>
+                  <Badge variant={provider.status === "connected" ? "default" : "secondary"}>
+                    {provider.status === "connected" ? "Connected" : provider.status === "connecting" ? "Connecting..." : provider.status === "error" ? "Error" : "Disconnected"}
+                  </Badge>
+                </div>
+                <CardDescription>{provider.description}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {provider.status === "connected" && provider.account && (
+                  <div className="text-sm text-muted-foreground">Account: {provider.account}</div>
+                )}
+                {provider.status === "connected" && (
+                  <div className="text-sm text-muted-foreground">{provider.models.length} models available</div>
+                )}
+                {provider.status === "connected" ? (
+                  <Button variant="outline" size="sm" className="w-full" onClick={() => void disconnectProvider(provider.provider)}>Disconnect</Button>
+                ) : (
+                  <Button size="sm" className="w-full" onClick={() => void connectProvider(provider.provider)} disabled={provider.status === "connecting"}>
+                    {provider.status === "connecting" ? "Connecting..." : "Connect"}
+                  </Button>
+                )}
+                {provider.status === "error" && (
+                  <div className="text-sm text-destructive">Connection failed or timed out. Try again.</div>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+        <Separator />
+        <div className="rounded-lg border border-border/70 bg-background/40 p-4 space-y-4">
           <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
             <div>
               <div className="text-sm font-medium">Unified model picker</div>
