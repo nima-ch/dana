@@ -7,6 +7,7 @@ import { log } from "../utils/logger"
 import { dbSetParties } from "../db/queries/parties"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { runDiscoveryResearcher } from "./DiscoveryResearcher"
+import { scoreAllParties } from "./PartyScorer"
 
 export interface Party {
   id: string
@@ -26,6 +27,7 @@ export interface Party {
   circle: { visible: string[]; shadow: string[] }
   stance: string
   vulnerabilities: string[]
+  weight_evidence?: Record<string, string>
   auto_discovered: boolean
   user_verified: boolean
 }
@@ -202,6 +204,7 @@ export async function runDiscoveryAgent(
         merge: { source_ids: string[]; into: string; reason: string }[]
         delete: { id: string; reason: string }[]
         add: { name: string; type: Party["type"]; reason: string }[]
+        group: { source_ids: string[]; alliance_name: string; reason: string; keep_separate?: string[] }[]
       }
 
       for (const del of (decisions.delete ?? [])) {
@@ -268,6 +271,44 @@ export async function runDiscoveryAgent(
         log.discovery(`Added party "${add.name}": ${add.reason}`)
       }
 
+      // GROUP: consolidate aligned parties into alliances
+      for (const group of (decisions.group ?? [])) {
+        const keepSeparate = new Set(group.keep_separate ?? [])
+        const sources = group.source_ids
+          .filter(id => !keepSeparate.has(id))
+          .map(id => parties.find(p => p.id === id))
+          .filter(Boolean) as Party[]
+        if (sources.length < 2) continue
+
+        const alliance: Party = {
+          id: slugify(group.alliance_name),
+          name: group.alliance_name,
+          type: "alliance",
+          description: `Alliance of ${sources.map(s => s.name).join(", ")}. ${group.reason}`,
+          weight: 0,
+          weight_factors: { military_capacity: 0, economic_control: 0, information_control: 0, international_support: 0, internal_legitimacy: 0 },
+          agenda: [...new Set(sources.map(s => s.agenda).filter(Boolean))].join("; "),
+          means: [...new Set(sources.flatMap(s => s.means))],
+          circle: {
+            visible: sources.map(s => s.name),
+            shadow: [...new Set(sources.flatMap(s => s.circle?.shadow ?? []))],
+          },
+          stance: sources[0].stance,
+          vulnerabilities: [...new Set(sources.flatMap(s => s.vulnerabilities))],
+          auto_discovered: true,
+          user_verified: false,
+        }
+
+        for (const src of sources) {
+          const idx = parties.findIndex(p => p.id === src.id)
+          if (idx !== -1) parties.splice(idx, 1)
+        }
+        parties.push(alliance)
+
+        emitThink(topicId, "🤝", `Alliance · ${sources.map(s => s.name).join(" + ")} → ${group.alliance_name}`, group.reason)
+        log.discovery(`Grouped → "${group.alliance_name}": ${group.reason}`)
+      }
+
       log.discovery(`Refinement complete: ${parties.length} parties`)
     }
   } catch (e) {
@@ -275,7 +316,19 @@ export async function runDiscoveryAgent(
   }
 
   // ─────────────────────────────────────────────
-  // STEP 4: Save parties to DB
+  // STEP 4: Evidence-based power scoring
+  // ─────────────────────────────────────────────
+  onProgress?.("Discovery: scoring party power axes…")
+  emitThink(topicId, "📊", "Scoring party power", `${parties.length} parties × 5 axes with evidence`)
+
+  try {
+    parties = await scoreAllParties(topicId, title, description, parties, model)
+  } catch (e) {
+    log.error("DISCOVERY", "Party scoring failed (non-fatal), keeping preliminary scores", e)
+  }
+
+  // ─────────────────────────────────────────────
+  // STEP 5: Save parties to DB
   // ─────────────────────────────────────────────
   emitThink(topicId, "💾", `Saving ${parties.length} parties`, `${researchResult.sources.length} sources collected`)
   log.discovery(`Saving ${parties.length} parties to DB`)

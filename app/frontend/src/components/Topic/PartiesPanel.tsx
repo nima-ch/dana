@@ -30,6 +30,7 @@ type Party = {
   vulnerabilities?: string[] | string
   circle?: { visible?: string[]; shadow?: string[] } | string[] | string
   description?: string
+  weight_evidence?: Record<string, string>
   [key: string]: unknown
 }
 
@@ -216,17 +217,21 @@ function PartyCard({
               <RadarChart data={factors} size={140} color="hsl(var(--primary))" />
             </div>
             <div className="space-y-2">
-              {sortedFactors.map(([key, value]) => (
-                <div key={key} className="space-y-1">
-                  <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span>{DIMENSION_LABELS[key] ?? key}</span>
-                    <span>{Math.round(value)}</span>
+              {sortedFactors.map(([key, value]) => {
+                const evidence = party.weight_evidence?.[key]
+                return (
+                  <div key={key} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>{DIMENSION_LABELS[key] ?? key}</span>
+                      <span>{Math.round(value)}</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-muted">
+                      <div className="h-2 rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+                    </div>
+                    {evidence && <div className="text-[10px] leading-tight text-muted-foreground/70">{evidence}</div>}
                   </div>
-                  <div className="h-2 rounded-full bg-muted">
-                    <div className="h-2 rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
 

@@ -48,6 +48,8 @@ export function PipelineActivityFeed({ topicId, status, active = false, onAction
     pushEvent(topicId, event)
   })
 
+
+
   const stageState = useMemo(() => {
     const completed = stagesCompletedByStatus(status)
     const running = stageRunningByStatus(status)
@@ -63,7 +65,8 @@ export function PipelineActivityFeed({ topicId, status, active = false, onAction
 
   const stageActions = useMemo(() => getStageActions(status), [status])
 
-  const idle = !active && items.length === 0
+  const hasActions = Object.values(stageActions).some(a => a !== null)
+  const idle = !active && items.length === 0 && !hasActions
   const minimized = collapsed || idle
 
   return <Card className={cn("border-border/70 bg-card/80 shadow-none", minimized ? "sticky bottom-4 mx-4" : "mx-0")}> 
@@ -81,8 +84,10 @@ export function PipelineActivityFeed({ topicId, status, active = false, onAction
           return <StageCard key={stage.key} label={stage.label} state={stage.state} action={action} onAction={onAction} />
         })}
       </div>
-      <div className="max-h-[28rem] space-y-2 overflow-y-auto rounded-xl border border-border/60 bg-background p-3">
-        {items.length === 0 ? <div className="text-sm text-muted-foreground">{idle ? "Idle. Run Discovery to begin." : "Waiting for events..."}</div> : items.map(item => <FeedRow key={item.id} item={item} />)}
+      <div className="max-h-[28rem] overflow-y-auto rounded-xl border border-border/60 bg-background p-3">
+        <div className="flex flex-col-reverse gap-2">
+          {items.length === 0 ? <div className="text-sm text-muted-foreground">{idle ? "Idle. Run Discovery to begin." : "Waiting for events..."}</div> : items.map(item => <FeedRow key={item.id} item={item} />)}
+        </div>
       </div>
     </CardContent>}
   </Card>

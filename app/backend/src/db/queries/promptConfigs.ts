@@ -26,6 +26,7 @@ export const BUILTIN_DEFAULTS: Record<string, PromptDefault> = {
   // Fast tasks — extraction, queries, categorization
   "discovery/orient":            { tools: [], task_profile: "fast" },
   "discovery/refine-parties":    { tools: [], task_profile: "fast" },
+  "discovery/score-axes":        { tools: ["web_search", "fetch_url"], task_profile: "balanced" },
   "clue-extractor/extract":      { tools: [], task_profile: "fast" },
   "clue-extractor/queries":      { tools: [], task_profile: "fast" },
   "clue-extractor/research":     { tools: [], task_profile: "fast" },

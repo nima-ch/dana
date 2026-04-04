@@ -49,6 +49,7 @@ function applySchema(db: Database): void {
       description TEXT NOT NULL DEFAULT '',
       weight REAL NOT NULL DEFAULT 0,
       weight_factors TEXT NOT NULL DEFAULT '{}',
+      weight_evidence TEXT NOT NULL DEFAULT '{}',
       agenda TEXT NOT NULL DEFAULT '',
       means TEXT NOT NULL DEFAULT '[]',
       circle TEXT NOT NULL DEFAULT '{"visible":[],"shadow":[]}',
@@ -290,4 +291,7 @@ function applySchema(db: Database): void {
       updated_at TEXT
     )
   `)
+
+  // Migrations for existing databases
+  try { db.run(`ALTER TABLE parties ADD COLUMN weight_evidence TEXT NOT NULL DEFAULT '{}'`) } catch { /* column already exists */ }
 }

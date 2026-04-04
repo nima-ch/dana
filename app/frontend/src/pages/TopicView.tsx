@@ -2,7 +2,6 @@ import { useEffect, useState } from "react"
 import { Navigate, useParams, useSearchParams } from "react-router-dom"
 import { api, type Topic } from "@/api/client"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -69,7 +68,18 @@ export function TopicView() {
 
   const pipelineFeed = <PipelineActivityFeed topicId={id} status={topic.status} active={topic.status !== "draft" && topic.status !== "complete"} onAction={handlePipelineAction} />
   const content = {
-    overview: <div className="space-y-4"><Card><CardHeader><CardTitle>Overview</CardTitle><CardDescription>{topic.description || "No description yet."}</CardDescription></CardHeader><CardContent><div className="grid gap-3 sm:grid-cols-3"><Meta label="Status" value={topic.status} /><Meta label="Version" value={`v${topic.current_version}`} /><Meta label="Topic ID" value={topic.id} /></div></CardContent></Card>{pipelineFeed}</div>,
+    overview: <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-border/70 bg-card/80 px-4 py-2.5 text-sm">
+        <span className="text-muted-foreground">Status</span>
+        <Badge variant="secondary" className="capitalize">{topic.status.replace(/_/g, " ")}</Badge>
+        <span className="text-border">|</span>
+        <span className="text-muted-foreground">Version</span>
+        <span className="font-medium">v{topic.current_version}</span>
+        <span className="text-border">|</span>
+        <span className="truncate font-mono text-xs text-muted-foreground">{topic.id}</span>
+      </div>
+      {pipelineFeed}
+    </div>,
     parties: <PartiesPanel topicId={id} status={topic.status} />,
     evidence: <CluesPanel topicId={id} />,
     forum: <TabEmpty title="Forum" description="No forum session loaded yet." />,
@@ -106,4 +116,4 @@ function TabEmpty({ title, description, action, onAction }: { title: string; des
   return <div className={cn("rounded-xl border border-dashed p-8 text-center", "bg-card")}> <div className="text-lg font-semibold">{title}</div><div className="mt-2 text-sm text-muted-foreground">{description}</div>{action && onAction && <Button className="mt-4" variant="secondary" onClick={onAction}>{action}</Button>}</div>
 }
 
-function Meta({ label, value }: { label: string; value: string }) { return <div className="rounded-lg border bg-background p-3"><div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div><div className="mt-1 text-sm font-medium">{value}</div></div> }
+

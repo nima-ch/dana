@@ -54,13 +54,13 @@ When you have completed your research, output ONLY a valid JSON object (no markd
       "name": "<full name>",
       "type": "<state|state_military|non_state|individual|media|economic|alliance>",
       "description": "<detailed 2-4 sentence description with specific facts, dates, events from your research>",
-      "weight": <0-100>,
+      "weight": <preliminary rough estimate 0-100, will be re-scored with evidence later>,
       "weight_factors": {
-        "military_capacity": <0-100>,
-        "economic_control": <0-100>,
-        "information_control": <0-100>,
-        "international_support": <0-100>,
-        "internal_legitimacy": <0-100>
+        "military_capacity": <rough estimate 0-100>,
+        "economic_control": <rough estimate 0-100>,
+        "information_control": <rough estimate 0-100>,
+        "international_support": <rough estimate 0-100>,
+        "internal_legitimacy": <rough estimate 0-100>
       },
       "agenda": "<their specific goal regarding this topic, from evidence>",
       "means": ["<specific lever of power — name real capabilities you found>"],
