@@ -81,7 +81,8 @@ export async function smartExtractClues(
   const fetchedContent: Record<string, string> = {}
   let fetched = 0
 
-  for (const url of fetchableUrls.slice(0, 15)) {
+  const controls = dbGetControls()
+  for (const url of fetchableUrls.slice(0, controls.smart_extract_url_limit)) {
     try {
       // Check corpus first
       const cached = (() => { try { return getPage(topicId, url) } catch { return null } })()
@@ -334,9 +335,10 @@ Generate 3-5 specific, fact-finding search queries that would uncover concrete e
   log.enrichment(`Research: ${searchQueries.length} search queries: ${searchQueries.join(" | ")}`)
 
   // Step 2: Search and fetch (corpus-aware)
-  const cacheMaxAgeMs = dbGetControls().corpus_cache_hours * 60 * 60 * 1000
+  const controls = dbGetControls()
+  const cacheMaxAgeMs = controls.corpus_cache_hours * 60 * 60 * 1000
   const fetchedContent: string[] = []
-  for (const sq of searchQueries.slice(0, 4)) {
+  for (const sq of searchQueries.slice(0, controls.research_search_queries)) {
     try {
       // Check corpus for cached search
       let results = (() => {

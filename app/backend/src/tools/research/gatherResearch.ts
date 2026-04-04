@@ -21,8 +21,8 @@ export async function gatherResearch(
 ): Promise<string> {
   const controls = dbGetControls()
   const cacheMaxAgeMs = controls.corpus_cache_hours * 60 * 60 * 1000
-  const maxQueries = opts?.maxQueries ?? 3
-  const maxSnippetChars = opts?.maxSnippetChars ?? 12000
+  const maxQueries = opts?.maxQueries ?? controls.smart_edit_queries
+  const maxSnippetChars = opts?.maxSnippetChars ?? controls.smart_edit_max_chars
   const snippets: string[] = []
 
   for (const query of queries.slice(0, maxQueries)) {

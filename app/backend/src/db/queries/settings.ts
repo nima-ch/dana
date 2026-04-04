@@ -23,23 +23,61 @@ export const DEFAULT_MODELS: Record<TaskCategory, string> = {
 }
 
 export interface AnalysisControls {
+  // Discovery
   discovery_research_iterations: number
+  discovery_context_warning: number
   scoring_iterations: number
+  scoring_context_warning: number
   scoring_batch_size: number
+  // Enrichment
   enrichment_iterations: number
+  enrichment_context_warning: number
   enrichment_batch_size: number
+  smart_extract_url_limit: number
+  research_search_queries: number
+  // Smart Edit
+  smart_edit_queries: number
+  smart_edit_max_chars: number
+  // Forum
   forum_max_turns: number
+  forum_supervisor_check: number
+  forum_compress_interval: number
+  forum_speaking_budget: number
+  forum_min_speaking_floor: number
+  forum_persona_batch: number
+  // Agentic Loop defaults
+  default_max_iterations: number
+  default_context_warning: number
   max_fetch_chars: number
   corpus_cache_hours: number
 }
 
 export const DEFAULT_CONTROLS: AnalysisControls = {
+  // Discovery
   discovery_research_iterations: 20,
+  discovery_context_warning: 120000,
   scoring_iterations: 12,
+  scoring_context_warning: 100000,
   scoring_batch_size: 2,
+  // Enrichment
   enrichment_iterations: 15,
+  enrichment_context_warning: 100000,
   enrichment_batch_size: 2,
+  smart_extract_url_limit: 15,
+  research_search_queries: 4,
+  // Smart Edit
+  smart_edit_queries: 3,
+  smart_edit_max_chars: 12000,
+  // Forum
   forum_max_turns: 50,
+  forum_supervisor_check: 5,
+  forum_compress_interval: 10,
+  forum_speaking_budget: 600,
+  forum_min_speaking_floor: 150,
+  forum_persona_batch: 4,
+  // Agentic Loop defaults
+  default_max_iterations: 10,
+  default_context_warning: 150000,
   max_fetch_chars: 3000,
   corpus_cache_hours: 2,
 }

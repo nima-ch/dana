@@ -41,11 +41,25 @@ const STORAGE_KEY = "dana.settings.activeTab"
 
 const CONTROLS_DEFAULTS = {
   discovery_research_iterations: 20,
+  discovery_context_warning: 120000,
   scoring_iterations: 12,
+  scoring_context_warning: 100000,
   scoring_batch_size: 2,
   enrichment_iterations: 15,
+  enrichment_context_warning: 100000,
   enrichment_batch_size: 2,
+  smart_extract_url_limit: 15,
+  research_search_queries: 4,
+  smart_edit_queries: 3,
+  smart_edit_max_chars: 12000,
   forum_max_turns: 50,
+  forum_supervisor_check: 5,
+  forum_compress_interval: 10,
+  forum_speaking_budget: 600,
+  forum_min_speaking_floor: 150,
+  forum_persona_batch: 4,
+  default_max_iterations: 10,
+  default_context_warning: 150000,
   max_fetch_chars: 3000,
   corpus_cache_hours: 2,
 }
@@ -619,17 +633,65 @@ function PromptsPanel() {
   )
 }
 
-// ── Analysis Controls Panel ────────────────────────────────────────────────
+// ── Analysis Controls Panel (two-panel layout) ────────────────────────────
 
-const CONTROL_FIELDS: { section: string; key: keyof typeof CONTROLS_DEFAULTS; label: string; hint: string; min: number; max: number; step?: number }[] = [
-  { section: "Discovery", key: "discovery_research_iterations", label: "Research depth", hint: "Max agentic loop rounds for initial topic research", min: 5, max: 30 },
-  { section: "Discovery", key: "scoring_iterations", label: "Scoring depth", hint: "Max rounds per party for evidence-based power scoring", min: 5, max: 20 },
-  { section: "Discovery", key: "scoring_batch_size", label: "Scoring parallelism", hint: "Parties scored in parallel", min: 1, max: 4 },
-  { section: "Enrichment", key: "enrichment_iterations", label: "Research depth per party", hint: "Max agentic rounds per party for clue gathering + fact-check", min: 5, max: 25 },
-  { section: "Enrichment", key: "enrichment_batch_size", label: "Parallelism", hint: "Parties enriched in parallel", min: 1, max: 4 },
-  { section: "Forum", key: "forum_max_turns", label: "Max debate turns", hint: "Upper limit on debate turns before forcing closure", min: 10, max: 100 },
-  { section: "General", key: "max_fetch_chars", label: "Fetch content limit", hint: "Characters of each fetched page sent to LLM", min: 1000, max: 8000, step: 500 },
-  { section: "General", key: "corpus_cache_hours", label: "Corpus cache window", hint: "Hours before similar search results are re-fetched", min: 1, max: 24 },
+type ControlField = { key: keyof typeof CONTROLS_DEFAULTS; label: string; hint: string; min: number; max: number; step?: number }
+
+type ControlCategory = { id: string; label: string; icon: string; description: string; fields: ControlField[] }
+
+const CATEGORIES: ControlCategory[] = [
+  {
+    id: "discovery", label: "Discovery", icon: "🔍",
+    description: "Controls for initial topic research and party scoring.",
+    fields: [
+      { key: "discovery_research_iterations", label: "Research depth", hint: "Max agentic loop rounds for initial topic research", min: 5, max: 30 },
+      { key: "discovery_context_warning", label: "Context budget warning", hint: "Token count at which the LLM is told to wrap up", min: 50000, max: 200000, step: 10000 },
+      { key: "scoring_iterations", label: "Scoring depth", hint: "Max rounds per party for evidence-based power scoring", min: 5, max: 20 },
+      { key: "scoring_context_warning", label: "Scoring context budget", hint: "Token limit for each party scoring session", min: 50000, max: 200000, step: 10000 },
+      { key: "scoring_batch_size", label: "Scoring parallelism", hint: "Number of parties scored in parallel", min: 1, max: 4 },
+    ],
+  },
+  {
+    id: "enrichment", label: "Enrichment", icon: "📊",
+    description: "Controls for per-party clue gathering, fact-checking, and evidence extraction.",
+    fields: [
+      { key: "enrichment_iterations", label: "Research depth per party", hint: "Max agentic rounds per party for clue gathering + fact-check", min: 5, max: 25 },
+      { key: "enrichment_context_warning", label: "Context budget warning", hint: "Token count at which enrichment is told to wrap up", min: 50000, max: 200000, step: 10000 },
+      { key: "enrichment_batch_size", label: "Parallelism", hint: "Number of parties enriched in parallel", min: 1, max: 4 },
+      { key: "smart_extract_url_limit", label: "URL fetch limit", hint: "Max URLs fetched during smart clue extraction", min: 5, max: 30 },
+      { key: "research_search_queries", label: "Research search queries", hint: "Max search queries in research-and-extract mode", min: 2, max: 8 },
+    ],
+  },
+  {
+    id: "smart_edit", label: "Smart Edit", icon: "✏️",
+    description: "Controls for user-triggered smart add, edit, split, and merge operations.",
+    fields: [
+      { key: "smart_edit_queries", label: "Search queries", hint: "Max web search queries per smart add/split/edit", min: 1, max: 6 },
+      { key: "smart_edit_max_chars", label: "Research text limit", hint: "Max characters of research material sent to LLM", min: 4000, max: 24000, step: 1000 },
+    ],
+  },
+  {
+    id: "forum", label: "Forum", icon: "💬",
+    description: "Controls for the multi-party debate, supervision, and speaking budgets.",
+    fields: [
+      { key: "forum_max_turns", label: "Max debate turns", hint: "Upper limit on total debate turns before forcing closure", min: 10, max: 100 },
+      { key: "forum_supervisor_check", label: "Supervisor check interval", hint: "Evaluate debate progress and scenarios every N turns", min: 3, max: 10 },
+      { key: "forum_compress_interval", label: "History compression", hint: "Compress conversation history every N turns to save context", min: 5, max: 20 },
+      { key: "forum_speaking_budget", label: "Opening statement budget", hint: "Word pool for opening statements (rebuttal = 67%, closing = 50%)", min: 200, max: 1200, step: 50 },
+      { key: "forum_min_speaking_floor", label: "Minimum speaking floor", hint: "Minimum words any party can speak regardless of weight", min: 50, max: 400, step: 10 },
+      { key: "forum_persona_batch", label: "Persona parallelism", hint: "Number of forum personas generated in parallel", min: 1, max: 8 },
+    ],
+  },
+  {
+    id: "agentic", label: "Agentic Defaults", icon: "🤖",
+    description: "Global defaults for all agentic loops, content fetching, and corpus caching.",
+    fields: [
+      { key: "default_max_iterations", label: "Default iteration limit", hint: "Fallback max rounds for agents that don't specify their own", min: 5, max: 20 },
+      { key: "default_context_warning", label: "Default context budget", hint: "Default token threshold for context budget warnings", min: 50000, max: 300000, step: 10000 },
+      { key: "max_fetch_chars", label: "Fetch content limit", hint: "Characters of each fetched page sent to LLM per tool call", min: 1000, max: 8000, step: 500 },
+      { key: "corpus_cache_hours", label: "Corpus cache window", hint: "Hours before similar search results are re-fetched from the web", min: 1, max: 24 },
+    ],
+  },
 ]
 
 function PipelinePanel() {
@@ -638,6 +700,7 @@ function PipelinePanel() {
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [activeCategory, setActiveCategory] = useState(CATEGORIES[0].id)
 
   useEffect(() => {
     void (async () => {
@@ -648,9 +711,11 @@ function PipelinePanel() {
     })()
   }, [])
 
+  const allFields = CATEGORIES.flatMap(c => c.fields)
+
   const validate = (next = controls) => {
     const nextErrors: Record<string, string> = {}
-    for (const f of CONTROL_FIELDS) {
+    for (const f of allFields) {
       const v = Number(next[f.key])
       if (!Number.isFinite(v) || v < f.min || v > f.max) nextErrors[f.key] = `${f.min}–${f.max}`
     }
@@ -665,6 +730,7 @@ function PipelinePanel() {
       const updated = await api.settings.update({ analysis_controls: controls })
       const next = { ...CONTROLS_DEFAULTS, ...(updated.analysis_controls ?? controls) }
       setControls(next); setSaved(next); setMessage("Saved.")
+      setTimeout(() => setMessage(null), 2000)
     } finally { setSaving(false) }
   }
 
@@ -677,46 +743,106 @@ function PipelinePanel() {
   }
 
   const isDirty = JSON.stringify(controls) !== JSON.stringify(saved)
-  const sections = [...new Set(CONTROL_FIELDS.map(f => f.section))]
+  const category = CATEGORIES.find(c => c.id === activeCategory) ?? CATEGORIES[0]
+
+  const categoryDirtyCount = (cat: ControlCategory) =>
+    cat.fields.filter(f => controls[f.key] !== saved[f.key]).length
 
   return (
-    <Card className="border-border/70 bg-card/80">
-      <CardHeader>
-        <CardTitle>Analysis Controls</CardTitle>
-        <CardDescription>Configure research depth, parallelism, and debate behavior. Changes apply to the next pipeline run.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        {sections.map(section => (
-          <div key={section}>
-            <div className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{section}</div>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {CONTROL_FIELDS.filter(f => f.section === section).map(f => (
-                <div key={f.key} className="space-y-1.5">
-                  <Label>{f.label}</Label>
-                  <Input
-                    type="number"
-                    min={f.min}
-                    max={f.max}
-                    step={f.step ?? 1}
-                    value={String(controls[f.key])}
-                    onChange={e => update(f.key, e.target.value)}
-                    className={errors[f.key] ? "border-destructive" : ""}
-                  />
-                  <div className="text-xs text-muted-foreground">{f.hint}</div>
-                  {errors[f.key] && <div className="text-xs text-destructive">Must be {errors[f.key]}</div>}
-                </div>
-              ))}
+    <div className="rounded-xl border border-border/70 bg-card/80 overflow-hidden">
+      <div className="flex" style={{ height: "calc(100vh - 220px)", minHeight: "500px" }}>
+        {/* Left sidebar */}
+        <div className="flex w-56 shrink-0 flex-col border-r border-border/70 bg-background/50">
+          <div className="border-b border-border/70 px-3 py-2.5">
+            <div className="text-xs font-medium text-muted-foreground">Analysis Controls</div>
+          </div>
+          <ScrollArea className="flex-1">
+            <div className="p-2 space-y-0.5">
+              {CATEGORIES.map(cat => {
+                const isActive = activeCategory === cat.id
+                const dirtyN = categoryDirtyCount(cat)
+                return (
+                  <button key={cat.id} type="button" onClick={() => setActiveCategory(cat.id)}
+                    className={cn("flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors",
+                      isActive ? "bg-primary/10 text-primary" : "hover:bg-accent/40")}>
+                    <span className="text-sm">{cat.icon}</span>
+                    <span className="flex-1 text-xs font-medium">{cat.label}</span>
+                    <span className="text-[10px] tabular-nums text-muted-foreground">{cat.fields.length}</span>
+                    {dirtyN > 0 && <span className="size-1.5 rounded-full bg-amber-500" />}
+                  </button>
+                )
+              })}
+            </div>
+          </ScrollArea>
+          <div className="border-t border-border/70 px-3 py-2">
+            <div className="text-[10px] text-muted-foreground">{allFields.length} controls across {CATEGORIES.length} categories</div>
+          </div>
+        </div>
+
+        {/* Right panel */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* Header */}
+          <div className="flex items-center justify-between gap-3 border-b border-border/70 px-5 py-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-base">{category.icon}</span>
+                <h3 className="text-sm font-medium">{category.label}</h3>
+                {message && <Badge variant="outline" className="gap-1 text-[10px] text-green-600"><Check className="size-3" />{message}</Badge>}
+              </div>
+              <div className="mt-0.5 text-xs text-muted-foreground">{category.description}</div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button type="button" size="sm" variant="outline" onClick={reset}><RotateCcw className="size-3.5" />Reset all</Button>
+              <Button type="button" size="sm" onClick={() => void save()} disabled={!isDirty || saving}>{saving ? "Saving..." : "Save"}</Button>
             </div>
           </div>
-        ))}
-        <Separator />
-        <div className="flex flex-wrap gap-2">
-          <Button onClick={() => void save()} disabled={saving || !isDirty}>{saving ? "Saving..." : "Save"}</Button>
-          <Button variant="outline" onClick={reset}><RotateCcw className="mr-2 size-4" />Reset to defaults</Button>
-          {message && <span className="self-center text-sm text-muted-foreground">{message}</span>}
+
+          {/* Fields */}
+          <ScrollArea className="flex-1">
+            <div className="divide-y divide-border/50">
+              {category.fields.map(f => {
+                const isModified = controls[f.key] !== CONTROLS_DEFAULTS[f.key]
+                const hasError = !!errors[f.key]
+                return (
+                  <div key={f.key} className="flex items-center gap-4 px-5 py-3.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">{f.label}</span>
+                        {isModified && <span className="size-1.5 rounded-full bg-amber-500" title="Modified from default" />}
+                      </div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">{f.hint}</div>
+                      {hasError && <div className="mt-0.5 text-xs text-destructive">Must be between {errors[f.key]}</div>}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Input
+                        type="number"
+                        min={f.min}
+                        max={f.max}
+                        step={f.step ?? 1}
+                        value={String(controls[f.key])}
+                        onChange={e => update(f.key, e.target.value)}
+                        className={cn("w-28 text-right tabular-nums", hasError && "border-destructive")}
+                      />
+                      <div className="w-16 text-[10px] text-muted-foreground tabular-nums">{f.min}–{f.max}</div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </ScrollArea>
+
+          {/* Footer */}
+          <div className="flex items-center justify-between border-t border-border/70 px-5 py-2">
+            <div className="text-[10px] text-muted-foreground">
+              {category.fields.length} controls in {category.label}
+            </div>
+            <div className="text-[10px] text-muted-foreground">
+              {isDirty ? "Unsaved changes" : "All saved"}
+            </div>
+          </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   )
 }
 

@@ -2,6 +2,7 @@ import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput } from "../llm/tokenBudget"
 import { resolvePrompt } from "../llm/promptLoader"
 import { runAgenticLoop } from "../llm/agenticLoop"
+import { dbGetControls } from "../db/queries/settings"
 import { log } from "../utils/logger"
 import { emitThink } from "../routes/stream"
 import { dbUpsertSupervisorState, dbGetSupervisorState } from "../db/queries/forum"
@@ -27,6 +28,8 @@ export class ForumSupervisor {
   private topic: string
   private maxTurns: number
   private minTurns: number
+  private checkInterval: number
+  private compressInterval: number
 
   constructor(
     topicId: string,
@@ -41,6 +44,10 @@ export class ForumSupervisor {
     this.topic = topic
     this.maxTurns = maxTurns
     this.minTurns = minTurns
+
+    const controls = dbGetControls()
+    this.checkInterval = controls.forum_supervisor_check
+    this.compressInterval = controls.forum_compress_interval
 
     // Load existing state or create fresh
     const existing = dbGetSupervisorState(topicId, sessionId)
@@ -222,7 +229,7 @@ export class ForumSupervisor {
 
   // Compress conversation history — called every COMPRESS_INTERVAL turns
   async compressHistory(allTurns: ForumTurn[]): Promise<void> {
-    if (allTurns.length < COMPRESS_INTERVAL) return
+    if (allTurns.length < this.compressInterval) return
 
     // Compress all but the last 8 turns
     const toCompress = allTurns.slice(0, -8)

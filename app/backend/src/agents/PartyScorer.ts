@@ -74,7 +74,7 @@ async function scoreOneParty(
     maxIterations: controls.scoring_iterations,
     temperature: 0.2,
     max_tokens: budgetOutput(effectiveModel, config.content, { min: 2000, max: 4000 }),
-    contextWarningThreshold: 100000,
+    contextWarningThreshold: controls.scoring_context_warning,
     messages: [
       { role: "system", content: config.content },
       { role: "user", content: `Begin your research on ${party.name}. Search for specific metrics and data for each of the 5 dimensions. Output your scores as JSON when done.` },

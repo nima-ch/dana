@@ -58,7 +58,7 @@ export async function runDiscoveryResearcher(
     maxIterations: controls.discovery_research_iterations,
     temperature: 0.3,
     max_tokens: budgetOutput(effectiveModel, config.content + userMessage, { min: 8000, max: 16000 }),
-    contextWarningThreshold: 120000,
+    contextWarningThreshold: controls.discovery_context_warning,
     messages: [
       { role: "system", content: config.content },
       { role: "user", content: userMessage },

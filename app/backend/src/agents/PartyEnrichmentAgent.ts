@@ -145,7 +145,7 @@ export async function runPartyEnrichmentAgent(
     maxIterations: controls.enrichment_iterations,
     temperature: 0.2,
     max_tokens: budgetOutput(effectiveModel, config.content, { min: 3000, max: 6000 }),
-    contextWarningThreshold: 100000,
+    contextWarningThreshold: controls.enrichment_context_warning,
     customTools: { store_clue: storeClueHandler },
     messages: [
       { role: "system", content: config.content },

@@ -7,7 +7,6 @@ import { dbGetControls } from "../db/queries/settings"
 import { emitThink } from "../routes/stream"
 import { log } from "../utils/logger"
 
-const DEFAULT_MAX_ITERATIONS = 10
 const CHARS_PER_TOKEN = 4
 
 export type CustomToolHandler = (args: Record<string, unknown>) => Promise<string>
@@ -133,8 +132,8 @@ async function executeBuiltinTool(call: ToolCall, topicId: string, stage: string
 export async function runAgenticLoop(options: AgenticLoopOptions): Promise<string> {
   const { model, tools, topicId, temperature, max_tokens, customTools } = options
   const stage = options.stage ?? "tool"
-  const maxIter = options.maxIterations ?? DEFAULT_MAX_ITERATIONS
-  const contextWarning = options.contextWarningThreshold ?? 150000
+  const maxIter = options.maxIterations ?? dbGetControls().default_max_iterations
+  const contextWarning = options.contextWarningThreshold ?? dbGetControls().default_context_warning
   const messages: ChatMessage[] = [...options.messages]
   let contextWarned = false
 

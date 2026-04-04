@@ -2,6 +2,7 @@ import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput, fitContext } from "../llm/tokenBudget"
 import { resolvePrompt } from "../llm/promptLoader"
 import { runAgenticLoop } from "../llm/agenticLoop"
+import { dbGetControls } from "../db/queries/settings"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
 import { emitThink } from "../routes/stream"
@@ -33,13 +34,13 @@ export interface WeightCalculatorOutput {
   party_weights: { party_id: string; weight: number; weight_factors: Party["weight_factors"] }[]
 }
 
-// Word pools per round type (total words split across all parties proportionally)
-const ROUND_POOLS = { opening: 600, rebuttal: 400, closing: 300 }
-const MIN_FLOOR = 150
 const LOW_WEIGHT_THRESHOLD = 15
 
 
 function computeSpeakingBudget(weight: number, totalWeight: number, isLowWeight: boolean): SpeakingBudget {
+  const controls = dbGetControls()
+  const ROUND_POOLS = { opening: controls.forum_speaking_budget, rebuttal: Math.round(controls.forum_speaking_budget * 0.67), closing: Math.round(controls.forum_speaking_budget * 0.5) }
+  const MIN_FLOOR = controls.forum_min_speaking_floor
   if (isLowWeight) {
     return { opening_statement: MIN_FLOOR, rebuttal: MIN_FLOOR, closing: MIN_FLOOR, minimum_floor: MIN_FLOOR }
   }
@@ -138,7 +139,8 @@ export async function runWeightCalculator(
   onProgress?.(`WeightCalculator: generating ${parties.length} representative personas`)
   const representatives: Representative[] = []
 
-  const PERSONA_BATCH = 4
+  const controls = dbGetControls()
+  const PERSONA_BATCH = controls.forum_persona_batch
   for (let bi = 0; bi < parties.length; bi += PERSONA_BATCH) {
     const batch = parties.slice(bi, bi + PERSONA_BATCH)
     onProgress?.(`WeightCalculator: personas ${bi + 1}-${Math.min(bi + PERSONA_BATCH, parties.length)} of ${parties.length}`)
