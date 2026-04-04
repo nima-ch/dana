@@ -52,6 +52,7 @@ export async function runDiscoveryResearcher(
   const raw = await runAgenticLoop({
     model: effectiveModel,
     topicId,
+    stage: "discovery",
     tools: config.tools,
     maxIterations: 20,
     temperature: 0.3,

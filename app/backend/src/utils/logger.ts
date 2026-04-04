@@ -19,6 +19,7 @@ const STAGE_COLORS: Record<string, string> = {
   EXPERT: COLORS.green,
   VERDICT: COLORS.red,
   DELTA: COLORS.magenta,
+  SCORING: COLORS.green,
   PIPELINE: COLORS.bold,
   LLM: COLORS.gray,
   TOOL: COLORS.dim,
@@ -46,6 +47,8 @@ export const log = {
   delta(msg: string, detail?: string) { console.log(fmt("DELTA", msg, detail)) },
   llm(msg: string, detail?: string) { console.log(fmt("LLM", msg, detail)) },
   tool(msg: string, detail?: string) { console.log(fmt("TOOL", msg, detail)) },
+  scoring(msg: string, detail?: string) { console.log(fmt("SCORING", msg, detail)) },
+  stage(name: string, msg: string, detail?: string) { console.log(fmt(name.toUpperCase(), msg, detail)) },
   error(stage: string, msg: string, err?: unknown) {
     console.error(`${COLORS.gray}[${ts()}]${COLORS.reset} ${COLORS.red}[${stage} ERROR]${COLORS.reset} ${msg}`, err ? String(err) : "")
   },

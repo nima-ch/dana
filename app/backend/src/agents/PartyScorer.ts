@@ -67,6 +67,7 @@ async function scoreOneParty(
   const raw = await runAgenticLoop({
     model: effectiveModel,
     topicId,
+    stage: "scoring",
     tools: config.tools,
     maxIterations: 12,
     temperature: 0.2,

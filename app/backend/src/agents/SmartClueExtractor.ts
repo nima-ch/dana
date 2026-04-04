@@ -2,9 +2,10 @@ import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput } from "../llm/tokenBudget"
 import { resolvePrompt } from "../llm/promptLoader"
 import { runAgenticLoop } from "../llm/agenticLoop"
-
-import { webSearch } from "../tools/external/webSearch"
+import { gatherResearch } from "../tools/research/gatherResearch"
 import { httpFetch } from "../tools/external/httpFetch"
+import { storePage, getPage, storeSearch, findSimilarSearches } from "../db/queries/researchCorpus"
+import { webSearch } from "../tools/external/webSearch"
 import { log } from "../utils/logger"
 import { emitThink } from "../routes/stream"
 import type { Party } from "./DiscoveryAgent"
@@ -50,38 +51,6 @@ function chunkText(text: string, maxChars: number = 12000): string[] {
   return chunks
 }
 
-async function gatherResearch(queries: string[], topicId: string): Promise<string> {
-  const snippets: string[] = []
-  for (const query of queries.slice(0, 3)) {
-    try {
-      await new Promise(r => setTimeout(r, 400))
-      emitThink(topicId, "🔎", "Searching", query)
-      log.enrichment(`Research query: "${query}"`)
-      const results = await webSearch(query, 3)
-      log.enrichment(`Research: "${query}" → ${results.length} results`)
-      emitThink(topicId, "📄", `Found ${results.length} results`, results.slice(0, 3).map(r => r.title).join(", "))
-      for (const r of results.slice(0, 2)) {
-        try {
-          emitThink(topicId, "🌐", "Fetching", r.title)
-          const fetched = await httpFetch(r.url, topicId)
-          snippets.push(`[${r.title}]\n${fetched.raw_content.slice(0, 2000)}`)
-          emitThink(topicId, "✓", "Fetched", `${r.title} (${fetched.raw_content.length} chars)`)
-        } catch (fetchErr) {
-          log.enrichment(`Research fetch failed for ${r.url}: ${fetchErr instanceof Error ? fetchErr.message : fetchErr}`)
-          if (r.snippet) snippets.push(`[${r.title}] ${r.snippet}`)
-        }
-      }
-    } catch (searchErr) {
-      log.enrichment(`Research search failed for "${query}": ${searchErr instanceof Error ? searchErr.message : searchErr}`)
-      emitThink(topicId, "⚠", "Search failed", searchErr instanceof Error ? searchErr.message : String(searchErr))
-    }
-  }
-  log.enrichment(`Research complete: ${snippets.length} snippets, ${snippets.join("").length} chars`)
-  emitThink(topicId, "📊", "Research complete", `${snippets.length} snippets gathered`)
-  return snippets.join("\n\n---\n\n").slice(0, 12000)
-}
-
-// Fetch URLs that are likely to succeed (skip social media that needs auth)
 function isFetchable(url: string): boolean {
   const skip = ["x.com", "twitter.com", "instagram.com", "facebook.com", "truthsocial.com", "t.me"]
   try {
@@ -113,10 +82,18 @@ export async function smartExtractClues(
 
   for (const url of fetchableUrls.slice(0, 15)) {
     try {
-      const result = await httpFetch(url, topicId)
+      // Check corpus first
+      const cached = (() => { try { return getPage(topicId, url) } catch { return null } })()
+      if (cached && cached.contentLength > 100) {
+        fetchedContent[url] = cached.content.slice(0, 3000)
+        fetched++
+        continue
+      }
+      const result = await httpFetch(url)
       if (result.raw_content.length > 100) {
         fetchedContent[url] = result.raw_content.slice(0, 3000)
         fetched++
+        try { storePage(topicId, url, result.title, result.raw_content, "enrichment") } catch { /* non-fatal */ }
       }
     } catch { /* skip */ }
   }
@@ -155,6 +132,7 @@ ${chunks[i]}`
       raw = await runAgenticLoop({
         model: effectiveModel,
         topicId,
+        stage: "enrichment",
         tools: extractConfig.tools,
         temperature: 0.2,
         max_tokens: budgetOutput(effectiveModel, topicContext + chunks[i], { min: 4000, max: 10000 }),
@@ -262,6 +240,7 @@ export async function smartEditClue(
   const raw = await runAgenticLoop({
     model: editConfig.model ?? model,
     topicId,
+    stage: "enrichment",
     tools: editConfig.tools,
     temperature: 0.2,
     max_tokens: budgetOutput(editConfig.model ?? model, topicTitle + JSON.stringify(currentClue) + feedback, { min: 1000, max: 3000 }),
@@ -321,6 +300,7 @@ Generate 3-5 specific, fact-finding search queries that would uncover concrete e
     queriesRaw = await runAgenticLoop({
       model: queriesModel,
       topicId,
+      stage: "enrichment",
       tools: queriesConfig.tools,
       temperature: 0.3,
       max_tokens: 500,
@@ -352,19 +332,46 @@ Generate 3-5 specific, fact-finding search queries that would uncover concrete e
 
   log.enrichment(`Research: ${searchQueries.length} search queries: ${searchQueries.join(" | ")}`)
 
-  // Step 2: Search and fetch (limited to avoid memory/timeout issues)
+  // Step 2: Search and fetch (corpus-aware)
+  const SEARCH_CACHE_MAX_AGE_MS = 2 * 60 * 60 * 1000
   const fetchedContent: string[] = []
   for (const sq of searchQueries.slice(0, 4)) {
     try {
-      const results = await webSearch(sq, 3)
+      // Check corpus for cached search
+      let results = (() => {
+        try {
+          const cached = findSimilarSearches(topicId, sq)
+          if (cached.length > 0) {
+            const age = Date.now() - new Date(cached[0].searchedAt).getTime()
+            if (age < SEARCH_CACHE_MAX_AGE_MS && cached[0].resultCount > 0) {
+              log.enrichment(`Research CORPUS HIT: "${sq}" → ${cached[0].resultCount} cached`)
+              return cached[0].results
+            }
+          }
+        } catch { /* fall through */ }
+        return null
+      })()
+
+      if (!results) {
+        results = await webSearch(sq, 3)
+        try { storeSearch(topicId, sq, results, "enrichment") } catch { /* non-fatal */ }
+      }
+
       for (const r of results.slice(0, 2)) {
         try {
           if (!isFetchable(r.url)) {
             if (r.snippet) fetchedContent.push(`[${r.title}] (${r.url})\n${r.snippet}`)
             continue
           }
-          const fetched = await httpFetch(r.url, topicId)
+          // Check corpus for cached page
+          const cachedPage = (() => { try { return getPage(topicId, r.url) } catch { return null } })()
+          if (cachedPage) {
+            fetchedContent.push(`[${cachedPage.title}] (${r.url})\n${cachedPage.content.slice(0, 2000)}`)
+            continue
+          }
+          const fetched = await httpFetch(r.url)
           fetchedContent.push(`[${r.title}] (${r.url})\n${fetched.raw_content.slice(0, 2000)}`)
+          try { storePage(topicId, r.url, fetched.title, fetched.raw_content, "enrichment") } catch { /* non-fatal */ }
         } catch {
           if (r.snippet) fetchedContent.push(`[${r.title}] (${r.url})\n${r.snippet}`)
         }
@@ -399,6 +406,7 @@ Extract all relevant factual claims as structured clues.`
     raw = await runAgenticLoop({
       model: researchModel,
       topicId,
+      stage: "enrichment",
       tools: researchConfig.tools,
       temperature: 0.2,
       max_tokens: budgetOutput(researchModel, partyList + combinedResearch + query, { min: 4000, max: 10000 }),
@@ -491,6 +499,7 @@ Categorize and group these clues. Every clue ID must appear in exactly one group
     raw = await runAgenticLoop({
       model: effectiveModel,
       topicId,
+      stage: "enrichment",
       tools: categorizeConfig.tools,
       temperature: 0.2,
       max_tokens: budgetOutput(effectiveModel, clueInput + partyList, { min: 8000, max: 16000 }),

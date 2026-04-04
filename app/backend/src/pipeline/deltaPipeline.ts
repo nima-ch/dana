@@ -92,6 +92,7 @@ Output JSON array:
           ],
           tools: impactConfig.tools,
           topicId,
+          stage: "delta",
           temperature: 0.3,
           max_tokens: 1000,
         })

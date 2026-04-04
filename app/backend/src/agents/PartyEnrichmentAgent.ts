@@ -3,6 +3,7 @@ import { runAgenticLoop, type CustomToolHandler } from "../llm/agenticLoop"
 import { TOOL_REGISTRY } from "../llm/toolDefinitions"
 import { budgetOutput } from "../llm/tokenBudget"
 import { storeClue } from "../tools/processing/storeClue"
+import { getPagesForParty } from "../db/queries/researchCorpus"
 import { emitThink } from "../routes/stream"
 import { log } from "../utils/logger"
 import type { Party } from "./DiscoveryAgent"
@@ -123,9 +124,21 @@ export async function runPartyEnrichmentAgent(
     }
   }
 
+  // Inject corpus context from previous stages (discovery, scoring)
+  let corpusContext = ""
+  try {
+    const corpusPages = getPagesForParty(topicId, party.name, 10)
+    if (corpusPages.length > 0) {
+      const previews = corpusPages.map(p => `- [${p.title}](${p.url}): ${p.content.slice(0, 200).replace(/\n/g, " ")}...`)
+      corpusContext = `\n\nEXISTING RESEARCH CORPUS (${corpusPages.length} pages from earlier stages — use these to avoid redundant searches):\n${previews.join("\n")}`
+      log.enrichment(`  Corpus: injected ${corpusPages.length} pages as context for ${party.name}`)
+    }
+  } catch { /* corpus unavailable, proceed without */ }
+
   const raw = await runAgenticLoop({
     model: effectiveModel,
     topicId,
+    stage: "enrichment",
     tools: effectiveTools,
     maxIterations: 15,
     temperature: 0.2,
@@ -134,7 +147,7 @@ export async function runPartyEnrichmentAgent(
     customTools: { store_clue: storeClueHandler },
     messages: [
       { role: "system", content: config.content },
-      { role: "user", content: `Begin your research on ${party.name}. Use the tools to search, fetch, and store clues. Output your final profile update and fact-check results as JSON when done.` },
+      { role: "user", content: `Begin your research on ${party.name}. Use the tools to search, fetch, and store clues. Output your final profile update and fact-check results as JSON when done.${corpusContext}` },
     ],
   })
 

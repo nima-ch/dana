@@ -355,6 +355,7 @@ export async function runScenarioScorer(
         ],
         tools: scorerConfig.tools,
         topicId,
+        stage: "expert",
         temperature: 0.2,
         max_tokens: budget,
       })

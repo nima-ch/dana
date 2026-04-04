@@ -105,6 +105,7 @@ export async function runDiscoveryAgent(
         return runAgenticLoop({
           model: effectiveOrientModel,
           topicId,
+          stage: "discovery",
           tools: orientConfig.tools,
           messages: [
             { role: "system", content: orientConfig.content },
@@ -178,6 +179,7 @@ export async function runDiscoveryAgent(
       refineRaw = await runAgenticLoop({
         model: effectiveRefineModel,
         topicId,
+        stage: "discovery",
         tools: refineConfig.tools,
         messages: [
           { role: "system", content: refineConfig.content },

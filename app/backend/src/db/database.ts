@@ -292,6 +292,34 @@ function applySchema(db: Database): void {
     )
   `)
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS research_searches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      topic_id TEXT NOT NULL,
+      query TEXT NOT NULL,
+      results TEXT NOT NULL DEFAULT '[]',
+      result_count INTEGER NOT NULL DEFAULT 0,
+      searched_at TEXT NOT NULL,
+      stage TEXT NOT NULL DEFAULT 'unknown',
+      FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE
+    )
+  `)
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS research_pages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      topic_id TEXT NOT NULL,
+      url TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      content_length INTEGER NOT NULL DEFAULT 0,
+      fetched_at TEXT NOT NULL,
+      stage TEXT NOT NULL DEFAULT 'unknown',
+      UNIQUE(topic_id, url),
+      FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE CASCADE
+    )
+  `)
+
   // Migrations for existing databases
   try { db.run(`ALTER TABLE parties ADD COLUMN weight_evidence TEXT NOT NULL DEFAULT '{}'`) } catch { /* column already exists */ }
 }

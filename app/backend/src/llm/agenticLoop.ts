@@ -2,12 +2,14 @@ import { chatCompletion } from "./proxyClient"
 import type { ChatMessage, ToolDefinition, ToolCall } from "./proxyClient"
 import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
+import { storeSearch, storePage, findSimilarSearches, getPage } from "../db/queries/researchCorpus"
 import { emitThink } from "../routes/stream"
 import { log } from "../utils/logger"
 
 const MAX_FETCH_CHARS = 3000
 const DEFAULT_MAX_ITERATIONS = 10
 const CHARS_PER_TOKEN = 4
+const SEARCH_CACHE_MAX_AGE_MS = 2 * 60 * 60 * 1000 // 2 hours
 
 export type CustomToolHandler = (args: Record<string, unknown>) => Promise<string>
 
@@ -16,11 +18,18 @@ interface AgenticLoopOptions {
   messages: ChatMessage[]
   tools: ToolDefinition[]
   topicId: string
+  stage?: string
   maxIterations?: number
   temperature?: number
   max_tokens?: number
   customTools?: Record<string, CustomToolHandler>
   contextWarningThreshold?: number
+}
+
+function stageLog(stage: string, msg: string, detail?: string) {
+  const fn = (log as Record<string, unknown>)[stage]
+  if (typeof fn === "function") (fn as (m: string, d?: string) => void)(msg, detail)
+  else log.stage(stage, msg, detail)
 }
 
 function estimateTokens(messages: ChatMessage[]): number {
@@ -36,7 +45,7 @@ function estimateTokens(messages: ChatMessage[]): number {
   return Math.ceil(chars / CHARS_PER_TOKEN)
 }
 
-async function executeBuiltinTool(call: ToolCall, topicId: string): Promise<string> {
+async function executeBuiltinTool(call: ToolCall, topicId: string, stage: string): Promise<string> {
   const name = call.function.name
   let args: Record<string, unknown>
   try {
@@ -49,16 +58,34 @@ async function executeBuiltinTool(call: ToolCall, topicId: string): Promise<stri
     const query = String(args.query ?? "")
     const numResults = Math.min(Math.max(Number(args.num_results) || 3, 1), 5)
     emitThink(topicId, "🔎", "Searching", query)
-    log.enrichment(`Tool call: web_search("${query}", ${numResults})`)
+    stageLog(stage, `Tool call: web_search("${query}", ${numResults})`)
+
+    // Check corpus for similar recent search
+    try {
+      const cached = findSimilarSearches(topicId, query)
+      if (cached.length > 0) {
+        const age = Date.now() - new Date(cached[0].searchedAt).getTime()
+        if (age < SEARCH_CACHE_MAX_AGE_MS && cached[0].resultCount > 0) {
+          emitThink(topicId, "📦", `Corpus hit: ${cached[0].resultCount} cached results`, `"${cached[0].query}"`)
+          stageLog(stage, `web_search CORPUS HIT: "${query}" → ${cached[0].resultCount} cached results from "${cached[0].query}"`)
+          return JSON.stringify(cached[0].results.slice(0, numResults).map(r => ({ title: r.title, url: r.url, snippet: r.snippet, date: r.date })))
+        }
+      }
+    } catch { /* corpus query failed, proceed with live search */ }
+
     try {
       const results = await webSearch(query, numResults)
       emitThink(topicId, "📄", `Found ${results.length} results`, results.slice(0, 3).map(r => r.title).join(", "))
-      log.enrichment(`web_search: ${results.length} results for "${query}"`)
+      stageLog(stage, `web_search: ${results.length} results for "${query}"`)
+
+      // Store in corpus
+      try { storeSearch(topicId, query, results, stage) } catch { /* non-fatal */ }
+
       return JSON.stringify(results.map(r => ({ title: r.title, url: r.url, snippet: r.snippet, date: r.date })))
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       emitThink(topicId, "⚠", "Search failed", msg)
-      log.enrichment(`web_search failed: ${msg}`)
+      stageLog(stage, `web_search failed: ${msg}`)
       return JSON.stringify({ error: msg })
     }
   }
@@ -66,17 +93,33 @@ async function executeBuiltinTool(call: ToolCall, topicId: string): Promise<stri
   if (name === "fetch_url") {
     const url = String(args.url ?? "")
     emitThink(topicId, "🌐", "Fetching", url)
-    log.enrichment(`Tool call: fetch_url("${url}")`)
+    stageLog(stage, `Tool call: fetch_url("${url}")`)
+
+    // Check corpus for existing page
     try {
-      const result = await httpFetch(url, topicId)
+      const cached = getPage(topicId, url)
+      if (cached) {
+        const content = cached.content.slice(0, MAX_FETCH_CHARS)
+        emitThink(topicId, "📦", "Corpus hit", `${cached.title} (${cached.contentLength} chars)`)
+        stageLog(stage, `fetch_url CORPUS HIT: "${cached.title}" (${cached.contentLength} chars)`)
+        return JSON.stringify({ title: cached.title, content })
+      }
+    } catch { /* corpus query failed, proceed with live fetch */ }
+
+    try {
+      const result = await httpFetch(url)
       const content = result.raw_content.slice(0, MAX_FETCH_CHARS)
       emitThink(topicId, "✓", "Fetched", `${result.title} (${result.raw_content.length} chars)`)
-      log.enrichment(`fetch_url: ${result.title} (${result.raw_content.length} chars)`)
+      stageLog(stage, `fetch_url: ${result.title} (${result.raw_content.length} chars)`)
+
+      // Store in corpus
+      try { storePage(topicId, url, result.title, result.raw_content, stage) } catch { /* non-fatal */ }
+
       return JSON.stringify({ title: result.title, content })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       emitThink(topicId, "⚠", "Fetch failed", msg)
-      log.enrichment(`fetch_url failed: ${msg}`)
+      stageLog(stage, `fetch_url failed: ${msg}`)
       return JSON.stringify({ error: msg })
     }
   }
@@ -86,6 +129,7 @@ async function executeBuiltinTool(call: ToolCall, topicId: string): Promise<stri
 
 export async function runAgenticLoop(options: AgenticLoopOptions): Promise<string> {
   const { model, tools, topicId, temperature, max_tokens, customTools } = options
+  const stage = options.stage ?? "tool"
   const maxIter = options.maxIterations ?? DEFAULT_MAX_ITERATIONS
   const contextWarning = options.contextWarningThreshold ?? 150000
   const messages: ChatMessage[] = [...options.messages]
@@ -112,7 +156,7 @@ export async function runAgenticLoop(options: AgenticLoopOptions): Promise<strin
     }
 
     emitThink(topicId, "🔧", `Tool calls (round ${iteration + 1})`, assistantMsg.tool_calls.map(tc => tc.function.name).join(", "))
-    log.enrichment(`Agentic loop iteration ${iteration + 1}: ${assistantMsg.tool_calls.length} tool call(s)`)
+    stageLog(stage, `Agentic loop iteration ${iteration + 1}: ${assistantMsg.tool_calls.length} tool call(s)`)
 
     for (const toolCall of assistantMsg.tool_calls) {
       let result: string
@@ -126,7 +170,7 @@ export async function runAgenticLoop(options: AgenticLoopOptions): Promise<strin
         }
         result = await customTools[toolCall.function.name](args)
       } else {
-        result = await executeBuiltinTool(toolCall, topicId)
+        result = await executeBuiltinTool(toolCall, topicId, stage)
       }
 
       messages.push({
@@ -141,7 +185,7 @@ export async function runAgenticLoop(options: AgenticLoopOptions): Promise<strin
       if (estTokens > contextWarning) {
         contextWarned = true
         emitThink(topicId, "⏱", "Context budget high", `~${Math.round(estTokens / 1000)}k tokens used. Wrapping up soon.`)
-        log.enrichment(`Agentic loop: context warning at ~${estTokens} tokens`)
+        stageLog(stage, `Agentic loop: context warning at ~${estTokens} tokens`)
         messages.push({
           role: "user",
           content: "IMPORTANT: You are approaching the context budget limit. Finish your current research and produce your final output within the next 2-3 tool calls.",
@@ -150,7 +194,7 @@ export async function runAgenticLoop(options: AgenticLoopOptions): Promise<strin
     }
   }
 
-  log.enrichment(`Agentic loop hit max iterations (${maxIter}), forcing final response`)
+  stageLog(stage, `Agentic loop hit max iterations (${maxIter}), forcing final response`)
   emitThink(topicId, "⏱", "Max research rounds reached", "Generating final answer...")
 
   messages.push({

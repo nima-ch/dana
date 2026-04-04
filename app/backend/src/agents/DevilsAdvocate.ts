@@ -57,6 +57,7 @@ Stress-test this scenario. Produce ≥3 genuine falsification arguments.`
         ],
         tools: systemConfig.tools,
         topicId,
+        stage: "forum",
         temperature: 0.4,
         max_tokens: daOutputBudget,
       })

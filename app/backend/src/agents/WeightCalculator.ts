@@ -97,6 +97,7 @@ export async function runWeightCalculator(
         ],
         tools: weightConfig.tools,
         topicId,
+        stage: "weight",
         temperature: 0.2,
         max_tokens: outputBudget,
       })
@@ -154,6 +155,7 @@ export async function runWeightCalculator(
           ],
           tools: personaConfig.tools,
           topicId,
+          stage: "weight",
           temperature: 0.4,
           max_tokens: 400,
         })

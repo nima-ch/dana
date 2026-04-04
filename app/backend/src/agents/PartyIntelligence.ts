@@ -2,45 +2,13 @@ import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput } from "../llm/tokenBudget"
 import { resolvePrompt } from "../llm/promptLoader"
 import { runAgenticLoop } from "../llm/agenticLoop"
-
-import { webSearch } from "../tools/external/webSearch"
-import { httpFetch } from "../tools/external/httpFetch"
+import { gatherResearch } from "../tools/research/gatherResearch"
 import { log } from "../utils/logger"
 import { emitThink } from "../routes/stream"
 import type { Party } from "./DiscoveryAgent"
 
 function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 30)
-}
-
-async function gatherResearch(queries: string[], topicId: string): Promise<string> {
-  const snippets: string[] = []
-  for (const query of queries.slice(0, 3)) {
-    try {
-      await new Promise(r => setTimeout(r, 400))
-      emitThink(topicId, "🔎", "Searching", query)
-      log.discovery(`Research query: "${query}"`)
-      const results = await webSearch(query, 3)
-      log.discovery(`Research: "${query}" → ${results.length} results`)
-      emitThink(topicId, "📄", `Found ${results.length} results`, results.slice(0, 3).map(r => r.title).join(", "))
-      for (const r of results.slice(0, 2)) {
-        try {
-          emitThink(topicId, "🌐", "Fetching", r.title)
-          const fetched = await httpFetch(r.url, topicId)
-          snippets.push(`[${r.title}]\n${fetched.raw_content.slice(0, 2000)}`)
-          emitThink(topicId, "✓", "Fetched", `${r.title} (${fetched.raw_content.length} chars)`)
-        } catch (fetchErr) {
-          log.discovery(`Research fetch failed for ${r.url}: ${fetchErr instanceof Error ? fetchErr.message : fetchErr}`)
-          if (r.snippet) snippets.push(`[${r.title}] ${r.snippet}`)
-        }
-      }
-    } catch (searchErr) {
-      log.discovery(`Research search failed for "${query}": ${searchErr instanceof Error ? searchErr.message : searchErr}`)
-      emitThink(topicId, "⚠", "Search failed", searchErr instanceof Error ? searchErr.message : String(searchErr))
-    }
-  }
-  log.discovery(`Research complete: ${snippets.length} snippets, ${snippets.join("").length} chars`)
-  return snippets.join("\n\n---\n\n").slice(0, 12000)
 }
 
 export async function smartAddParty(
@@ -57,7 +25,7 @@ export async function smartAddParty(
     `"${partyName}" role in ${topicTitle}`,
     `${partyName} political influence capabilities ${new Date().getFullYear()}`,
     `${partyName} alliances vulnerabilities geopolitical`,
-  ], topicId)
+  ], topicId, "discovery")
 
   const existingNames = existingParties.map(p => p.name).join(", ")
 
@@ -79,6 +47,7 @@ Generate a complete party profile for "${partyName}". Output ONLY valid JSON, no
     raw = await runAgenticLoop({
       model: effectiveModel,
       topicId,
+      stage: "discovery",
       tools: addConfig.tools,
       temperature: 0.3,
       max_tokens: budgetOutput(effectiveModel, research + topicTitle, { min: 2000, max: 5000 }),
@@ -125,6 +94,7 @@ export async function smartEditParty(
   const raw = await runAgenticLoop({
     model: editConfig.model ?? model,
     topicId,
+    stage: "discovery",
     tools: editConfig.tools,
     temperature: 0.3,
     max_tokens: budgetOutput(editConfig.model ?? model, JSON.stringify(currentParty) + feedback, { min: 2000, max: 5000 }),
@@ -171,7 +141,7 @@ export async function smartSplitParty(
 
   const research = await gatherResearch(
     splitNames.map(n => `"${n}" role capabilities ${topicTitle}`),
-    topicId
+    topicId, "discovery"
   )
 
   const splitConfig = await resolvePrompt("party-intelligence/split")
@@ -194,6 +164,7 @@ Generate a complete profile for each sub-party. Output ONLY a valid JSON array, 
     raw = await runAgenticLoop({
       model: effectiveModel,
       topicId,
+      stage: "discovery",
       tools: splitConfig.tools,
       temperature: 0.3,
       max_tokens: budgetOutput(effectiveModel, JSON.stringify(sourceParty) + research, { min: 3000, max: Math.max(splitNames.length * 2000, 6000) }),

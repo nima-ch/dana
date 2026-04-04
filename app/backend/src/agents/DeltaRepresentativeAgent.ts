@@ -99,6 +99,7 @@ Produce your position update as JSON.`
         ],
         tools: deltaConfig.tools,
         topicId,
+        stage: "delta",
         temperature: 0.4,
         max_tokens: 800,
       })

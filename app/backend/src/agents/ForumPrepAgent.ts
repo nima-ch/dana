@@ -78,6 +78,7 @@ export async function runForumPrepAgent(
           ],
           tools: scratchpadConfig.tools,
           topicId,
+          stage: "forum",
           temperature: 0.4,
           max_tokens: budget,
         })

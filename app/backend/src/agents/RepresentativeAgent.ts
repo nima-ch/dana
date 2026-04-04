@@ -124,6 +124,7 @@ export async function runRepresentativeTurn(input: RepTurnInput): Promise<RepTur
       raw = await runAgenticLoop({
         model: effectiveModel,
         topicId,
+        stage: "forum",
         tools: turnConfig.tools,
         temperature: 0.7,
         max_tokens: budget,

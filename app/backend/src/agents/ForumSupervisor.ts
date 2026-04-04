@@ -112,6 +112,7 @@ export class ForumSupervisor {
         raw = await runAgenticLoop({
           model: effectiveModel,
           topicId: this.topicId,
+          stage: "forum",
           tools: scenariosConfig.tools,
           temperature: 0.2,
           max_tokens: budget,
@@ -184,6 +185,7 @@ export class ForumSupervisor {
         raw = await runAgenticLoop({
           model: completionModel,
           topicId: this.topicId,
+          stage: "forum",
           tools: completionConfig.tools,
           temperature: 0.2,
           max_tokens: budget,

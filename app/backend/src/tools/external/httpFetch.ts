@@ -1,14 +1,10 @@
-import { join } from "path"
-import { createHash } from "crypto"
 import { parseHTML } from "linkedom"
 import { Readability } from "@mozilla/readability"
 import TurndownService from "turndown"
 
-const CACHE_TTL_MS = 48 * 60 * 60 * 1000 // 48 hours
-const FETCH_TIMEOUT_MS = 15_000 // 15 seconds
+const FETCH_TIMEOUT_MS = 15_000
 const JINA_READER_URL = "https://r.jina.ai/"
 
-// Domains known to require a subscription or return 401/403 to bots
 const PAYWALLED_DOMAINS = new Set([
   "reuters.com", "wsj.com", "ft.com", "bloomberg.com",
   "nytimes.com", "washingtonpost.com", "politico.com",
@@ -31,44 +27,18 @@ export interface FetchResult {
   cached: boolean
 }
 
-function urlHash(url: string): string {
-  return createHash("md5").update(url).digest("hex")
-}
-
-function getCachePath(topicId: string, url: string): string {
-  const dataDir = process.env.DATA_DIR || "/home/nima/dana/data"
-  return join(dataDir, "topics", topicId, "sources", "cache", `${urlHash(url)}.json`)
-}
-
-export async function httpFetch(url: string, topicId?: string): Promise<FetchResult> {
-  // Reject known paywalled domains immediately — no network round-trip
+export async function httpFetch(url: string): Promise<FetchResult> {
   if (isPaywalled(url)) {
     throw new Error(`httpFetch skipped: paywalled domain for ${url}`)
   }
 
-  if (topicId) {
-    const cachePath = getCachePath(topicId, url)
-    const cacheFile = Bun.file(cachePath)
-    if (await cacheFile.exists()) {
-      try {
-        const cached = await cacheFile.json() as FetchResult & { cached_at: string }
-        const age = Date.now() - new Date(cached.cached_at).getTime()
-        if (age < CACHE_TTL_MS) {
-          return { ...cached, cached: true }
-        }
-      } catch {
-        // Corrupted cache; ignore and fetch a fresh copy
-      }
-    }
-  }
-
   try {
     const fresh = await fetchWithJina(url)
-    return await finalizeResult(fresh, topicId)
+    return { ...fresh, cached: false }
   } catch (jinaError) {
     try {
       const fallback = await fetchWithReadability(url)
-      return await finalizeResult(fallback, topicId)
+      return { ...fallback, cached: false }
     } catch (fallbackError) {
       throw new Error(
         `httpFetch failed: Jina error: ${getErrorMessage(jinaError)}; fallback error: ${getErrorMessage(fallbackError)}`,
@@ -159,23 +129,6 @@ async function fetchWithTimeout(input: string, init: RequestInit): Promise<Respo
   } finally {
     clearTimeout(timer)
   }
-}
-
-async function finalizeResult(
-  result: Omit<FetchResult, "cached">,
-  topicId?: string,
-): Promise<FetchResult> {
-  const finalResult: FetchResult = {
-    ...result,
-    cached: false,
-  }
-
-  if (topicId) {
-    const cachePath = getCachePath(topicId, result.url)
-    await Bun.write(cachePath, JSON.stringify({ ...result, cached_at: new Date().toISOString() }, null, 2))
-  }
-
-  return finalResult
 }
 
 function getErrorMessage(error: unknown): string {
