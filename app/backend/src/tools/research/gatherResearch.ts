@@ -1,10 +1,9 @@
 import { webSearch } from "../external/webSearch"
 import { httpFetch } from "../external/httpFetch"
 import { storeSearch, storePage, findSimilarSearches, getPage } from "../../db/queries/researchCorpus"
+import { dbGetControls } from "../../db/queries/settings"
 import { emitThink } from "../../routes/stream"
 import { log } from "../../utils/logger"
-
-const SEARCH_CACHE_MAX_AGE_MS = 2 * 60 * 60 * 1000 // 2 hours
 
 function isFetchable(url: string): boolean {
   const skip = ["x.com", "twitter.com", "instagram.com", "facebook.com", "truthsocial.com", "t.me"]
@@ -20,6 +19,8 @@ export async function gatherResearch(
   stage: string,
   opts?: { maxQueries?: number; maxSnippetChars?: number }
 ): Promise<string> {
+  const controls = dbGetControls()
+  const cacheMaxAgeMs = controls.corpus_cache_hours * 60 * 60 * 1000
   const maxQueries = opts?.maxQueries ?? 3
   const maxSnippetChars = opts?.maxSnippetChars ?? 12000
   const snippets: string[] = []
@@ -36,7 +37,7 @@ export async function gatherResearch(
           const cached = findSimilarSearches(topicId, query)
           if (cached.length > 0) {
             const age = Date.now() - new Date(cached[0].searchedAt).getTime()
-            if (age < SEARCH_CACHE_MAX_AGE_MS && cached[0].resultCount > 0) {
+            if (age < cacheMaxAgeMs && cached[0].resultCount > 0) {
               log.stage(stage, `Research CORPUS HIT: "${query}" → ${cached[0].resultCount} cached from "${cached[0].query}"`)
               emitThink(topicId, "📦", `Corpus hit: ${cached[0].resultCount} cached`, cached[0].query)
               return cached[0].results

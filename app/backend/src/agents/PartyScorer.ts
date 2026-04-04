@@ -1,5 +1,6 @@
 import { resolvePrompt } from "../llm/promptLoader"
 import { runAgenticLoop } from "../llm/agenticLoop"
+import { dbGetControls } from "../db/queries/settings"
 import { budgetOutput } from "../llm/tokenBudget"
 import { emitThink } from "../routes/stream"
 import { log } from "../utils/logger"
@@ -64,12 +65,13 @@ async function scoreOneParty(
   log.discovery(`PartyScorer: scoring "${party.name}" with ${effectiveModel}`)
   emitThink(topicId, "📊", `Scoring: ${party.name}`, "Researching 5 power axes…")
 
+  const controls = dbGetControls()
   const raw = await runAgenticLoop({
     model: effectiveModel,
     topicId,
     stage: "scoring",
     tools: config.tools,
-    maxIterations: 12,
+    maxIterations: controls.scoring_iterations,
     temperature: 0.2,
     max_tokens: budgetOutput(effectiveModel, config.content, { min: 2000, max: 4000 }),
     contextWarningThreshold: 100000,
@@ -120,7 +122,8 @@ export async function scoreAllParties(
   log.discovery(`PartyScorer: scoring ${parties.length} parties`)
   emitThink(topicId, "📊", "Scoring party power axes", `${parties.length} parties × 5 axes with evidence`)
 
-  const BATCH = 2
+  const controls = dbGetControls()
+  const BATCH = controls.scoring_batch_size
   for (let i = 0; i < parties.length; i += BATCH) {
     const batch = parties.slice(i, i + BATCH)
     emitThink(topicId, "📊", `Scoring batch ${Math.floor(i / BATCH) + 1}`, batch.map(p => p.name).join(", "))

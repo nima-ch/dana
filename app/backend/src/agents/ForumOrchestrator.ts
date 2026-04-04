@@ -1,6 +1,7 @@
 import { log } from "../utils/logger"
 import { budgetOutput } from "../llm/tokenBudget"
 import { chatCompletionText } from "../llm/proxyClient"
+import { dbGetControls } from "../db/queries/settings"
 import { runForumPrepAgent } from "./ForumPrepAgent"
 import { runRepresentativeTurn } from "./RepresentativeAgent"
 import { runDevilsAdvocate } from "./DevilsAdvocate"
@@ -65,7 +66,8 @@ export async function runForumOrchestrator(
   const topicRow = dbGetTopic(topicId)
   const topicTitle = topicRow?.title ?? topicId
 
-  const maxTurns = (topicRow as any)?.settings?.forum_max_turns ?? DEFAULT_MAX_TURNS
+  const controls = dbGetControls()
+  const maxTurns = controls.forum_max_turns
   const minTurns = Math.max(8, Math.floor(representatives.length * 1.5))
 
   // ── Phase 1: Preparation ─────────────────────────────────────────────────

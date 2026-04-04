@@ -1,5 +1,6 @@
 import { resolvePrompt } from "../llm/promptLoader"
 import { runAgenticLoop, type CustomToolHandler } from "../llm/agenticLoop"
+import { dbGetControls } from "../db/queries/settings"
 import { TOOL_REGISTRY } from "../llm/toolDefinitions"
 import { budgetOutput } from "../llm/tokenBudget"
 import { storeClue } from "../tools/processing/storeClue"
@@ -135,12 +136,13 @@ export async function runPartyEnrichmentAgent(
     }
   } catch { /* corpus unavailable, proceed without */ }
 
+  const controls = dbGetControls()
   const raw = await runAgenticLoop({
     model: effectiveModel,
     topicId,
     stage: "enrichment",
     tools: effectiveTools,
-    maxIterations: 15,
+    maxIterations: controls.enrichment_iterations,
     temperature: 0.2,
     max_tokens: budgetOutput(effectiveModel, config.content, { min: 3000, max: 6000 }),
     contextWarningThreshold: 100000,

@@ -22,19 +22,46 @@ export const DEFAULT_MODELS: Record<TaskCategory, string> = {
   verdict: "claude-opus-4-6",
 }
 
+export interface AnalysisControls {
+  discovery_research_iterations: number
+  scoring_iterations: number
+  scoring_batch_size: number
+  enrichment_iterations: number
+  enrichment_batch_size: number
+  forum_max_turns: number
+  max_fetch_chars: number
+  corpus_cache_hours: number
+}
+
+export const DEFAULT_CONTROLS: AnalysisControls = {
+  discovery_research_iterations: 20,
+  scoring_iterations: 12,
+  scoring_batch_size: 2,
+  enrichment_iterations: 15,
+  enrichment_batch_size: 2,
+  forum_max_turns: 50,
+  max_fetch_chars: 3000,
+  corpus_cache_hours: 2,
+}
+
 export interface AppSettings {
   default_models: Record<string, string>
+  analysis_controls: AnalysisControls
 }
 
 export function dbGetSettings(): AppSettings {
   const row = getDb().query<{ value: string }, [string]>(
     "SELECT value FROM app_settings WHERE key = ?"
   ).get("app_settings")
-  if (!row) return { default_models: DEFAULT_MODELS }
+  if (!row) return { default_models: DEFAULT_MODELS, analysis_controls: DEFAULT_CONTROLS }
   try {
-    return JSON.parse(row.value)
+    const parsed = JSON.parse(row.value)
+    return {
+      default_models: parsed.default_models ?? DEFAULT_MODELS,
+      analysis_controls: { ...DEFAULT_CONTROLS, ...(parsed.analysis_controls ?? {}) },
+    }
   } catch {
-    return { default_models: DEFAULT_MODELS }
+    return { default_models: DEFAULT_MODELS, analysis_controls: DEFAULT_CONTROLS }
   }
 }
 
@@ -48,4 +75,8 @@ export function dbSaveSettings(settings: AppSettings): void {
 
 export function dbGetDefaultModels(): Record<string, string> {
   return dbGetSettings().default_models
+}
+
+export function dbGetControls(): AnalysisControls {
+  return dbGetSettings().analysis_controls
 }

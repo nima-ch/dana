@@ -1,6 +1,6 @@
 import { resolvePrompt } from "../llm/promptLoader"
 import { runAgenticLoop } from "../llm/agenticLoop"
-
+import { dbGetControls } from "../db/queries/settings"
 import { budgetOutput } from "../llm/tokenBudget"
 import { emitThink } from "../routes/stream"
 import { log } from "../utils/logger"
@@ -49,12 +49,13 @@ export async function runDiscoveryResearcher(
 
   const userMessage = `Begin your research. Start with the seed queries, then go deeper based on what you find. Output your final results as JSON when done.`
 
+  const controls = dbGetControls()
   const raw = await runAgenticLoop({
     model: effectiveModel,
     topicId,
     stage: "discovery",
     tools: config.tools,
-    maxIterations: 20,
+    maxIterations: controls.discovery_research_iterations,
     temperature: 0.3,
     max_tokens: budgetOutput(effectiveModel, config.content + userMessage, { min: 8000, max: 16000 }),
     contextWarningThreshold: 120000,

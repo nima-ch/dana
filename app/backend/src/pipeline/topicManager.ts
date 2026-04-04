@@ -32,16 +32,7 @@ const DEFAULT_MODELS = {
   verdict: "claude-opus-4-6",
 }
 
-const DEFAULT_SETTINGS = {
-  auto_discover_parties: true,
-  auto_gather_clues: true,
-  clue_search_depth: 3,
-  forum_rounds: 3,
-  expert_count: 6,
-  language: "en",
-  auto_refresh_clues: false,
-  refresh_interval_hours: 24,
-}
+const DEFAULT_SETTINGS: Record<string, unknown> = {}
 
 export async function listTopics() {
   return dbListTopics()

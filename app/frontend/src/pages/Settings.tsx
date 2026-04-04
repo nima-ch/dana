@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import type { ReactNode } from "react"
+
 import { ChevronDown, ChevronRight, Search, Plug, RotateCcw, ExternalLink, FileText, Check, Wrench, Brain, Zap, Gauge, Cpu } from "lucide-react"
 import { useNavigate, useParams } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
@@ -21,7 +21,7 @@ type CatalogModel = Awaited<ReturnType<typeof api.models.catalog>>[number]
 const tabMap = {
   providers: { label: "Providers", description: "Connect LLM providers." },
   prompts: { label: "System Prompts", description: "Configure prompts, models, and tools." },
-  pipeline: { label: "Pipeline", description: "Configure global analysis defaults." },
+  pipeline: { label: "Analysis Controls", description: "Configure research depth, parallelism, and debate behavior." },
 } as const
 
 type TabKey = keyof typeof tabMap
@@ -39,17 +39,16 @@ type ProviderState = {
 
 const STORAGE_KEY = "dana.settings.activeTab"
 
-const PIPELINE_DEFAULTS = {
-  forum_rounds: 3,
-  expert_count: 6,
-  clue_search_depth: 3,
+const CONTROLS_DEFAULTS = {
+  discovery_research_iterations: 20,
+  scoring_iterations: 12,
+  scoring_batch_size: 2,
+  enrichment_iterations: 15,
+  enrichment_batch_size: 2,
   forum_max_turns: 50,
-  language: "en",
-  auto_refresh_clues: false,
-  refresh_interval_hours: 24,
+  max_fetch_chars: 3000,
+  corpus_cache_hours: 2,
 }
-
-const LANGUAGE_OPTIONS = ["en", "fa", "ar", "he", "tr", "ru", "fr", "es"]
 
 function readStoredTab(): TabKey {
   if (typeof window === "undefined") return "providers"
@@ -620,11 +619,22 @@ function PromptsPanel() {
   )
 }
 
-// ── Pipeline Panel ────────────────────────────────────────────────────────
+// ── Analysis Controls Panel ────────────────────────────────────────────────
+
+const CONTROL_FIELDS: { section: string; key: keyof typeof CONTROLS_DEFAULTS; label: string; hint: string; min: number; max: number; step?: number }[] = [
+  { section: "Discovery", key: "discovery_research_iterations", label: "Research depth", hint: "Max agentic loop rounds for initial topic research", min: 5, max: 30 },
+  { section: "Discovery", key: "scoring_iterations", label: "Scoring depth", hint: "Max rounds per party for evidence-based power scoring", min: 5, max: 20 },
+  { section: "Discovery", key: "scoring_batch_size", label: "Scoring parallelism", hint: "Parties scored in parallel", min: 1, max: 4 },
+  { section: "Enrichment", key: "enrichment_iterations", label: "Research depth per party", hint: "Max agentic rounds per party for clue gathering + fact-check", min: 5, max: 25 },
+  { section: "Enrichment", key: "enrichment_batch_size", label: "Parallelism", hint: "Parties enriched in parallel", min: 1, max: 4 },
+  { section: "Forum", key: "forum_max_turns", label: "Max debate turns", hint: "Upper limit on debate turns before forcing closure", min: 10, max: 100 },
+  { section: "General", key: "max_fetch_chars", label: "Fetch content limit", hint: "Characters of each fetched page sent to LLM", min: 1000, max: 8000, step: 500 },
+  { section: "General", key: "corpus_cache_hours", label: "Corpus cache window", hint: "Hours before similar search results are re-fetched", min: 1, max: 24 },
+]
 
 function PipelinePanel() {
-  const [settings, setSettings] = useState(PIPELINE_DEFAULTS)
-  const [savedSettings, setSavedSettings] = useState(PIPELINE_DEFAULTS)
+  const [controls, setControls] = useState(CONTROLS_DEFAULTS)
+  const [saved, setSaved] = useState(CONTROLS_DEFAULTS)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
@@ -632,23 +642,18 @@ function PipelinePanel() {
   useEffect(() => {
     void (async () => {
       const appSettings = await api.settings.get()
-      const next = { ...PIPELINE_DEFAULTS, ...(appSettings.pipeline_settings ?? {}) }
-      setSettings(next)
-      setSavedSettings(next)
+      const next = { ...CONTROLS_DEFAULTS, ...(appSettings.analysis_controls ?? {}) }
+      setControls(next)
+      setSaved(next)
     })()
   }, [])
 
-  const validate = (next = settings) => {
+  const validate = (next = controls) => {
     const nextErrors: Record<string, string> = {}
-    const check = (key: keyof typeof PIPELINE_DEFAULTS, min: number, max: number) => {
-      const value = Number(next[key])
-      if (!Number.isInteger(value) || value < min || value > max) nextErrors[key] = `Must be between ${min} and ${max}`
+    for (const f of CONTROL_FIELDS) {
+      const v = Number(next[f.key])
+      if (!Number.isFinite(v) || v < f.min || v > f.max) nextErrors[f.key] = `${f.min}–${f.max}`
     }
-    check("forum_rounds", 1, 5)
-    check("expert_count", 2, 8)
-    check("clue_search_depth", 1, 10)
-    check("forum_max_turns", 10, 100)
-    check("refresh_interval_hours", 1, 168)
     setErrors(nextErrors)
     return Object.keys(nextErrors).length === 0
   }
@@ -657,43 +662,54 @@ function PipelinePanel() {
     if (!validate()) return
     setSaving(true)
     try {
-      const updated = await api.settings.update({ pipeline_settings: settings })
-      const next = { ...PIPELINE_DEFAULTS, ...(updated.pipeline_settings ?? settings) }
-      setSettings(next); setSavedSettings(next); setMessage("Saved.")
+      const updated = await api.settings.update({ analysis_controls: controls })
+      const next = { ...CONTROLS_DEFAULTS, ...(updated.analysis_controls ?? controls) }
+      setControls(next); setSaved(next); setMessage("Saved.")
     } finally { setSaving(false) }
   }
 
-  const reset = () => { setSettings(PIPELINE_DEFAULTS); setErrors({}); setMessage("Reset to defaults.") }
+  const reset = () => { setControls(CONTROLS_DEFAULTS); setErrors({}); setMessage("Reset to defaults.") }
 
-  const updateNumber = (key: keyof typeof PIPELINE_DEFAULTS, value: string) => {
-    const parsed = value === "" ? value : Number(value)
-    const next = { ...settings, [key]: parsed }
-    setSettings(next); validate(next)
+  const update = (key: keyof typeof CONTROLS_DEFAULTS, value: string) => {
+    const parsed = value === "" ? 0 : Number(value)
+    const next = { ...controls, [key]: parsed }
+    setControls(next); validate(next)
   }
 
-  const isDirty = JSON.stringify(settings) !== JSON.stringify(savedSettings)
+  const isDirty = JSON.stringify(controls) !== JSON.stringify(saved)
+  const sections = [...new Set(CONTROL_FIELDS.map(f => f.section))]
 
   return (
     <Card className="border-border/70 bg-card/80">
-      <CardHeader><CardTitle>Pipeline</CardTitle><CardDescription>Configure global analysis defaults.</CardDescription></CardHeader>
+      <CardHeader>
+        <CardTitle>Analysis Controls</CardTitle>
+        <CardDescription>Configure research depth, parallelism, and debate behavior. Changes apply to the next pipeline run.</CardDescription>
+      </CardHeader>
       <CardContent className="space-y-6">
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <SettingField label="Forum rounds" error={errors.forum_rounds}><Input type="number" min={1} max={5} value={String(settings.forum_rounds)} onChange={e => updateNumber("forum_rounds", e.target.value)} /></SettingField>
-          <SettingField label="Expert count" error={errors.expert_count}><Input type="number" min={2} max={8} value={String(settings.expert_count)} onChange={e => updateNumber("expert_count", e.target.value)} /></SettingField>
-          <SettingField label="Clue search depth" error={errors.clue_search_depth}><Input type="number" min={1} max={10} value={String(settings.clue_search_depth)} onChange={e => updateNumber("clue_search_depth", e.target.value)} /></SettingField>
-          <SettingField label="Forum max turns" error={errors.forum_max_turns}><Input type="number" min={10} max={100} value={String(settings.forum_max_turns)} onChange={e => updateNumber("forum_max_turns", e.target.value)} /></SettingField>
-          <SettingField label="Language" error={errors.language}>
-            <Select value={settings.language} onValueChange={v => setSettings(cur => ({ ...cur, language: v }))}>
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent>{LANGUAGE_OPTIONS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-            </Select>
-          </SettingField>
-          <SettingField label="Refresh interval (hours)" error={errors.refresh_interval_hours}><Input type="number" min={1} max={168} value={String(settings.refresh_interval_hours)} onChange={e => updateNumber("refresh_interval_hours", e.target.value)} /></SettingField>
-        </div>
-        <div className="flex items-center justify-between rounded-lg border border-border/70 bg-background/50 p-4">
-          <div><div className="text-sm font-medium">Auto-refresh clues</div><div className="text-sm text-muted-foreground">Automatically refresh clue data on the configured interval.</div></div>
-          <input type="checkbox" checked={settings.auto_refresh_clues} onChange={e => setSettings(cur => ({ ...cur, auto_refresh_clues: e.target.checked }))} className="h-4 w-4" />
-        </div>
+        {sections.map(section => (
+          <div key={section}>
+            <div className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{section}</div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {CONTROL_FIELDS.filter(f => f.section === section).map(f => (
+                <div key={f.key} className="space-y-1.5">
+                  <Label>{f.label}</Label>
+                  <Input
+                    type="number"
+                    min={f.min}
+                    max={f.max}
+                    step={f.step ?? 1}
+                    value={String(controls[f.key])}
+                    onChange={e => update(f.key, e.target.value)}
+                    className={errors[f.key] ? "border-destructive" : ""}
+                  />
+                  <div className="text-xs text-muted-foreground">{f.hint}</div>
+                  {errors[f.key] && <div className="text-xs text-destructive">Must be {errors[f.key]}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+        <Separator />
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => void save()} disabled={saving || !isDirty}>{saving ? "Saving..." : "Save"}</Button>
           <Button variant="outline" onClick={reset}><RotateCcw className="mr-2 size-4" />Reset to defaults</Button>
@@ -704,6 +720,4 @@ function PipelinePanel() {
   )
 }
 
-function SettingField({ label, error, children }: { label: string; error?: string; children: ReactNode }) {
-  return <div className="space-y-2"><Label>{label}</Label>{children}{error && <div className="text-xs text-destructive">{error}</div>}</div>
-}
+

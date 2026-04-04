@@ -1,4 +1,5 @@
 import { writeArtifact } from "../tools/internal/artifactStore"
+import { dbGetControls } from "../db/queries/settings"
 import { log } from "../utils/logger"
 import { dbCountClues, dbGetClues, dbUpdateClueVersion } from "../db/queries/clues"
 import { dbGetParties, dbSetParties } from "../db/queries/parties"
@@ -37,8 +38,9 @@ export async function runEnrichmentAgent(
 
   emit(topicId, { type: "progress", stage: "enrichment", pct: 0.05, msg: `Enriching ${parties.length} parties with agentic research…` })
 
-  // Run per-party enrichment agents in batches of 2
-  const BATCH = 2
+  // Run per-party enrichment agents in batches
+  const controls = dbGetControls()
+  const BATCH = controls.enrichment_batch_size
   for (let i = 0; i < parties.length; i += BATCH) {
     const batch = parties.slice(i, i + BATCH)
     const pct = 0.1 + (i / parties.length) * 0.8

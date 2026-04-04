@@ -3,13 +3,12 @@ import type { ChatMessage, ToolDefinition, ToolCall } from "./proxyClient"
 import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { storeSearch, storePage, findSimilarSearches, getPage } from "../db/queries/researchCorpus"
+import { dbGetControls } from "../db/queries/settings"
 import { emitThink } from "../routes/stream"
 import { log } from "../utils/logger"
 
-const MAX_FETCH_CHARS = 3000
 const DEFAULT_MAX_ITERATIONS = 10
 const CHARS_PER_TOKEN = 4
-const SEARCH_CACHE_MAX_AGE_MS = 2 * 60 * 60 * 1000 // 2 hours
 
 export type CustomToolHandler = (args: Record<string, unknown>) => Promise<string>
 
@@ -46,6 +45,10 @@ function estimateTokens(messages: ChatMessage[]): number {
 }
 
 async function executeBuiltinTool(call: ToolCall, topicId: string, stage: string): Promise<string> {
+  const controls = dbGetControls()
+  const maxFetchChars = controls.max_fetch_chars
+  const cacheMaxAgeMs = controls.corpus_cache_hours * 60 * 60 * 1000
+
   const name = call.function.name
   let args: Record<string, unknown>
   try {
@@ -65,7 +68,7 @@ async function executeBuiltinTool(call: ToolCall, topicId: string, stage: string
       const cached = findSimilarSearches(topicId, query)
       if (cached.length > 0) {
         const age = Date.now() - new Date(cached[0].searchedAt).getTime()
-        if (age < SEARCH_CACHE_MAX_AGE_MS && cached[0].resultCount > 0) {
+        if (age < cacheMaxAgeMs && cached[0].resultCount > 0) {
           emitThink(topicId, "📦", `Corpus hit: ${cached[0].resultCount} cached results`, `"${cached[0].query}"`)
           stageLog(stage, `web_search CORPUS HIT: "${query}" → ${cached[0].resultCount} cached results from "${cached[0].query}"`)
           return JSON.stringify(cached[0].results.slice(0, numResults).map(r => ({ title: r.title, url: r.url, snippet: r.snippet, date: r.date })))
@@ -99,7 +102,7 @@ async function executeBuiltinTool(call: ToolCall, topicId: string, stage: string
     try {
       const cached = getPage(topicId, url)
       if (cached) {
-        const content = cached.content.slice(0, MAX_FETCH_CHARS)
+        const content = cached.content.slice(0, maxFetchChars)
         emitThink(topicId, "📦", "Corpus hit", `${cached.title} (${cached.contentLength} chars)`)
         stageLog(stage, `fetch_url CORPUS HIT: "${cached.title}" (${cached.contentLength} chars)`)
         return JSON.stringify({ title: cached.title, content })
@@ -108,7 +111,7 @@ async function executeBuiltinTool(call: ToolCall, topicId: string, stage: string
 
     try {
       const result = await httpFetch(url)
-      const content = result.raw_content.slice(0, MAX_FETCH_CHARS)
+      const content = result.raw_content.slice(0, maxFetchChars)
       emitThink(topicId, "✓", "Fetched", `${result.title} (${result.raw_content.length} chars)`)
       stageLog(stage, `fetch_url: ${result.title} (${result.raw_content.length} chars)`)
 

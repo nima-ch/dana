@@ -5,6 +5,7 @@ import { runAgenticLoop } from "../llm/agenticLoop"
 import { gatherResearch } from "../tools/research/gatherResearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { storePage, getPage, storeSearch, findSimilarSearches } from "../db/queries/researchCorpus"
+import { dbGetControls } from "../db/queries/settings"
 import { webSearch } from "../tools/external/webSearch"
 import { log } from "../utils/logger"
 import { emitThink } from "../routes/stream"
@@ -333,7 +334,7 @@ Generate 3-5 specific, fact-finding search queries that would uncover concrete e
   log.enrichment(`Research: ${searchQueries.length} search queries: ${searchQueries.join(" | ")}`)
 
   // Step 2: Search and fetch (corpus-aware)
-  const SEARCH_CACHE_MAX_AGE_MS = 2 * 60 * 60 * 1000
+  const cacheMaxAgeMs = dbGetControls().corpus_cache_hours * 60 * 60 * 1000
   const fetchedContent: string[] = []
   for (const sq of searchQueries.slice(0, 4)) {
     try {
@@ -343,7 +344,7 @@ Generate 3-5 specific, fact-finding search queries that would uncover concrete e
           const cached = findSimilarSearches(topicId, sq)
           if (cached.length > 0) {
             const age = Date.now() - new Date(cached[0].searchedAt).getTime()
-            if (age < SEARCH_CACHE_MAX_AGE_MS && cached[0].resultCount > 0) {
+            if (age < cacheMaxAgeMs && cached[0].resultCount > 0) {
               log.enrichment(`Research CORPUS HIT: "${sq}" → ${cached[0].resultCount} cached`)
               return cached[0].results
             }

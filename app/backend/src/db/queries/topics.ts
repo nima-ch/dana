@@ -15,16 +15,7 @@ export interface Topic {
     expert_council: string
     verdict: string
   }
-  settings: {
-    auto_discover_parties: boolean
-    auto_gather_clues: boolean
-    clue_search_depth: number
-    forum_rounds: number
-    expert_count: number
-    language: string
-    auto_refresh_clues: boolean
-    refresh_interval_hours: number
-  }
+  settings: Record<string, unknown>
   created_at: string
   updated_at: string
 }
