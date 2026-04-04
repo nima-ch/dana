@@ -1,0 +1,164 @@
+import { resolvePrompt } from "../llm/promptLoader"
+import { runAgenticLoop, type CustomToolHandler } from "../llm/agenticLoop"
+import { TOOL_REGISTRY } from "../llm/toolDefinitions"
+import { budgetOutput } from "../llm/tokenBudget"
+import { storeClue } from "../tools/processing/storeClue"
+import { emitThink } from "../routes/stream"
+import { log } from "../utils/logger"
+import type { Party } from "./DiscoveryAgent"
+
+interface ExistingClue {
+  id: string
+  title: string
+  summary: string
+  credibility: number
+  clue_type: string
+}
+
+export interface PartyEnrichmentResult {
+  partyId: string
+  storedClueIds: string[]
+  profileUpdate: Partial<Party> | null
+  factCheckResults: { clue_title: string; verdict: string; note: string }[]
+}
+
+function domainOf(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, "") } catch { return url }
+}
+
+export async function runPartyEnrichmentAgent(
+  topicId: string,
+  title: string,
+  description: string,
+  party: Party,
+  existingClues: ExistingClue[],
+  model: string,
+): Promise<PartyEnrichmentResult> {
+  const today = new Date().toISOString().slice(0, 10)
+  const year = new Date().getFullYear().toString()
+  const currentMonth = new Date().toLocaleString("en-US", { month: "long", year: "numeric" })
+
+  log.enrichment(`PartyEnrichmentAgent: starting for "${party.name}"`)
+  emitThink(topicId, "🔬", `Enriching: ${party.name}`, `${existingClues.length} existing clues`)
+
+  const partyProfile = JSON.stringify({
+    id: party.id,
+    name: party.name,
+    type: party.type,
+    description: party.description,
+    weight: party.weight,
+    agenda: party.agenda,
+    means: party.means,
+    circle: party.circle,
+    stance: party.stance,
+    vulnerabilities: party.vulnerabilities,
+  }, null, 2)
+
+  const existingCluesSummary = existingClues.length > 0
+    ? existingClues.map(c => `- [${c.id}] (${c.clue_type}, cred=${c.credibility}) ${c.title}: ${c.summary.slice(0, 150)}`).join("\n")
+    : "No existing clues for this party."
+
+  const config = await resolvePrompt("enrichment/agentic-enrich", {
+    today,
+    year,
+    current_month: currentMonth,
+    title,
+    description,
+    party_profile: partyProfile,
+    existing_clues: existingCluesSummary,
+  })
+  const effectiveModel = config.model ?? model
+  // Always include store_clue alongside config tools
+  const storeClueToolDef = TOOL_REGISTRY["store_clue"]
+  const effectiveTools = [...config.tools, ...(storeClueToolDef && !config.tools.some(t => t.function.name === "store_clue") ? [storeClueToolDef] : [])]
+
+  const storedClueIds: string[] = []
+
+  const storeClueHandler: CustomToolHandler = async (args) => {
+    try {
+      const primaryUrl = (args.source_urls as string[])?.[0] ?? ""
+      const outlets = (args.source_outlets as string[]) ?? [domainOf(primaryUrl)]
+
+      const result = await storeClue({
+        topicId,
+        title: String(args.title ?? ""),
+        sourceUrl: primaryUrl,
+        fetchedAt: new Date().toISOString(),
+        processed: {
+          extracted_content: "",
+          bias_corrected_summary: String(args.summary ?? ""),
+          bias_flags: (args.bias_flags as string[]) ?? [],
+          source_credibility_score: Number(args.credibility ?? 50),
+          credibility_notes: `Sources: ${outlets.join(", ")}`,
+          origin_source: {
+            url: primaryUrl,
+            outlet: outlets[0] ?? "",
+            is_republication: false,
+          },
+          key_points: (args.key_points as string[]) ?? [],
+          date_references: [String(args.date ?? today)],
+          relevance_score: Number(args.relevance ?? 50),
+        },
+        partyRelevance: (args.parties as string[]) ?? [party.id],
+        domainTags: (args.domain_tags as string[]) ?? [],
+        timelineDate: String(args.date ?? today),
+        clueType: String(args.clue_type ?? "fact"),
+        addedBy: "auto",
+        changeNote: `Enrichment agent: ${party.name}`,
+      })
+
+      if (result.status === "created") {
+        storedClueIds.push(result.clue_id)
+        emitThink(topicId, "📌", `Clue stored: ${String(args.title ?? "").slice(0, 50)}`, `${result.clue_id} · cred=${args.credibility}`)
+        log.enrichment(`  Clue stored: ${result.clue_id} "${String(args.title ?? "").slice(0, 50)}"`)
+        return JSON.stringify({ status: "created", clue_id: result.clue_id })
+      } else {
+        log.enrichment(`  Duplicate clue skipped: ${result.clue_id}`)
+        return JSON.stringify({ status: "duplicate", clue_id: result.clue_id, message: "This clue already exists" })
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      log.enrichment(`  store_clue failed: ${msg}`)
+      return JSON.stringify({ error: msg })
+    }
+  }
+
+  const raw = await runAgenticLoop({
+    model: effectiveModel,
+    topicId,
+    tools: effectiveTools,
+    maxIterations: 15,
+    temperature: 0.2,
+    max_tokens: budgetOutput(effectiveModel, config.content, { min: 3000, max: 6000 }),
+    contextWarningThreshold: 100000,
+    customTools: { store_clue: storeClueHandler },
+    messages: [
+      { role: "system", content: config.content },
+      { role: "user", content: `Begin your research on ${party.name}. Use the tools to search, fetch, and store clues. Output your final profile update and fact-check results as JSON when done.` },
+    ],
+  })
+
+  let profileUpdate: Partial<Party> | null = null
+  let factCheckResults: { clue_title: string; verdict: string; note: string }[] = []
+
+  try {
+    const match = raw.match(/\{[\s\S]+\}/)
+    if (match) {
+      const parsed = JSON.parse(match[0])
+      profileUpdate = parsed.profile_update ?? null
+      factCheckResults = parsed.fact_check_results ?? []
+    }
+  } catch (e) {
+    log.enrichment(`PartyEnrichmentAgent: failed to parse final output for ${party.name}: ${e}`)
+  }
+
+  log.enrichment(`PartyEnrichmentAgent: ${party.name} complete — ${storedClueIds.length} clues stored`)
+  emitThink(topicId, "✅", `Enrichment complete: ${party.name}`, `${storedClueIds.length} clues stored`)
+
+  return {
+    partyId: party.id,
+    storedClueIds,
+    profileUpdate,
+    factCheckResults,
+  }
+}

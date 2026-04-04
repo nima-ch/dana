@@ -1,6 +1,7 @@
 import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput } from "../llm/tokenBudget"
-import { loadPrompt } from "../llm/promptLoader"
+import { resolvePrompt } from "../llm/promptLoader"
+import { runAgenticLoop } from "../llm/agenticLoop"
 import { emitThink } from "../routes/stream"
 import { log } from "../utils/logger"
 import { dbGetParties } from "../db/queries/parties"
@@ -52,7 +53,7 @@ export async function runForumPrepAgent(
     emitThink(topicId, "🧠", `Prep · ${party.name}`, "Reading all clues, building strategy…")
     log.forum(`  Preparing ${party.name} (${allClues.length} clues to analyze)`)
 
-    const SCRATCHPAD_PROMPT = loadPrompt("forum/scratchpad", {
+    const scratchpadConfig = await resolvePrompt("forum/scratchpad", {
       party_name: party.name,
       party_type: party.type,
       agenda: party.agenda,
@@ -62,19 +63,35 @@ export async function runForumPrepAgent(
       other_parties: otherParties,
       clue_list: clueList,
     })
+    const scratchpadModel = scratchpadConfig.model ?? model
 
-    const budget = budgetOutput(model, SCRATCHPAD_PROMPT, { min: 3000, max: 16000 })
+    const budget = budgetOutput(scratchpadModel, scratchpadConfig.content, { min: 3000, max: 16000 })
 
     try {
-      const raw = await chatCompletionText({
-        model,
-        messages: [
-          { role: "system", content: SCRATCHPAD_PROMPT },
-          { role: "user", content: `Prepare your private strategic notes for the upcoming forum on: "${title}"` },
-        ],
-        temperature: 0.4,
-        max_tokens: budget,
-      })
+      let raw: string
+      if (scratchpadConfig.tools.length > 0) {
+        raw = await runAgenticLoop({
+          model: scratchpadModel,
+          messages: [
+            { role: "system", content: scratchpadConfig.content },
+            { role: "user", content: `Prepare your private strategic notes for the upcoming forum on: "${title}"` },
+          ],
+          tools: scratchpadConfig.tools,
+          topicId,
+          temperature: 0.4,
+          max_tokens: budget,
+        })
+      } else {
+        raw = await chatCompletionText({
+          model: scratchpadModel,
+          messages: [
+            { role: "system", content: scratchpadConfig.content },
+            { role: "user", content: `Prepare your private strategic notes for the upcoming forum on: "${title}"` },
+          ],
+          temperature: 0.4,
+          max_tokens: budget,
+        })
+      }
 
       const match = raw.match(/\{[\s\S]+\}/)
       if (!match) throw new Error("No JSON object in scratchpad response")

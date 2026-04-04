@@ -1,20 +1,14 @@
-// Approximate token count using chars/3.5 ratio (good enough for Claude)
+import { getModelMeta } from "./modelCatalog"
+
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 3.5)
 }
 
-// Known context windows for Claude models
-const CONTEXT_WINDOWS: Record<string, number> = {
-  "claude-haiku-4-5-20251001": 200_000,
-  "claude-sonnet-4-6": 200_000,
-  "claude-opus-4-6": 200_000,
-  "claude-opus-4-5-20251101": 200_000,
-  "claude-opus-4-20250514": 200_000,
-}
 const DEFAULT_CONTEXT_WINDOW = 128_000
 
 export function getContextWindow(model: string): number {
-  if (CONTEXT_WINDOWS[model]) return CONTEXT_WINDOWS[model]
+  const meta = getModelMeta(model)
+  if (meta && meta.context_length > 0) return meta.context_length
   if (model.includes("claude")) return 200_000
   return DEFAULT_CONTEXT_WINDOW
 }

@@ -281,4 +281,13 @@ function applySchema(db: Database): void {
       value TEXT NOT NULL
     )
   `)
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS prompt_configs (
+      name TEXT PRIMARY KEY,
+      model TEXT,
+      tools TEXT NOT NULL DEFAULT '[]',
+      updated_at TEXT
+    )
+  `)
 }

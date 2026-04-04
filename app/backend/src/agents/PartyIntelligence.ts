@@ -1,6 +1,8 @@
 import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput } from "../llm/tokenBudget"
-import { loadPrompt } from "../llm/promptLoader"
+import { resolvePrompt } from "../llm/promptLoader"
+import { runAgenticLoop } from "../llm/agenticLoop"
+
 import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { log } from "../utils/logger"
@@ -59,16 +61,10 @@ export async function smartAddParty(
 
   const existingNames = existingParties.map(p => p.name).join(", ")
 
-  const raw = await chatCompletionText({
-    model,
-    messages: [
-      {
-        role: "system",
-        content: loadPrompt("party-intelligence/add"),
-      },
-      {
-        role: "user",
-        content: `TOPIC: ${topicTitle}
+  const addConfig = await resolvePrompt("party-intelligence/add")
+  const effectiveModel = addConfig.model ?? model
+
+  const userContent = `TOPIC: ${topicTitle}
 DESCRIPTION: ${topicDescription}
 PARTY TO PROFILE: ${partyName}
 EXISTING PARTIES: ${existingNames}
@@ -76,12 +72,32 @@ EXISTING PARTIES: ${existingNames}
 RESEARCH MATERIAL:
 ${research}
 
-Generate a complete party profile for "${partyName}". Output ONLY valid JSON, no markdown fences.`,
-      },
-    ],
-    temperature: 0.3,
-    max_tokens: budgetOutput(model, research + topicTitle, { min: 2000, max: 5000 }),
-  })
+Generate a complete party profile for "${partyName}". Output ONLY valid JSON, no markdown fences.`
+
+  let raw: string
+  if (addConfig.tools.length > 0) {
+    raw = await runAgenticLoop({
+      model: effectiveModel,
+      topicId,
+      tools: addConfig.tools,
+      temperature: 0.3,
+      max_tokens: budgetOutput(effectiveModel, research + topicTitle, { min: 2000, max: 5000 }),
+      messages: [
+        { role: "system", content: addConfig.content },
+        { role: "user", content: userContent },
+      ],
+    })
+  } else {
+    raw = await chatCompletionText({
+      model: effectiveModel,
+      messages: [
+        { role: "system", content: addConfig.content },
+        { role: "user", content: userContent },
+      ],
+      temperature: 0.3,
+      max_tokens: budgetOutput(effectiveModel, research + topicTitle, { min: 2000, max: 5000 }),
+    })
+  }
 
   const match = raw.match(/\{[\s\S]+\}/)
   if (!match) throw new Error("Failed to parse party JSON from LLM response")
@@ -101,22 +117,21 @@ export async function smartEditParty(
   feedback: string,
   model: string,
 ): Promise<Party> {
-  log.discovery(`Smart edit: researching feedback for "${currentParty.name}"`)
-  emitThink(topicId, "🔍", `Researching "${currentParty.name}"`, feedback.slice(0, 100))
+  log.discovery(`Smart edit: "${currentParty.name}" — "${feedback.slice(0, 80)}"`)
+  emitThink(topicId, "📝", `Smart edit: ${currentParty.name}`, feedback.slice(0, 100))
 
-  const research = await gatherResearch([
-    `${currentParty.name} ${feedback.slice(0, 80)}`,
-    `${currentParty.name} ${topicTitle} latest developments ${new Date().getFullYear()}`,
-  ], topicId)
+  const editConfig = await resolvePrompt("party-intelligence/edit")
 
-  emitThink(topicId, "🧠", `Applying edits to "${currentParty.name}"`, "Sending to LLM...")
-
-  const raw = await chatCompletionText({
-    model,
+  const raw = await runAgenticLoop({
+    model: editConfig.model ?? model,
+    topicId,
+    tools: editConfig.tools,
+    temperature: 0.3,
+    max_tokens: budgetOutput(editConfig.model ?? model, JSON.stringify(currentParty) + feedback, { min: 2000, max: 5000 }),
     messages: [
       {
         role: "system",
-        content: loadPrompt("party-intelligence/edit"),
+        content: editConfig.content,
       },
       {
         role: "user",
@@ -128,14 +143,9 @@ ${JSON.stringify(currentParty, null, 2)}
 USER FEEDBACK:
 ${feedback}
 
-RESEARCH MATERIAL:
-${research}
-
-Update the party profile based on the feedback. Output ONLY valid JSON, no markdown fences.`,
+Research the feedback using the available tools, then output the updated party profile as valid JSON (no markdown fences).`,
       },
     ],
-    temperature: 0.3,
-    max_tokens: budgetOutput(model, JSON.stringify(currentParty) + research + feedback, { min: 2000, max: 5000 }),
   })
 
   const match = raw.match(/\{[\s\S]+\}/)
@@ -164,16 +174,10 @@ export async function smartSplitParty(
     topicId
   )
 
-  const raw = await chatCompletionText({
-    model,
-    messages: [
-      {
-        role: "system",
-        content: loadPrompt("party-intelligence/split"),
-      },
-      {
-        role: "user",
-        content: `TOPIC: ${topicTitle}
+  const splitConfig = await resolvePrompt("party-intelligence/split")
+  const effectiveModel = splitConfig.model ?? model
+
+  const userContent = `TOPIC: ${topicTitle}
 
 ORIGINAL PARTY:
 ${JSON.stringify(sourceParty, null, 2)}
@@ -183,12 +187,32 @@ SPLIT INTO THESE PARTIES: ${splitNames.join(", ")}
 RESEARCH MATERIAL:
 ${research}
 
-Generate a complete profile for each sub-party. Output ONLY a valid JSON array, no markdown fences.`,
-      },
-    ],
-    temperature: 0.3,
-    max_tokens: budgetOutput(model, JSON.stringify(sourceParty) + research, { min: 3000, max: Math.max(splitNames.length * 2000, 6000) }),
-  })
+Generate a complete profile for each sub-party. Output ONLY a valid JSON array, no markdown fences.`
+
+  let raw: string
+  if (splitConfig.tools.length > 0) {
+    raw = await runAgenticLoop({
+      model: effectiveModel,
+      topicId,
+      tools: splitConfig.tools,
+      temperature: 0.3,
+      max_tokens: budgetOutput(effectiveModel, JSON.stringify(sourceParty) + research, { min: 3000, max: Math.max(splitNames.length * 2000, 6000) }),
+      messages: [
+        { role: "system", content: splitConfig.content },
+        { role: "user", content: userContent },
+      ],
+    })
+  } else {
+    raw = await chatCompletionText({
+      model: effectiveModel,
+      messages: [
+        { role: "system", content: splitConfig.content },
+        { role: "user", content: userContent },
+      ],
+      temperature: 0.3,
+      max_tokens: budgetOutput(effectiveModel, JSON.stringify(sourceParty) + research, { min: 3000, max: Math.max(splitNames.length * 2000, 6000) }),
+    })
+  }
 
   const match = raw.match(/\[[\s\S]+\]/)
   if (!match) throw new Error("Failed to parse split parties JSON from LLM response")
@@ -212,12 +236,15 @@ export async function smartMergeParties(
 ): Promise<Partial<Party>> {
   log.discovery(`Smart merge: merging ${sources.map(s => s.name).join(", ")} into "${targetName}"`)
 
+  const mergeConfig = await resolvePrompt("party-intelligence/merge")
+  const effectiveModel = mergeConfig.model ?? model
+
   const raw = await chatCompletionText({
-    model,
+    model: effectiveModel,
     messages: [
       {
         role: "system",
-        content: loadPrompt("party-intelligence/merge"),
+        content: mergeConfig.content,
       },
       {
         role: "user",
@@ -232,7 +259,7 @@ Synthesize a single party profile. Output ONLY valid JSON, no markdown fences.`,
       },
     ],
     temperature: 0.3,
-    max_tokens: budgetOutput(model, sources.map(s => JSON.stringify(s)).join(""), { min: 2000, max: 5000 }),
+    max_tokens: budgetOutput(effectiveModel, sources.map(s => JSON.stringify(s)).join(""), { min: 2000, max: 5000 }),
   })
 
   const match = raw.match(/\{[\s\S]+\}/)

@@ -1,6 +1,7 @@
 import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput } from "../llm/tokenBudget"
-import { loadPrompt } from "../llm/promptLoader"
+import { resolvePrompt } from "../llm/promptLoader"
+import { runAgenticLoop } from "../llm/agenticLoop"
 import { log } from "../utils/logger"
 import { emitThink } from "../routes/stream"
 import { dbUpsertSupervisorState, dbGetSupervisorState } from "../db/queries/forum"
@@ -96,24 +97,40 @@ export class ForumSupervisor {
 
     const currentScenariosStr = JSON.stringify(this.state.live_scenarios, null, 2)
 
-    const SCENARIOS_PROMPT = loadPrompt("forum/supervisor-scenarios", {
+    const scenariosConfig = await resolvePrompt("forum/supervisor-scenarios", {
       topic: this.topic,
       current_scenarios: currentScenariosStr,
       all_turns: turnsStr,
     })
+    const effectiveModel = scenariosConfig.model ?? this.model
 
-    const budget = budgetOutput(this.model, SCENARIOS_PROMPT, { min: 1500, max: 4000 })
+    const budget = budgetOutput(effectiveModel, scenariosConfig.content, { min: 1500, max: 4000 })
 
     try {
-      const raw = await chatCompletionText({
-        model: this.model,
-        messages: [
-          { role: "system", content: SCENARIOS_PROMPT },
-          { role: "user", content: "Update the scenario list based on the debate so far." },
-        ],
-        temperature: 0.2,
-        max_tokens: budget,
-      })
+      let raw: string
+      if (scenariosConfig.tools.length > 0) {
+        raw = await runAgenticLoop({
+          model: effectiveModel,
+          topicId: this.topicId,
+          tools: scenariosConfig.tools,
+          temperature: 0.2,
+          max_tokens: budget,
+          messages: [
+            { role: "system", content: scenariosConfig.content },
+            { role: "user", content: "Update the scenario list based on the debate so far." },
+          ],
+        })
+      } else {
+        raw = await chatCompletionText({
+          model: effectiveModel,
+          messages: [
+            { role: "system", content: scenariosConfig.content },
+            { role: "user", content: "Update the scenario list based on the debate so far." },
+          ],
+          temperature: 0.2,
+          max_tokens: budget,
+        })
+      }
 
       const match = raw.match(/\[[\s\S]+\]/)
       if (!match) throw new Error("No JSON array in scenarios response")
@@ -149,7 +166,7 @@ export class ForumSupervisor {
       .map(([id, count]) => `${id}: ${count} turns`)
       .join(", ")
 
-    const COMPLETION_PROMPT = loadPrompt("forum/supervisor-completion", {
+    const completionConfig = await resolvePrompt("forum/supervisor-completion", {
       topic: this.topic,
       turn_count: String(this.state.turn_count),
       turn_distribution: distStr,
@@ -157,19 +174,35 @@ export class ForumSupervisor {
       recent_turns: recentStr,
       min_turns: String(this.minTurns),
     })
+    const completionModel = completionConfig.model ?? this.model
 
-    const budget = budgetOutput(this.model, COMPLETION_PROMPT, { min: 200, max: 500 })
+    const budget = budgetOutput(completionModel, completionConfig.content, { min: 200, max: 500 })
 
     try {
-      const raw = await chatCompletionText({
-        model: this.model,
-        messages: [
-          { role: "system", content: COMPLETION_PROMPT },
-          { role: "user", content: "Should the forum close?" },
-        ],
-        temperature: 0.2,
-        max_tokens: budget,
-      })
+      let raw: string
+      if (completionConfig.tools.length > 0) {
+        raw = await runAgenticLoop({
+          model: completionModel,
+          topicId: this.topicId,
+          tools: completionConfig.tools,
+          temperature: 0.2,
+          max_tokens: budget,
+          messages: [
+            { role: "system", content: completionConfig.content },
+            { role: "user", content: "Should the forum close?" },
+          ],
+        })
+      } else {
+        raw = await chatCompletionText({
+          model: completionModel,
+          messages: [
+            { role: "system", content: completionConfig.content },
+            { role: "user", content: "Should the forum close?" },
+          ],
+          temperature: 0.2,
+          max_tokens: budget,
+        })
+      }
 
       const match = raw.match(/\{[\s\S]+\}/)
       if (!match) throw new Error("No JSON in completion response")

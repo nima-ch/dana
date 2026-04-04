@@ -1,6 +1,7 @@
 import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput } from "../llm/tokenBudget"
-import { loadPrompt } from "../llm/promptLoader"
+import { resolvePrompt } from "../llm/promptLoader"
+import { runAgenticLoop } from "../llm/agenticLoop"
 import { getPartyProfile } from "../tools/internal/getPartyProfile"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { log } from "../utils/logger"
@@ -97,7 +98,7 @@ export async function runRepresentativeTurn(input: RepTurnInput): Promise<RepTur
   // Force speak if passed twice in a row
   const forceSpeak = consecutivePasses >= 2
 
-  const TURN_PROMPT = loadPrompt("forum/representative-turn", {
+  const turnConfig = await resolvePrompt("forum/representative-turn", {
     persona_title: personaTitle,
     party_name: party.name,
     scratchpad: scratchpadStr,
@@ -109,24 +110,39 @@ export async function runRepresentativeTurn(input: RepTurnInput): Promise<RepTur
     turn_number: String(turnNumber),
     speaking_weight: String(speakingWeight),
   })
+  const effectiveModel = turnConfig.model ?? model
 
   const userContent = forceSpeak
     ? `Turn ${turnNumber}: You MUST speak this turn (you have passed the last ${consecutivePasses} turns). Make your contribution now.`
     : `Turn ${turnNumber}: It is your moment. Speak or pass.`
 
-  const budget = budgetOutput(model, TURN_PROMPT + userContent, { min: 300, max: 800 })
+  const budget = budgetOutput(effectiveModel, turnConfig.content + userContent, { min: 300, max: 800 })
 
   let raw: string
   try {
-    raw = await chatCompletionText({
-      model,
-      messages: [
-        { role: "system", content: TURN_PROMPT },
-        { role: "user", content: userContent },
-      ],
-      temperature: 0.7,
-      max_tokens: budget,
-    })
+    if (turnConfig.tools.length > 0) {
+      raw = await runAgenticLoop({
+        model: effectiveModel,
+        topicId,
+        tools: turnConfig.tools,
+        temperature: 0.7,
+        max_tokens: budget,
+        messages: [
+          { role: "system", content: turnConfig.content },
+          { role: "user", content: userContent },
+        ],
+      })
+    } else {
+      raw = await chatCompletionText({
+        model: effectiveModel,
+        messages: [
+          { role: "system", content: turnConfig.content },
+          { role: "user", content: userContent },
+        ],
+        temperature: 0.7,
+        max_tokens: budget,
+      })
+    }
   } catch (e) {
     log.forum(`  ${partyId} turn failed: ${e}`)
     return { turn: null, passed: true }

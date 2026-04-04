@@ -1,5 +1,5 @@
 import { chatCompletionText } from "../../llm/proxyClient"
-import { loadPrompt } from "../../llm/promptLoader"
+import { resolvePrompt } from "../../llm/promptLoader"
 
 export interface OriginSource {
   url: string
@@ -25,8 +25,6 @@ interface SlimProcessorOutput {
   relevance_score: number
 }
 
-const SYSTEM_PROMPT = loadPrompt("clue-processor/system")
-
 const SLIM_SYSTEM_PROMPT = `You are a neutral intelligence analyst. Given raw web content and a topic context, extract a short bias-corrected summary and score relevance.
 
 Output ONLY a valid JSON object with exactly these two fields:
@@ -47,6 +45,10 @@ export async function processClue(
   model: string = "claude-haiku-4-5-20251001",
   slim: boolean = false
 ): Promise<ClueProcessorOutput> {
+  const systemConfig = await resolvePrompt("clue-processor/system")
+  const effectiveModel = systemConfig.model ?? model
+  const SYSTEM_PROMPT = systemConfig.content
+
   const truncatedHtml = rawHtml.slice(0, 6000)
 
   const prompt = `SOURCE URL: ${sourceUrl}
@@ -95,7 +97,7 @@ Extract, bias-correct, and analyze this content for the topic context above.`
   }
 
   const text = await chatCompletionText({
-    model,
+    model: effectiveModel,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: prompt },

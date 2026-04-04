@@ -1,5 +1,9 @@
 import { join } from "path"
 import { readFileSync } from "fs"
+import { getPromptConfig, getTaskProfile } from "../db/queries/promptConfigs"
+import { TOOL_REGISTRY } from "./toolDefinitions"
+import { resolveSmartDefault } from "./modelCatalog"
+import type { ToolDefinition } from "./proxyClient"
 
 const cache = new Map<string, string>()
 
@@ -19,7 +23,31 @@ export function loadPrompt(name: string, vars?: Record<string, string>): string 
   return prompt
 }
 
-// Clear cache — useful in dev when prompt files change
+export interface ResolvedPrompt {
+  content: string
+  model: string | null
+  tools: ToolDefinition[]
+}
+
+export async function resolvePrompt(name: string, vars?: Record<string, string>): Promise<ResolvedPrompt> {
+  const content = loadPrompt(name, vars)
+  const config = getPromptConfig(name)
+  const tools = config.tools
+    .map(t => TOOL_REGISTRY[t])
+    .filter((t): t is ToolDefinition => !!t)
+
+  // Model resolution: explicit override > smart default > null (caller fallback)
+  let model = config.model
+  if (!model) {
+    const profile = getTaskProfile(name)
+    if (profile) {
+      model = await resolveSmartDefault(profile)
+    }
+  }
+
+  return { content, model, tools }
+}
+
 export function clearPromptCache(): void {
   cache.clear()
 }

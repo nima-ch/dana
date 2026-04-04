@@ -4,7 +4,8 @@ import { runScenarioScorer } from "../agents/ScenarioScorer"
 import { writeForumSession, type ForumSession } from "../tools/internal/getForumData"
 import { readArtifact, writeArtifact } from "../tools/internal/artifactStore"
 import { chatCompletionText } from "../llm/proxyClient"
-import { loadPrompt } from "../llm/promptLoader"
+import { runAgenticLoop } from "../llm/agenticLoop"
+import { resolvePrompt } from "../llm/promptLoader"
 import { writeCheckpoint } from "./checkpointManager"
 import { emit } from "../routes/stream"
 import { getTopic, updateTopic } from "./topicManager"
@@ -76,17 +77,35 @@ ${deltaTurns.map(t => `${t.party_name}: ${t.position_delta} — ${t.updated_posi
 Output JSON array:
 [{ "scenario_id": "<id>", "update_type": "strengthened" | "weakened" | "unchanged" | "new", "reason": "<brief reason>" }]`
 
+    const impactConfig = await resolvePrompt("forum/delta-scenario-impact")
+    const impactModel = impactConfig.model ?? topic.models.delta_updates
+
     let scenarioUpdates: { scenario_id: string; update_type: string; reason: string }[] = []
     try {
-      const raw = await chatCompletionText({
-        model: topic.models.delta_updates,
-        messages: [
-          { role: "system", content: loadPrompt("forum/delta-scenario-impact") },
-          { role: "user", content: scenarioUpdatePrompt },
-        ],
-        temperature: 0.3,
-        max_tokens: 1000,
-      })
+      let raw: string
+      if (impactConfig.tools.length > 0) {
+        raw = await runAgenticLoop({
+          model: impactModel,
+          messages: [
+            { role: "system", content: impactConfig.content },
+            { role: "user", content: scenarioUpdatePrompt },
+          ],
+          tools: impactConfig.tools,
+          topicId,
+          temperature: 0.3,
+          max_tokens: 1000,
+        })
+      } else {
+        raw = await chatCompletionText({
+          model: impactModel,
+          messages: [
+            { role: "system", content: impactConfig.content },
+            { role: "user", content: scenarioUpdatePrompt },
+          ],
+          temperature: 0.3,
+          max_tokens: 1000,
+        })
+      }
       const match = raw.match(/\[[\s\S]+\]/)
       if (match) scenarioUpdates = JSON.parse(match[0])
     } catch (e) {

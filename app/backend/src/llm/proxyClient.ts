@@ -11,9 +11,26 @@ export interface ModelInfo {
   owned_by?: string
 }
 
+export interface ToolCall {
+  id: string
+  type: "function"
+  function: { name: string; arguments: string }
+}
+
 export interface ChatMessage {
-  role: "system" | "user" | "assistant"
-  content: string
+  role: "system" | "user" | "assistant" | "tool"
+  content: string | null
+  tool_calls?: ToolCall[]
+  tool_call_id?: string
+}
+
+export interface ToolDefinition {
+  type: "function"
+  function: {
+    name: string
+    description: string
+    parameters: Record<string, unknown>
+  }
 }
 
 export interface ChatCompletionOptions {
@@ -22,6 +39,8 @@ export interface ChatCompletionOptions {
   temperature?: number
   max_tokens?: number
   stream?: boolean
+  tools?: ToolDefinition[]
+  tool_choice?: "auto" | "none" | { type: "function"; function: { name: string } }
 }
 
 export interface ChatCompletionResponse {
@@ -130,6 +149,7 @@ export async function chatCompletion(options: ChatCompletionOptions): Promise<Ch
           temperature: options.temperature ?? 0.7,
           max_tokens: options.max_tokens,
           stream: false,
+          ...(options.tools?.length ? { tools: options.tools, tool_choice: options.tool_choice ?? "auto" } : {}),
         }),
       })
 

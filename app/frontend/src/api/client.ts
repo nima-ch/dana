@@ -138,17 +138,23 @@ export const api = {
       request<any>("/settings", { method: "PUT", body: JSON.stringify(data) }),
   },
   prompts: {
-    list: () => request<Array<{ name: string; path: string; content: string; agent: string; variables: string[]; stage: string }>>("/prompts"),
-    get: (name: string) => request<{ name: string; path: string; content: string; agent: string; variables: string[]; stage: string }>(`/prompts/${encodeURIComponent(name)}`),
+    list: () => request<Array<{ name: string; path: string; content: string; agent: string; variables: string[]; stage: string; model: string | null; tools: string[]; task_profile: string | null }>>("/prompts"),
+    get: (name: string) => request<{ name: string; path: string; content: string; agent: string; variables: string[]; stage: string; model: string | null; tools: string[]; task_profile: string | null }>(`/prompts/${encodeURIComponent(name)}`),
     update: (name: string, content: string) =>
-      request<{ name: string; path: string; content: string; agent: string; variables: string[]; stage: string }>(`/prompts/${encodeURIComponent(name)}`, {
+      request<{ name: string; path: string; content: string; agent: string; variables: string[]; stage: string; model: string | null; tools: string[]; task_profile: string | null }>(`/prompts/${encodeURIComponent(name)}`, {
         method: "PUT",
         body: JSON.stringify({ content }),
       }),
     reset: (name: string) =>
-      request<{ name: string; path: string; content: string; agent: string; variables: string[]; stage: string }>(`/prompts/${encodeURIComponent(name)}/reset`, {
+      request<{ name: string; path: string; content: string; agent: string; variables: string[]; stage: string; model: string | null; tools: string[]; task_profile: string | null }>(`/prompts/${encodeURIComponent(name)}/reset`, {
         method: "POST",
       }),
+    updateConfig: (name: string, config: { model?: string | null; tools?: string[] }) =>
+      request<{ name: string; model: string | null; tools: string[] }>(`/prompts/${encodeURIComponent(name)}/config`, {
+        method: "PUT",
+        body: JSON.stringify(config),
+      }),
+    toolCatalog: () => request<Array<{ name: string; description: string; category: string }>>("/prompts/tool-catalog"),
   },
   providers: {
     list: () => request<{ providers: Array<{ provider: string; label: string; status: string; account: string | null; credential_file: string }> }>("/providers"),
@@ -159,29 +165,19 @@ export const api = {
     statuses: () => request<{ providers: Array<{ provider: string; connected: boolean; account?: string | null }> }>("/providers"),
     health: () => request<{ proxy_online: boolean; connected_providers: string[]; model_count: number; credential_files: number }>("/providers/health"),
   },
-  agents: {
-    list: () => request<any[]>("/agents"),
-    updateTools: (name: string, tools: string[]) =>
-      request<any>(`/agents/${encodeURIComponent(name)}/tools`, {
-        method: "PUT",
-        body: JSON.stringify({ tools }),
-      }),
-    updateModel: (name: string, model: string) =>
-      request<any>(`/agents/${encodeURIComponent(name)}/model`, {
-        method: "PUT",
-        body: JSON.stringify({ model }),
-      }),
-  },
-  tools: {
-    list: () => request<any[]>("/tools"),
-    create: (data: Record<string, unknown>) =>
-      request<any>("/tools", { method: "POST", body: JSON.stringify(data) }),
-    remove: (name: string) =>
-      request<{ success: boolean }>(`/tools/${encodeURIComponent(name)}`, {
-        method: "DELETE",
-      }),
-  },
   models: {
     list: () => request<{ id: string }[]>("/models"),
+    catalog: () => request<Array<{
+      id: string
+      display_name: string
+      description: string
+      context_length: number
+      max_completion_tokens: number
+      type: string
+      thinking: { min?: number; max?: number; levels?: string[]; zero_allowed?: boolean } | null
+      supports_tools: boolean
+      tier: "fast" | "balanced" | "powerful"
+      available: boolean
+    }>>("/models/catalog"),
   },
 }

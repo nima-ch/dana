@@ -14,8 +14,9 @@ import { expertCouncilRouter } from "./routes/expertCouncil"
 import { settingsRouter } from "./routes/settings"
 import { promptsRouter } from "./routes/prompts"
 import { providersRouter } from "./routes/providers"
-import { agentToolsRouter } from "./routes/agentTools"
+import { seedDefaults } from "./db/queries/promptConfigs"
 import { fetchAvailableModels } from "./llm/proxyClient"
+import { startModelCatalog, getModelCatalog } from "./llm/modelCatalog"
 
 const DIST_DIR = join(import.meta.dir, "../../frontend/dist")
 
@@ -50,6 +51,8 @@ function serveStatic(filePath: string) {
 
 
 initDb()
+seedDefaults()
+void startModelCatalog()
 
 const app = new Elysia()
   .use(cors())
@@ -64,11 +67,13 @@ const app = new Elysia()
   .use(settingsRouter)
   .use(promptsRouter)
   .use(providersRouter)
-  .use(agentToolsRouter)
   .get("/health", () => ({ status: "ok" }))
   .get("/api/health", () => ({ status: "ok" }))
   .get("/api/models", async () => {
     return fetchAvailableModels()
+  })
+  .get("/api/models/catalog", async () => {
+    return getModelCatalog()
   })
   .get("/assets/*", ({ path }) => {
     const filePath = join(DIST_DIR, path.replace(/^\/assets\//, "assets/"))

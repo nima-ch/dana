@@ -1,73 +1,62 @@
-import { ChevronLeft, ChevronRight, Search, Settings } from "lucide-react"
+import { ChevronRight, Settings } from "lucide-react"
 import { Link, NavLink, Outlet, useLocation, useParams } from "react-router-dom"
 import { ThemeToggle } from "./theme-toggle"
 import { useTopicsStore } from "../stores/topicsStore"
-import { useUIStore } from "../stores/uiStore"
 import { cn } from "@/lib/utils"
-
-function breadcrumbLabel(pathname: string, topicTitle?: string) {
-  if (pathname.startsWith("/settings")) return "Settings"
-  if (pathname.startsWith("/topic/") && topicTitle) return topicTitle
-  return "Dashboard"
-}
 
 export function AppShell() {
   const { topics } = useTopicsStore()
-  const { sidebarCollapsed, toggleSidebar } = useUIStore()
   const location = useLocation()
   const params = useParams()
   const topic = topics.find(t => t.id === params.id)
-  const activeLabel = breadcrumbLabel(location.pathname, topic?.title)
+
+  const crumbs = buildBreadcrumbs(location.pathname, topic?.title, params)
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
-      <aside className={cn("flex flex-col border-r border-border/70 bg-card/70 backdrop-blur transition-all duration-200", sidebarCollapsed ? "w-20" : "w-72")}>
-        <div className="flex items-center justify-between border-b border-border/70 p-4">
-          <Link to="/" className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground font-semibold">D</div>
-            {!sidebarCollapsed && <div><div className="font-semibold">Dana</div><div className="text-xs text-muted-foreground">Workspace</div></div>}
-          </Link>
-          <button type="button" onClick={toggleSidebar} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} className="rounded-md border border-border p-2">
-            {sidebarCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-          </button>
-        </div>
+    <div className="flex min-h-screen flex-col bg-background text-foreground">
+      <header className="sticky top-0 z-30 flex h-14 items-center gap-4 border-b border-border/70 bg-card/80 px-6 backdrop-blur">
+        <Link to="/" className="flex items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground text-sm font-semibold">D</div>
+          <span className="text-sm font-semibold">Dana</span>
+        </Link>
 
-        <nav className="flex-1 space-y-2 overflow-auto p-3">
-          <div className="px-2 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Topics</div>
-          {topics.map(topic => (
-            <NavLink key={topic.id} to={`/topic/${topic.id}`} className={({ isActive }) => cn("flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors", isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/60") }>
-              <span className={cn("h-2.5 w-2.5 rounded-full", topic.status === "complete" ? "bg-green-500" : topic.status === "draft" ? "bg-muted-foreground" : "bg-blue-400")} />
-              {!sidebarCollapsed && <span className="truncate">{topic.title}</span>}
-            </NavLink>
+        <nav className="flex items-center gap-1.5 text-sm text-muted-foreground">
+          {crumbs.map((crumb, i) => (
+            <span key={crumb.path} className="flex items-center gap-1.5">
+              <ChevronRight className="size-3.5" />
+              {i === crumbs.length - 1 ? (
+                <span className="font-medium text-foreground">{crumb.label}</span>
+              ) : (
+                <Link to={crumb.path} className="hover:text-foreground transition-colors">{crumb.label}</Link>
+              )}
+            </span>
           ))}
         </nav>
 
-        <div className="border-t border-border/70 p-3 space-y-3">
-          <NavLink to="/settings" className={({ isActive }) => cn("flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors", isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/60")}>
-            <Settings size={16} />
-            {!sidebarCollapsed && <span>Settings</span>}
+        <div className="ml-auto flex items-center gap-2">
+          <NavLink to="/settings" className={({ isActive }) => cn("inline-flex h-8 w-8 items-center justify-center rounded-md border border-border transition-colors hover:bg-accent", isActive && "bg-accent text-accent-foreground")}>
+            <Settings className="size-4" />
           </NavLink>
-          <div className="flex items-center justify-between px-3">
-            {!sidebarCollapsed && <span className="text-sm">Theme</span>}
-            <ThemeToggle />
-          </div>
+          <ThemeToggle />
         </div>
-      </aside>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 items-center gap-4 border-b border-border/70 px-6">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Link to="/" className="hover:text-foreground">Dashboard</Link>
-            <span>/</span>
-            <span className="text-foreground">{activeLabel}</span>
-          </div>
-          <div className="ml-auto flex items-center gap-2 rounded-full border border-border/70 bg-background px-3 py-2 text-muted-foreground">
-            <Search size={14} />
-            <span className="text-sm">Search</span>
-          </div>
-        </header>
-        <main className="min-w-0 flex-1 overflow-auto"><Outlet /></main>
-      </div>
+      </header>
+      <main className="min-w-0 flex-1 overflow-auto"><Outlet /></main>
     </div>
   )
+}
+
+function buildBreadcrumbs(pathname: string, topicTitle?: string, params?: Record<string, string | undefined>) {
+  const crumbs: { label: string; path: string }[] = []
+
+  if (pathname === "/") {
+    crumbs.push({ label: "Dashboard", path: "/" })
+  } else if (pathname.startsWith("/topic/") && params?.id) {
+    crumbs.push({ label: "Dashboard", path: "/" })
+    crumbs.push({ label: topicTitle || params.id, path: `/topic/${params.id}` })
+  } else if (pathname.startsWith("/settings")) {
+    crumbs.push({ label: "Dashboard", path: "/" })
+    crumbs.push({ label: "Settings", path: "/settings" })
+  }
+
+  return crumbs
 }

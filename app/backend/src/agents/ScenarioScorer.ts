@@ -1,6 +1,7 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { runAgenticLoop } from "../llm/agenticLoop"
 import { budgetOutput, fitContext } from "../llm/tokenBudget"
-import { loadPrompt } from "../llm/promptLoader"
+import { resolvePrompt } from "../llm/promptLoader"
 import { log } from "../utils/logger"
 import { emit, emitThink } from "../routes/stream"
 import { dbGetParties } from "../db/queries/parties"
@@ -13,8 +14,6 @@ import { writeArtifact } from "../tools/internal/artifactStore"
 import type { ForumScenario, ForumTurn, ScratchpadContent } from "../db/queries/forum"
 import type { Party } from "../db/queries/parties"
 import type { ExpertCouncilOutput, FinalVerdict, RankedScenario } from "./ExpertAgent"
-
-const SCORER_PROMPT = loadPrompt("scoring/score-scenarios")
 
 // ─── Evidence map types ───────────────────────────────────────────────────────
 
@@ -284,6 +283,10 @@ export async function runScenarioScorer(
   model: string,
   onProgress?: (msg: string) => void,
 ): Promise<ExpertCouncilOutput> {
+  const scorerConfig = await resolvePrompt("scoring/score-scenarios")
+  const effectiveModel = scorerConfig.model ?? model
+  const SCORER_PROMPT = scorerConfig.content
+
   log.separator()
   log.expert("Stage 5/5: SCENARIO SCORER starting")
 
@@ -338,19 +341,34 @@ export async function runScenarioScorer(
     { content: `\nScore all ${scenarios.length} scenarios. Probabilities must sum to exactly 1.0.`, priority: 10, label: "instruction" },
   ], 80_000)
 
-  const budget = budgetOutput(model, SCORER_PROMPT + userPrompt, { min: 4000, max: 12000 })
+  const budget = budgetOutput(effectiveModel, SCORER_PROMPT + userPrompt, { min: 4000, max: 12000 })
 
   let verdict: { scenarios_ranked: RankedScenario[]; final_assessment: string; confidence_note: string } | null = null
   for (let attempt = 0; attempt < 3; attempt++) {
-    const raw = await chatCompletionText({
-      model,
-      messages: [
-        { role: "system", content: SCORER_PROMPT },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.2,
-      max_tokens: budget,
-    })
+    let raw: string
+    if (scorerConfig.tools.length > 0) {
+      raw = await runAgenticLoop({
+        model: effectiveModel,
+        messages: [
+          { role: "system", content: SCORER_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        tools: scorerConfig.tools,
+        topicId,
+        temperature: 0.2,
+        max_tokens: budget,
+      })
+    } else {
+      raw = await chatCompletionText({
+        model: effectiveModel,
+        messages: [
+          { role: "system", content: SCORER_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.2,
+        max_tokens: budget,
+      })
+    }
 
     try {
       const match = raw.match(/\{[\s\S]+\}/)

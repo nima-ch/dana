@@ -1,6 +1,7 @@
 import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput, fitContext } from "../llm/tokenBudget"
-import { loadPrompt } from "../llm/promptLoader"
+import { resolvePrompt } from "../llm/promptLoader"
+import { runAgenticLoop } from "../llm/agenticLoop"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
 import { emitThink } from "../routes/stream"
@@ -58,8 +59,10 @@ export async function runWeightCalculator(
   runId: string,
   onProgress?: (msg: string) => void
 ): Promise<WeightCalculatorOutput> {
-  const WEIGHT_SYSTEM = loadPrompt("weight/weight-scoring")
-  const PERSONA_SYSTEM = loadPrompt("weight/persona-generation")
+  const weightConfig = await resolvePrompt("weight/weight-scoring")
+  const weightModel = weightConfig.model ?? model
+  const personaConfig = await resolvePrompt("weight/persona-generation")
+  const personaModel = personaConfig.model ?? model
 
   const parties = dbGetParties(topicId)
   const ctx = await buildAgentContext("weight", topicId)
@@ -78,20 +81,36 @@ export async function runWeightCalculator(
   ], 50_000)
   const prompt = fittedContext
 
-  const outputBudget = budgetOutput(model, WEIGHT_SYSTEM + prompt, { min: 2000, max: Math.max(parties.length * 350, 3000) })
+  const outputBudget = budgetOutput(weightModel, weightConfig.content + prompt, { min: 2000, max: Math.max(parties.length * 350, 3000) })
 
   let weightScores: { party_id: string; weight: number; weight_factors: Party["weight_factors"] }[] = []
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    const raw = await chatCompletionText({
-      model,
-      messages: [
-        { role: "system", content: WEIGHT_SYSTEM },
-        { role: "user", content: attempt === 0 ? prompt : `${prompt}\n\nOutput ONLY valid JSON array. No trailing commas.` },
-      ],
-      temperature: 0.2,
-      max_tokens: outputBudget,
-    })
+    const userContent = attempt === 0 ? prompt : `${prompt}\n\nOutput ONLY valid JSON array. No trailing commas.`
+    let raw: string
+    if (weightConfig.tools.length > 0) {
+      raw = await runAgenticLoop({
+        model: weightModel,
+        messages: [
+          { role: "system", content: weightConfig.content },
+          { role: "user", content: userContent },
+        ],
+        tools: weightConfig.tools,
+        topicId,
+        temperature: 0.2,
+        max_tokens: outputBudget,
+      })
+    } else {
+      raw = await chatCompletionText({
+        model: weightModel,
+        messages: [
+          { role: "system", content: weightConfig.content },
+          { role: "user", content: userContent },
+        ],
+        temperature: 0.2,
+        max_tokens: outputBudget,
+      })
+    }
     try {
       const match = raw.match(/\[[\s\S]+\]/)
       if (!match) throw new Error("No array found")
@@ -125,15 +144,30 @@ export async function runWeightCalculator(
 
     const batchResults = await Promise.all(batch.map(async (party) => {
       const personaInput = `PARTY: ${party.name}\nTYPE: ${party.type}\nAGENDA: ${party.agenda}\nMEANS: ${party.means.join(", ")}\nSTANCE: ${party.stance}\nTOPIC: ${title}`
-      const personaRaw = await chatCompletionText({
-        model,
-        messages: [
-          { role: "system", content: PERSONA_SYSTEM },
-          { role: "user", content: personaInput },
-        ],
-        temperature: 0.4,
-        max_tokens: 400,
-      })
+      let personaRaw: string
+      if (personaConfig.tools.length > 0) {
+        personaRaw = await runAgenticLoop({
+          model: personaModel,
+          messages: [
+            { role: "system", content: personaConfig.content },
+            { role: "user", content: personaInput },
+          ],
+          tools: personaConfig.tools,
+          topicId,
+          temperature: 0.4,
+          max_tokens: 400,
+        })
+      } else {
+        personaRaw = await chatCompletionText({
+          model: personaModel,
+          messages: [
+            { role: "system", content: personaConfig.content },
+            { role: "user", content: personaInput },
+          ],
+          temperature: 0.4,
+          max_tokens: 400,
+        })
+      }
 
       let personaTitle = party.name + " Representative"
       let personaPrompt = personaRaw.trim()

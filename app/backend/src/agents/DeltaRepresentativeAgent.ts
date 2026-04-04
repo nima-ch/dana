@@ -1,5 +1,6 @@
 import { chatCompletionText } from "../llm/proxyClient"
-import { loadPrompt } from "../llm/promptLoader"
+import { runAgenticLoop } from "../llm/agenticLoop"
+import { resolvePrompt } from "../llm/promptLoader"
 import { getClue } from "../tools/internal/getClue"
 import { getPartyProfile } from "../tools/internal/getPartyProfile"
 import { getPriorTurns } from "../tools/internal/getForumData"
@@ -28,8 +29,6 @@ export interface DeltaTurn {
   word_count: number
 }
 
-const DELTA_SYSTEM = loadPrompt("delta-representative/system")
-
 export async function runDeltaRepresentativeAgent(
   topicId: string,
   runId: string,
@@ -39,6 +38,10 @@ export async function runDeltaRepresentativeAgent(
   model: string,
   onProgress?: (msg: string) => void,
 ): Promise<DeltaTurn> {
+  const deltaConfig = await resolvePrompt("delta-representative/system")
+  const effectiveModel = deltaConfig.model ?? model
+  const DELTA_SYSTEM = deltaConfig.content
+
   onProgress?.(`Delta rep ${partyId}: assessing new evidence`)
 
   const ctx = await buildAgentContext("delta", topicId)
@@ -86,15 +89,30 @@ Produce your position update as JSON.`
 
   let deltaTurn: Omit<DeltaTurn, "id" | "representative_id" | "party_name" | "type" | "timestamp" | "word_count"> | null = null
   for (let attempt = 0; attempt < 3; attempt++) {
-    const raw = await chatCompletionText({
-      model,
-      messages: [
-        { role: "system", content: DELTA_SYSTEM },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.4,
-      max_tokens: 800,
-    })
+    let raw: string
+    if (deltaConfig.tools.length > 0) {
+      raw = await runAgenticLoop({
+        model: effectiveModel,
+        messages: [
+          { role: "system", content: DELTA_SYSTEM },
+          { role: "user", content: userPrompt },
+        ],
+        tools: deltaConfig.tools,
+        topicId,
+        temperature: 0.4,
+        max_tokens: 800,
+      })
+    } else {
+      raw = await chatCompletionText({
+        model: effectiveModel,
+        messages: [
+          { role: "system", content: DELTA_SYSTEM },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.4,
+        max_tokens: 800,
+      })
+    }
     try {
       const match = raw.match(/\{[\s\S]+\}/)
       if (!match) throw new Error("No JSON found")

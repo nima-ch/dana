@@ -1,6 +1,8 @@
 import { chatCompletionText } from "../llm/proxyClient"
 import { budgetOutput } from "../llm/tokenBudget"
-import { loadPrompt } from "../llm/promptLoader"
+import { resolvePrompt } from "../llm/promptLoader"
+import { runAgenticLoop } from "../llm/agenticLoop"
+
 import { webSearch } from "../tools/external/webSearch"
 import { httpFetch } from "../tools/external/httpFetch"
 import { log } from "../utils/logger"
@@ -135,29 +137,43 @@ export async function smartExtractClues(
   const chunks = chunkText(enrichedContent, 14000)
   log.enrichment(`Smart extract: processing ${chunks.length} chunk(s)`)
 
+  const extractConfig = await resolvePrompt("clue-extractor/extract", { party_list: partyList })
+  const effectiveModel = extractConfig.model ?? model
+
   const allClues: ExtractedClue[] = []
 
   for (let i = 0; i < chunks.length; i++) {
     onProgress?.(`Extracting clues from chunk ${i + 1}/${chunks.length}...`)
 
-    const raw = await chatCompletionText({
-      model,
-      messages: [
-        {
-          role: "system",
-          content: loadPrompt("clue-extractor/extract", { party_list: partyList }),
-        },
-        {
-          role: "user",
-          content: `TOPIC: ${topicContext}
+    const userContent = `TOPIC: ${topicContext}
 
 INTELLIGENCE BRIEF (chunk ${i + 1}/${chunks.length}):
-${chunks[i]}`,
-        },
-      ],
-      temperature: 0.2,
-      max_tokens: budgetOutput(model, topicContext + chunks[i], { min: 4000, max: 10000 }),
-    })
+${chunks[i]}`
+
+    let raw: string
+    if (extractConfig.tools.length > 0) {
+      raw = await runAgenticLoop({
+        model: effectiveModel,
+        topicId,
+        tools: extractConfig.tools,
+        temperature: 0.2,
+        max_tokens: budgetOutput(effectiveModel, topicContext + chunks[i], { min: 4000, max: 10000 }),
+        messages: [
+          { role: "system", content: extractConfig.content },
+          { role: "user", content: userContent },
+        ],
+      })
+    } else {
+      raw = await chatCompletionText({
+        model: effectiveModel,
+        messages: [
+          { role: "system", content: extractConfig.content },
+          { role: "user", content: userContent },
+        ],
+        temperature: 0.2,
+        max_tokens: budgetOutput(effectiveModel, topicContext + chunks[i], { min: 4000, max: 10000 }),
+      })
+    }
 
     try {
       const match = raw.match(/\[[\s\S]+/)
@@ -238,22 +254,21 @@ export async function smartEditClue(
   clue_type: string
   domain_tags: string[]
 }> {
-  log.enrichment(`Smart clue edit: researching feedback for "${currentClue.title}"`)
+  log.enrichment(`Smart clue edit: "${currentClue.title}" — "${feedback.slice(0, 80)}"`)
   emitThink(topicId, "📝", "Smart edit started", `Editing "${currentClue.title}" — ${feedback.slice(0, 80)}`)
 
-  // Research based on feedback
-  const research = await gatherResearch([
-    `${currentClue.title} ${feedback.slice(0, 60)}`,
-    `${topicTitle} ${feedback.slice(0, 80)}`,
-  ], topicId)
+  const editConfig = await resolvePrompt("clue-extractor/edit")
 
-  emitThink(topicId, "🤖", "Applying edits", `Sending to ${model} with research context`)
-  const raw = await chatCompletionText({
-    model,
+  const raw = await runAgenticLoop({
+    model: editConfig.model ?? model,
+    topicId,
+    tools: editConfig.tools,
+    temperature: 0.2,
+    max_tokens: budgetOutput(editConfig.model ?? model, topicTitle + JSON.stringify(currentClue) + feedback, { min: 1000, max: 3000 }),
     messages: [
       {
         role: "system",
-        content: loadPrompt("clue-extractor/edit"),
+        content: editConfig.content,
       },
       {
         role: "user",
@@ -265,14 +280,9 @@ ${JSON.stringify(currentClue, null, 2)}
 USER FEEDBACK:
 ${feedback}
 
-RESEARCH:
-${research}
-
-Update the clue. Output ONLY valid JSON.`,
+Research the feedback using the available tools, then output the updated clue as valid JSON (no markdown fences).`,
       },
     ],
-    temperature: 0.2,
-    max_tokens: budgetOutput(model, topicTitle + JSON.stringify(currentClue) + feedback + research, { min: 1000, max: 3000 }),
   })
 
   const match = raw.match(/\{[\s\S]+\}/)
@@ -297,25 +307,39 @@ export async function researchAndExtractClues(
 
   log.enrichment(`Research: generating search queries for "${query.slice(0, 80)}"`)
 
-  // Step 1: LLM generates targeted search queries from the user's research direction
-  const queriesRaw = await chatCompletionText({
-    model,
-    messages: [
-      {
-        role: "system",
-        content: loadPrompt("clue-extractor/queries"),
-      },
-      {
-        role: "user",
-        content: `TOPIC: ${topicTitle}
+  const queriesConfig = await resolvePrompt("clue-extractor/queries")
+  const queriesModel = queriesConfig.model ?? model
+
+  const queriesUserContent = `TOPIC: ${topicTitle}
 RESEARCH DIRECTION: ${query}
 
-Generate 3-5 specific, fact-finding search queries that would uncover concrete evidence, events, statements, or data related to this research direction. Focus on recent news and verifiable facts.`,
-      },
-    ],
-    temperature: 0.3,
-    max_tokens: 500,
-  })
+Generate 3-5 specific, fact-finding search queries that would uncover concrete evidence, events, statements, or data related to this research direction. Focus on recent news and verifiable facts.`
+
+  // Step 1: LLM generates targeted search queries from the user's research direction
+  let queriesRaw: string
+  if (queriesConfig.tools.length > 0) {
+    queriesRaw = await runAgenticLoop({
+      model: queriesModel,
+      topicId,
+      tools: queriesConfig.tools,
+      temperature: 0.3,
+      max_tokens: 500,
+      messages: [
+        { role: "system", content: queriesConfig.content },
+        { role: "user", content: queriesUserContent },
+      ],
+    })
+  } else {
+    queriesRaw = await chatCompletionText({
+      model: queriesModel,
+      messages: [
+        { role: "system", content: queriesConfig.content },
+        { role: "user", content: queriesUserContent },
+      ],
+      temperature: 0.3,
+      max_tokens: 500,
+    })
+  }
 
   let searchQueries: string[] = []
   try {
@@ -358,28 +382,42 @@ Generate 3-5 specific, fact-finding search queries that would uncover concrete e
   // Step 3: Extract clues from research findings
   const combinedResearch = fetchedContent.join("\n\n---\n\n").slice(0, 12000)
 
-  const raw = await chatCompletionText({
-    model,
-    messages: [
-      {
-        role: "system",
-        content: loadPrompt("clue-extractor/research", { party_list: partyList }),
-      },
-      {
-        role: "user",
-        content: `TOPIC: ${topicTitle}: ${topicDescription}
+  const researchConfig = await resolvePrompt("clue-extractor/research", { party_list: partyList })
+  const researchModel = researchConfig.model ?? model
+
+  const researchUserContent = `TOPIC: ${topicTitle}: ${topicDescription}
 
 RESEARCH QUESTION: ${query}
 
 GATHERED SOURCES:
 ${combinedResearch}
 
-Extract all relevant factual claims as structured clues.`,
-      },
-    ],
-    temperature: 0.2,
-    max_tokens: budgetOutput(model, partyList + combinedResearch + query, { min: 4000, max: 10000 }),
-  })
+Extract all relevant factual claims as structured clues.`
+
+  let raw: string
+  if (researchConfig.tools.length > 0) {
+    raw = await runAgenticLoop({
+      model: researchModel,
+      topicId,
+      tools: researchConfig.tools,
+      temperature: 0.2,
+      max_tokens: budgetOutput(researchModel, partyList + combinedResearch + query, { min: 4000, max: 10000 }),
+      messages: [
+        { role: "system", content: researchConfig.content },
+        { role: "user", content: researchUserContent },
+      ],
+    })
+  } else {
+    raw = await chatCompletionText({
+      model: researchModel,
+      messages: [
+        { role: "system", content: researchConfig.content },
+        { role: "user", content: researchUserContent },
+      ],
+      temperature: 0.2,
+      max_tokens: budgetOutput(researchModel, partyList + combinedResearch + query, { min: 4000, max: 10000 }),
+    })
+  }
 
   try {
     const match = raw.match(/\[[\s\S]+\]/)
@@ -438,26 +476,40 @@ export async function categorizeAndCleanup(
     ).join("\n")
   }
 
-  const raw = await chatCompletionText({
-    model,
-    messages: [
-      {
-        role: "system",
-        content: loadPrompt("clue-extractor/categorize", { party_list: partyList }),
-      },
-      {
-        role: "user",
-        content: `TOPIC: ${topicTitle}
+  const categorizeConfig = await resolvePrompt("clue-extractor/categorize", { party_list: partyList })
+  const effectiveModel = categorizeConfig.model ?? model
+
+  const userContent = `TOPIC: ${topicTitle}
 
 CLUES TO ORGANIZE (${clues.length} total):
 ${clueInput}
 
-Categorize and group these clues. Every clue ID must appear in exactly one group.`,
-      },
-    ],
-    temperature: 0.2,
-    max_tokens: budgetOutput(model, clueInput + partyList, { min: 8000, max: 16000 }),
-  })
+Categorize and group these clues. Every clue ID must appear in exactly one group.`
+
+  let raw: string
+  if (categorizeConfig.tools.length > 0) {
+    raw = await runAgenticLoop({
+      model: effectiveModel,
+      topicId,
+      tools: categorizeConfig.tools,
+      temperature: 0.2,
+      max_tokens: budgetOutput(effectiveModel, clueInput + partyList, { min: 8000, max: 16000 }),
+      messages: [
+        { role: "system", content: categorizeConfig.content },
+        { role: "user", content: userContent },
+      ],
+    })
+  } else {
+    raw = await chatCompletionText({
+      model: effectiveModel,
+      messages: [
+        { role: "system", content: categorizeConfig.content },
+        { role: "user", content: userContent },
+      ],
+      temperature: 0.2,
+      max_tokens: budgetOutput(effectiveModel, clueInput + partyList, { min: 8000, max: 16000 }),
+    })
+  }
 
   try {
     const match = raw.match(/\[[\s\S]+/)

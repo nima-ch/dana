@@ -1,6 +1,7 @@
 import { chatCompletionText } from "../llm/proxyClient"
+import { runAgenticLoop } from "../llm/agenticLoop"
 import { budgetOutput } from "../llm/tokenBudget"
-import { loadPrompt } from "../llm/promptLoader"
+import { resolvePrompt } from "../llm/promptLoader"
 import { getScenarioList } from "../tools/internal/getForumData"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { buildAgentContext, serializeContext } from "./contextBuilder"
@@ -16,14 +17,16 @@ export interface DevilsAdvocateOutput {
   verdict: "robust" | "fragile" | "uncertain"
 }
 
-const SYSTEM = loadPrompt("devils-advocate/system")
-
 export async function runDevilsAdvocate(
   topicId: string,
   runId: string,
   sessionId: string,
   model: string
 ): Promise<DevilsAdvocateOutput> {
+  const systemConfig = await resolvePrompt("devils-advocate/system")
+  const effectiveModel = systemConfig.model ?? model
+  const SYSTEM = systemConfig.content
+
   const scenarios = await getScenarioList(topicId, sessionId)
   if (!scenarios.length) throw new Error("No scenarios to stress-test")
 
@@ -41,17 +44,33 @@ Clues cited: ${target.clues_cited.join(", ")}
 
 Stress-test this scenario. Produce ≥3 genuine falsification arguments.`
 
-  const daOutputBudget = budgetOutput(model, SYSTEM + prompt, { min: 2000, max: 6000 })
+  const daOutputBudget = budgetOutput(effectiveModel, SYSTEM + prompt, { min: 2000, max: 6000 })
   for (let attempt = 0; attempt < 3; attempt++) {
-    const raw = await chatCompletionText({
-      model,
-      messages: [
-        { role: "system", content: SYSTEM },
-        { role: "user", content: attempt === 0 ? prompt : `${prompt}\n\nOutput ONLY valid JSON. Min 3 arguments.` },
-      ],
-      temperature: 0.4,
-      max_tokens: daOutputBudget,
-    })
+    const userContent = attempt === 0 ? prompt : `${prompt}\n\nOutput ONLY valid JSON. Min 3 arguments.`
+    let raw: string
+    if (systemConfig.tools.length > 0) {
+      raw = await runAgenticLoop({
+        model: effectiveModel,
+        messages: [
+          { role: "system", content: SYSTEM },
+          { role: "user", content: userContent },
+        ],
+        tools: systemConfig.tools,
+        topicId,
+        temperature: 0.4,
+        max_tokens: daOutputBudget,
+      })
+    } else {
+      raw = await chatCompletionText({
+        model: effectiveModel,
+        messages: [
+          { role: "system", content: SYSTEM },
+          { role: "user", content: userContent },
+        ],
+        temperature: 0.4,
+        max_tokens: daOutputBudget,
+      })
+    }
 
     try {
       const match = raw.match(/\{[\s\S]+\}/)

@@ -1,9 +1,16 @@
 import { Elysia, t } from "elysia"
 import { readdirSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "fs"
 import { join, relative, resolve } from "path"
+import { getAllPromptConfigs, setPromptConfig, getTaskProfile } from "../db/queries/promptConfigs"
+import { clearPromptCache } from "../llm/promptLoader"
 
 const PROMPTS_DIR = resolve(import.meta.dir, "../../prompts")
 const BACKUP_DIR = join(process.env.DATA_DIR || "/home/nima/dana/data", ".prompt-backups")
+
+const TOOL_CATALOG = [
+  { name: "web_search", description: "Search the web for current information using targeted queries", category: "research" },
+  { name: "fetch_url", description: "Fetch and read the full text content of a web page", category: "research" },
+]
 
 function ensureBackupDir(): void {
   mkdirSync(BACKUP_DIR, { recursive: true })
@@ -48,25 +55,35 @@ function promptPathForName(name: string): string {
   return full
 }
 
-function readPrompt(path: string) {
+function readPrompt(path: string, configs: Record<string, { model: string | null; tools: string[] }>) {
   const content = readFileSync(path, 'utf8').trim()
+  const name = promptNameFromPath(path)
+  const config = configs[name] ?? { model: null, tools: [] }
   return {
-    name: promptNameFromPath(path),
+    name,
     path: relative(PROMPTS_DIR, path).replace(/\\/g, '/'),
     content,
     agent: agentFromPath(path),
     variables: variablesFromContent(content),
     stage: stageFromPath(path),
+    model: config.model,
+    tools: config.tools,
+    task_profile: getTaskProfile(name),
   }
 }
 
 export const promptsRouter = new Elysia({ prefix: '/api/prompts' })
-  .get('/', () => walk(PROMPTS_DIR).map(readPrompt))
+  .get('/tool-catalog', () => TOOL_CATALOG)
+  .get('/', () => {
+    const configs = getAllPromptConfigs()
+    return walk(PROMPTS_DIR).map(p => readPrompt(p, configs))
+  })
   .get('/:name', ({ params, error }) => {
     try {
       const path = promptPathForName(params.name)
       if (!existsSync(path)) return error(404, { error: 'Prompt not found' })
-      return readPrompt(path)
+      const configs = getAllPromptConfigs()
+      return readPrompt(path, configs)
     } catch (e) {
       return error(400, { error: String(e) })
     }
@@ -79,11 +96,32 @@ export const promptsRouter = new Elysia({ prefix: '/api/prompts' })
       const backupPath = join(BACKUP_DIR, `${params.name.replace(/\//g, '__')}.md`)
       if (!existsSync(backupPath)) writeFileSync(backupPath, readFileSync(path, 'utf8'))
       writeFileSync(path, body.content)
-      return readPrompt(path)
+      clearPromptCache()
+      const configs = getAllPromptConfigs()
+      return readPrompt(path, configs)
     } catch (e) {
       return error(400, { error: String(e) })
     }
   }, { body: t.Object({ content: t.String() }) })
+  .put('/:name/config', async ({ params, body, error }) => {
+    try {
+      const path = promptPathForName(params.name)
+      if (!existsSync(path)) return error(404, { error: 'Prompt not found' })
+      const config = setPromptConfig(params.name, {
+        model: body.model,
+        tools: body.tools,
+      })
+      clearPromptCache()
+      return { name: params.name, ...config }
+    } catch (e) {
+      return error(400, { error: String(e) })
+    }
+  }, {
+    body: t.Object({
+      model: t.Optional(t.Union([t.String(), t.Null()])),
+      tools: t.Optional(t.Array(t.String())),
+    })
+  })
   .post('/:name/reset', async ({ params, error }) => {
     try {
       const path = promptPathForName(params.name)
@@ -91,7 +129,9 @@ export const promptsRouter = new Elysia({ prefix: '/api/prompts' })
       const backupPath = join(BACKUP_DIR, `${params.name.replace(/\//g, '__')}.md`)
       if (!existsSync(backupPath)) return error(404, { error: 'Backup not found' })
       writeFileSync(path, readFileSync(backupPath, 'utf8'))
-      return readPrompt(path)
+      clearPromptCache()
+      const configs = getAllPromptConfigs()
+      return readPrompt(path, configs)
     } catch (e) {
       return error(400, { error: String(e) })
     }
