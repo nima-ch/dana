@@ -54,32 +54,32 @@ export interface AnalysisControls {
 
 export const DEFAULT_CONTROLS: AnalysisControls = {
   // Discovery
-  discovery_research_iterations: 20,
+  discovery_research_iterations: 5,
   discovery_context_warning: 120000,
-  scoring_iterations: 12,
+  scoring_iterations: 3,
   scoring_context_warning: 100000,
   scoring_batch_size: 2,
   // Enrichment
-  enrichment_iterations: 15,
+  enrichment_iterations: 8,
   enrichment_context_warning: 100000,
   enrichment_batch_size: 2,
-  smart_extract_url_limit: 15,
+  smart_extract_url_limit: 10,
   research_search_queries: 4,
   // Smart Edit
   smart_edit_queries: 3,
-  smart_edit_max_chars: 12000,
+  smart_edit_max_chars: 15000,
   // Forum
-  forum_max_turns: 50,
-  forum_supervisor_check: 5,
-  forum_compress_interval: 10,
+  forum_max_turns: 60,
+  forum_supervisor_check: 20,
+  forum_compress_interval: 100,
   forum_speaking_budget: 600,
   forum_min_speaking_floor: 150,
   forum_persona_batch: 4,
   // Agentic Loop defaults
-  default_max_iterations: 10,
+  default_max_iterations: 5,
   default_context_warning: 150000,
-  max_fetch_chars: 3000,
-  corpus_cache_hours: 2,
+  max_fetch_chars: 10000,
+  corpus_cache_hours: 24,
 }
 
 export interface AppSettings {

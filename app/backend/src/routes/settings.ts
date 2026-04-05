@@ -8,32 +8,32 @@ export async function getDefaultModels(): Promise<Record<string, string>> {
 
 const CONTROL_RANGES: Record<keyof AnalysisControls, [number, number]> = {
   // Discovery
-  discovery_research_iterations: [5, 30],
+  discovery_research_iterations: [2, 30],
   discovery_context_warning: [50000, 200000],
-  scoring_iterations: [5, 20],
+  scoring_iterations: [2, 20],
   scoring_context_warning: [50000, 200000],
-  scoring_batch_size: [1, 4],
+  scoring_batch_size: [1, 8],
   // Enrichment
-  enrichment_iterations: [5, 25],
+  enrichment_iterations: [2, 25],
   enrichment_context_warning: [50000, 200000],
-  enrichment_batch_size: [1, 4],
-  smart_extract_url_limit: [5, 30],
-  research_search_queries: [2, 8],
+  enrichment_batch_size: [1, 8],
+  smart_extract_url_limit: [3, 30],
+  research_search_queries: [2, 20],
   // Smart Edit
   smart_edit_queries: [1, 6],
-  smart_edit_max_chars: [4000, 24000],
+  smart_edit_max_chars: [5000, 50000],
   // Forum
-  forum_max_turns: [10, 100],
-  forum_supervisor_check: [3, 10],
-  forum_compress_interval: [5, 20],
+  forum_max_turns: [20, 200],
+  forum_supervisor_check: [10, 50],
+  forum_compress_interval: [20, 200],
   forum_speaking_budget: [200, 1200],
   forum_min_speaking_floor: [50, 400],
-  forum_persona_batch: [1, 8],
+  forum_persona_batch: [1, 12],
   // Agentic Loop
   default_max_iterations: [5, 20],
   default_context_warning: [50000, 300000],
-  max_fetch_chars: [1000, 8000],
-  corpus_cache_hours: [1, 24],
+  max_fetch_chars: [10000, 80000],
+  corpus_cache_hours: [24, 72],
 }
 
 function clampControls(input: Partial<AnalysisControls>): Partial<AnalysisControls> {
