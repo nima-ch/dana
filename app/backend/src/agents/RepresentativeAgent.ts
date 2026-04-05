@@ -18,11 +18,11 @@ export interface RepTurnInput {
   turnNumber: number
   myTurnCount: number
   speakingWeight: number
-  consecutivePasses: number
   recentTurns: ForumTurn[]
   compressedHistory: string
   liveScenarios: ForumScenario[]
   topic: string
+  moderatorDirective?: string
 }
 
 export interface RepTurnOutput {
@@ -40,7 +40,7 @@ function formatScratchpad(content: ScratchpadContent): string {
       const rel = c.r ?? c.relevance_to_us
       return rel !== "N" && rel !== "neutral"
     })
-    .slice(0, 20)
+    .slice(0, 12)
     .map(c => {
       const rel = c.r ?? (c.relevance_to_us === "supports" ? "S" : c.relevance_to_us === "weakens" ? "W" : "N")
       const use = c.use || c.how_we_use_it || ""
@@ -74,8 +74,9 @@ function formatScenarios(scenarios: ForumScenario[]): string {
 export async function runRepresentativeTurn(input: RepTurnInput): Promise<RepTurnOutput> {
   const {
     topicId, runId, sessionId, partyId, personaTitle, model,
-    turnNumber, myTurnCount, speakingWeight, consecutivePasses,
+    turnNumber, myTurnCount, speakingWeight,
     recentTurns, compressedHistory, liveScenarios, topic,
+    moderatorDirective,
   } = input
 
   const party = await getPartyProfile(topicId, partyId)
@@ -95,8 +96,9 @@ export async function runRepresentativeTurn(input: RepTurnInput): Promise<RepTur
   const recentStr = formatRecentTurns(recentTurns)
   const scenariosStr = formatScenarios(liveScenarios)
 
-  // Force speak if passed twice in a row
-  const forceSpeak = consecutivePasses >= 2
+  const directiveBlock = moderatorDirective
+    ? `\nMODERATOR NOTE: ${moderatorDirective}\n`
+    : ""
 
   const turnConfig = await resolvePrompt("forum/representative-turn", {
     persona_title: personaTitle,
@@ -109,12 +111,11 @@ export async function runRepresentativeTurn(input: RepTurnInput): Promise<RepTur
     my_turn_count: String(myTurnCount),
     turn_number: String(turnNumber),
     speaking_weight: String(speakingWeight),
+    moderator_directive: directiveBlock,
   })
   const effectiveModel = turnConfig.model ?? model
 
-  const userContent = forceSpeak
-    ? `Turn ${turnNumber}: You MUST speak this turn (you have passed the last ${consecutivePasses} turns). Make your contribution now.`
-    : `Turn ${turnNumber}: It is your moment. Speak or pass.`
+  const userContent = `Turn ${turnNumber}: It is your moment. Speak or pass.`
 
   const budget = budgetOutput(effectiveModel, turnConfig.content + userContent, { min: 300, max: 800 })
 
@@ -160,7 +161,7 @@ export async function runRepresentativeTurn(input: RepTurnInput): Promise<RepTur
     const match = cleaned.match(/\{[\s\S]+\}/)
     if (match) {
       const parsed = JSON.parse(match[0])
-      action = parsed.action === "pass" && !forceSpeak ? "pass" : "speak"
+      action = parsed.action === "pass" ? "pass" : "speak"
       statement = parsed.statement || ""
       cluesCited = parsed.clues_cited || []
       scenarioSignal = parsed.scenario_signal || undefined

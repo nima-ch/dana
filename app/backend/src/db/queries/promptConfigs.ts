@@ -44,13 +44,13 @@ export const BUILTIN_DEFAULTS: Record<string, PromptDefault> = {
   // Deep reasoning — forum debate, scoring, advocacy
   "forum/scratchpad":            { tools: [], task_profile: "deep_reasoning" },
   "forum/representative-turn":   { tools: [], task_profile: "deep_reasoning" },
-  "forum/representative-pass":   { tools: [], task_profile: "deep_reasoning" },
+
   "forum/supervisor-scenarios":  { tools: [], task_profile: "deep_reasoning" },
-  "forum/supervisor-completion": { tools: [], task_profile: "deep_reasoning" },
+  "forum/supervisor-moderate":   { tools: [], task_profile: "deep_reasoning" },
   "forum/scenario-synthesis":    { tools: [], task_profile: "deep_reasoning" },
   "forum/delta-scenario-impact": { tools: [], task_profile: "deep_reasoning" },
   "scoring/score-scenarios":     { tools: [], task_profile: "deep_reasoning" },
-  "devils-advocate/system":      { tools: [], task_profile: "deep_reasoning" },
+
   "representative/base":         { tools: [], task_profile: "deep_reasoning" },
   "delta-representative/system": { tools: [], task_profile: "deep_reasoning" },
 }

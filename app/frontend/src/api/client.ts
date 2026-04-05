@@ -56,6 +56,18 @@ export const api = {
       request<{ run_id: string; started_at: string; status: string }>(
         `/topics/${topicId}/pipeline/analyze`, { method: "POST" }
       ),
+    forumPrep: (topicId: string) =>
+      request<{ run_id: string; started_at: string; status: string }>(
+        `/topics/${topicId}/pipeline/forum-prep`, { method: "POST" }
+      ),
+    forum: (topicId: string) =>
+      request<{ run_id: string; started_at: string; status: string }>(
+        `/topics/${topicId}/pipeline/forum`, { method: "POST" }
+      ),
+    score: (topicId: string) =>
+      request<{ run_id: string; started_at: string; status: string }>(
+        `/topics/${topicId}/pipeline/score`, { method: "POST" }
+      ),
     run: (topicId: string) =>
       request<{ run_id: string; started_at: string; status: string }>(
         `/topics/${topicId}/pipeline/run`, { method: "POST" }

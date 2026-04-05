@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test"
 import { runRepresentativeAgent } from "../src/agents/RepresentativeAgent"
-import { runDevilsAdvocate } from "../src/agents/DevilsAdvocate"
 import { writeForumSession } from "../src/tools/internal/getForumData"
 import type { ForumSession } from "../src/tools/internal/getForumData"
 import { mkdir, rm } from "fs/promises"
@@ -97,36 +96,4 @@ describe("RepresentativeAgent", () => {
   }, 30_000)
 })
 
-describe("DevilsAdvocate", () => {
-  it("produces ≥3 falsification arguments against the leading scenario", async () => {
-    // Write a mock session with a scenario
-    const sessionWithScenario: ForumSession = {
-      ...MOCK_SESSION,
-      status: "complete",
-      scenarios: [{
-        id: "scenario-a", title: "Controlled transition via elite split",
-        description: "The IRGC fractures along officer corps lines leading to negotiated transition.",
-        proposed_by: "rep-opposition", supported_by: ["rep-usa"], contested_by: ["rep-irgc"],
-        clues_cited: ["clue-001", "clue-002"], benefiting_parties: ["opposition"],
-        required_conditions: ["IRGC fracture", "External guarantees"],
-        falsification_conditions: ["IRGC crackdown succeeds"],
-      }],
-    }
-    await writeForumSession(TOPIC_ID, sessionWithScenario)
 
-    const output = await runDevilsAdvocate(TOPIC_ID, RUN_ID, SESSION_ID, "claude-haiku-4-5-20251001")
-
-    expect(typeof output.target_scenario_id).toBe("string")
-    expect(output.target_scenario_id.length).toBeGreaterThan(0)
-    expect(output.falsification_arguments.length).toBeGreaterThanOrEqual(3)
-    expect(["robust", "fragile", "uncertain"]).toContain(output.verdict)
-
-    for (const arg of output.falsification_arguments) {
-      expect(typeof arg.argument).toBe("string")
-      expect(arg.argument.length).toBeGreaterThan(0)
-      expect(typeof arg.falsification_condition).toBe("string")
-    }
-
-    console.log(`DevilsAdvocate: ${output.falsification_arguments.length} arguments, verdict: ${output.verdict}`)
-  }, 30_000)
-})

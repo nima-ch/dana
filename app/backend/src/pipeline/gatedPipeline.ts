@@ -91,6 +91,118 @@ export async function runEnrichStage(topicId: string): Promise<{ status: string 
   }
 }
 
+// Stage 3 only: Forum Prep → review_forum_prep
+export async function runForumPrepStage(topicId: string): Promise<{ status: string }> {
+  const topic = await loadTopic(topicId)
+  const runId = `initial-v${topic.current_version + 1}`
+
+  log.separator()
+  log.pipeline(`Starting FORUM PREP for "${topic.title}"`, `run=${runId}`)
+  log.separator()
+
+  try {
+    await updateTopicStatus(topicId, "forum_prep")
+    emit(topicId, { type: "progress", stage: "forum_prep", pct: 0, msg: "Generating forum representatives..." })
+
+    await runForumPrep(
+      topicId, topic.title, topic.models.enrichment, runId,
+      (msg) => emit(topicId, { type: "progress", stage: "forum_prep", pct: 0.5, msg })
+    )
+
+    try {
+      const parties = dbGetParties(topicId)
+      emit(topicId, { type: "weight_result", parties: parties.map(p => ({ name: p.name, weight: p.weight })) })
+    } catch { /* non-fatal */ }
+
+    await writeCheckpoint(topicId, runId, { stage: "forum", step: 0 })
+    await updateTopicStatus(topicId, "review_forum_prep")
+
+    log.weight("Forum Prep complete — awaiting user review of representatives")
+    emit(topicId, { type: "stage_complete", stage: "forum_prep" })
+
+    return { status: "review_forum_prep" }
+  } catch (e) {
+    log.error("FORUM_PREP", "Forum Prep failed", e)
+    await updateTopicStatus(topicId, "review_enrichment")
+    emit(topicId, { type: "error", message: String(e) })
+    return { status: `error: ${e}` }
+  }
+}
+
+// Stage 4 only: Forum → review_forum
+export async function runForumStage(topicId: string): Promise<{ status: string }> {
+  const topic = await loadTopic(topicId)
+  const runId = `initial-v${topic.current_version + 1}`
+  const sessionId = `forum-session-v${topic.current_version + 1}`
+
+  log.separator()
+  log.pipeline(`Starting FORUM for "${topic.title}"`, `run=${runId}`)
+  log.separator()
+
+  try {
+    await updateTopicStatus(topicId, "forum")
+    emit(topicId, { type: "progress", stage: "forum", pct: 0, msg: "Starting forum..." })
+
+    await runForumOrchestrator(
+      topicId, runId, sessionId, topic.models.forum_reasoning, null,
+      (msg) => emit(topicId, { type: "progress", stage: "forum", pct: 0.5, msg })
+    )
+
+    await writeCheckpoint(topicId, runId, { stage: "expert_council", step: 0 })
+    await updateTopicStatus(topicId, "review_forum")
+
+    log.forum("Forum complete — awaiting user review")
+    emit(topicId, { type: "stage_complete", stage: "forum" })
+
+    return { status: "review_forum" }
+  } catch (e) {
+    log.error("FORUM", "Forum failed", e)
+    await updateTopicStatus(topicId, "review_forum_prep")
+    emit(topicId, { type: "error", message: String(e) })
+    return { status: `error: ${e}` }
+  }
+}
+
+// Stage 5 only: Scoring → complete
+export async function runScoringStage(topicId: string): Promise<{ status: string }> {
+  const topic = await loadTopic(topicId)
+  const runId = `initial-v${topic.current_version + 1}`
+  const sessionId = `forum-session-v${topic.current_version + 1}`
+
+  log.separator()
+  log.pipeline(`Starting SCORING for "${topic.title}"`, `run=${runId}`)
+  log.separator()
+
+  try {
+    await updateTopicStatus(topicId, "expert_council")
+    emit(topicId, { type: "progress", stage: "expert_council", pct: 0, msg: "Scoring scenarios..." })
+
+    const councilOutput = await runScenarioScorer(
+      topicId, runId, sessionId, topic.models.expert_council,
+      (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: 0.5, msg })
+    )
+
+    await createVersion(topicId, {
+      label: "Initial analysis",
+      trigger: "initial_run",
+      forum_session_id: sessionId,
+      verdict_id: councilOutput.verdict_id,
+    })
+
+    await updateTopicStatus(topicId, "complete")
+    emit(topicId, { type: "stage_complete", stage: "verdict" })
+
+    log.expert("Scoring complete")
+
+    return { status: "complete" }
+  } catch (e) {
+    log.error("SCORING", "Scoring failed", e)
+    await updateTopicStatus(topicId, "review_forum")
+    emit(topicId, { type: "error", message: String(e) })
+    return { status: `error: ${e}` }
+  }
+}
+
 // Stages 3-6: Weight → Forum → Expert → Verdict (autonomous)
 export async function runAnalyzeStages(topicId: string): Promise<{ run_id: string; status: string }> {
   const topic = await loadTopic(topicId)

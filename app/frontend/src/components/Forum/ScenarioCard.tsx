@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { X } from "lucide-react"
 
 interface Scenario {
   id: string
@@ -12,59 +13,83 @@ interface Scenario {
   falsification_conditions: string[]
 }
 
-export function ScenarioCard({ scenario, onClueClick }: { scenario: Scenario; onClueClick?: (id: string) => void }) {
-  const [expanded, setExpanded] = useState(false)
-
+function ScenarioDetailPopup({ scenario, onClose, onClueClick }: { scenario: Scenario; onClose: () => void; onClueClick?: (id: string) => void }) {
   return (
-    <div className="border border-purple-100 bg-purple-50 rounded-lg p-3">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <h4 className="text-sm font-semibold text-purple-900">{scenario.title}</h4>
-          <p className="text-xs text-purple-700 mt-0.5">Proposed by {scenario.proposed_by}</p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/40" />
+      <div
+        className="relative w-full max-w-lg rounded-xl border border-purple-500/20 bg-card shadow-2xl overflow-hidden"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <h3 className="text-sm font-semibold text-foreground">{scenario.title}</h3>
+          <button className="text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted transition-colors" onClick={onClose}>
+            <X className="size-4" />
+          </button>
         </div>
-        <button
-          className="text-xs text-purple-500 hover:text-purple-700 shrink-0"
-          onClick={() => setExpanded(e => !e)}
-        >
-          {expanded ? "less" : "details"}
-        </button>
-      </div>
+        <div className="px-4 py-3 space-y-3 max-h-[60vh] overflow-y-auto">
+          <div className="flex items-center gap-3 text-[11px]">
+            <span className="text-muted-foreground">by {scenario.proposed_by.replace("rep-", "")}</span>
+            {scenario.supported_by.length > 0 && <span className="text-emerald-400">+{scenario.supported_by.length} support</span>}
+            {scenario.contested_by.length > 0 && <span className="text-red-400">{scenario.contested_by.length} contest</span>}
+          </div>
 
-      {scenario.clues_cited.length > 0 && (
-        <div className="mt-2 flex gap-1 flex-wrap">
-          {scenario.clues_cited.map(id => (
-            <button
-              key={id}
-              className="text-xs font-mono px-1.5 py-0.5 bg-white border border-purple-200 text-purple-700 rounded hover:bg-purple-100"
-              onClick={() => onClueClick?.(id)}
-            >
-              {id}
-            </button>
-          ))}
-        </div>
-      )}
+          {scenario.description && <p className="text-xs text-muted-foreground leading-relaxed">{scenario.description}</p>}
 
-      {expanded && (
-        <div className="mt-3 space-y-2">
-          {scenario.description && <p className="text-xs text-gray-700">{scenario.description}</p>}
+          {scenario.clues_cited.length > 0 && (
+            <div className="flex gap-1 flex-wrap">
+              {scenario.clues_cited.map(id => (
+                <button
+                  key={id}
+                  className="text-[10px] font-mono px-1.5 py-0.5 bg-primary/10 border border-primary/20 text-primary rounded hover:bg-primary/20 transition-colors"
+                  onClick={() => onClueClick?.(id)}
+                >
+                  {id}
+                </button>
+              ))}
+            </div>
+          )}
+
           {scenario.required_conditions.length > 0 && (
             <div>
-              <p className="text-xs font-medium text-gray-600">Required conditions:</p>
-              <ul className="text-xs text-gray-600 list-disc list-inside">
+              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Required conditions</p>
+              <ul className="text-xs text-muted-foreground list-disc list-inside space-y-0.5">
                 {scenario.required_conditions.map((c, i) => <li key={i}>{c}</li>)}
               </ul>
             </div>
           )}
+
           {scenario.falsification_conditions.length > 0 && (
             <div>
-              <p className="text-xs font-medium text-gray-600">Falsification conditions:</p>
-              <ul className="text-xs text-gray-600 list-disc list-inside">
+              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">Falsification conditions</p>
+              <ul className="text-xs text-muted-foreground list-disc list-inside space-y-0.5">
                 {scenario.falsification_conditions.map((c, i) => <li key={i}>{c}</li>)}
               </ul>
             </div>
           )}
         </div>
-      )}
+      </div>
     </div>
+  )
+}
+
+export function ScenarioCard({ scenario, onClueClick }: { scenario: Scenario; onClueClick?: (id: string) => void }) {
+  const [showDetail, setShowDetail] = useState(false)
+
+  return (
+    <>
+      <button
+        className="w-full text-left border border-purple-500/20 bg-purple-500/5 rounded-lg px-3 py-2 hover:bg-purple-500/10 transition-colors"
+        onClick={() => setShowDetail(true)}
+      >
+        <h4 className="text-xs font-semibold text-foreground truncate">{scenario.title}</h4>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-[10px] text-muted-foreground truncate">by {scenario.proposed_by.replace("rep-", "")}</span>
+          {scenario.supported_by.length > 0 && <span className="text-[10px] text-emerald-400">+{scenario.supported_by.length}</span>}
+          {scenario.contested_by.length > 0 && <span className="text-[10px] text-red-400">-{scenario.contested_by.length}</span>}
+        </div>
+      </button>
+      {showDetail && <ScenarioDetailPopup scenario={scenario} onClose={() => setShowDetail(false)} onClueClick={onClueClick} />}
+    </>
   )
 }

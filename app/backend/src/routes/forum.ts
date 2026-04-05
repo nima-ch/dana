@@ -1,7 +1,7 @@
 import { Elysia } from "elysia"
 import { getForumSession } from "../tools/internal/getForumData"
-import { getAllVersions } from "../pipeline/stateManager"
 import { dbGetRepresentatives } from "../db/queries/forum"
+import { getDb } from "../db/database"
 
 export const forumRouter = new Elysia({ prefix: "/api/topics/:id" })
   .get("/forum/:sessionId", async ({ params, error }) => {
@@ -12,11 +12,12 @@ export const forumRouter = new Elysia({ prefix: "/api/topics/:id" })
     }
   })
   .get("/forum", async ({ params }) => {
-    const states = await getAllVersions(params.id)
-    const latest = states.findLast(s => s.forum_session_id)
-    if (!latest?.forum_session_id) return null
+    const row = getDb().query<{ id: string }, [string]>(
+      "SELECT id FROM forum_sessions WHERE topic_id = ? ORDER BY started_at DESC LIMIT 1"
+    ).get(params.id)
+    if (!row) return null
     try {
-      return await getForumSession(params.id, latest.forum_session_id)
+      return await getForumSession(params.id, row.id)
     } catch {
       return null
     }

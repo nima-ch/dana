@@ -24,6 +24,8 @@ export interface ForumTurn {
   challenges?: ChallengeItem[]
   concessions?: string[]
   scenario_endorsement?: string
+  moderator_directive?: string
+  moderator_reason?: string
   clues_cited: string[]
   timestamp: string
   round: number
@@ -142,6 +144,7 @@ export function dbGetForumSession(topicId: string, sessionId: string): ForumSess
     id: string; round_id: number; topic_id: string; party_id: string; representative_id: string
     party_name: string; persona_title: string | null; position: string | null; evidence: string
     challenges: string; concessions: string; statement: string; scenario_endorsement: string | null
+    moderator_directive: string | null; moderator_reason: string | null
     clues_cited: string; word_count: number; round: number; type: string; created_at: string
   }
 
@@ -164,6 +167,8 @@ export function dbGetForumSession(topicId: string, sessionId: string): ForumSess
         challenges: JSON.parse(t.challenges),
         concessions: JSON.parse(t.concessions),
         scenario_endorsement: t.scenario_endorsement ?? undefined,
+        moderator_directive: t.moderator_directive ?? undefined,
+        moderator_reason: t.moderator_reason ?? undefined,
         clues_cited: JSON.parse(t.clues_cited),
         timestamp: t.created_at,
         round: t.round,
@@ -240,14 +245,15 @@ export function dbUpsertForumSession(topicId: string, session: ForumSession): vo
       // Upsert turns
       for (const t of r.turns) {
         db.run(
-          `INSERT INTO forum_turns (id, round_id, topic_id, party_id, representative_id, party_name, persona_title, position, evidence, challenges, concessions, statement, scenario_endorsement, clues_cited, word_count, round, type, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id, topic_id) DO UPDATE SET statement=excluded.statement, word_count=excluded.word_count`,
+          `INSERT INTO forum_turns (id, round_id, topic_id, party_id, representative_id, party_name, persona_title, position, evidence, challenges, concessions, statement, scenario_endorsement, moderator_directive, moderator_reason, clues_cited, word_count, round, type, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id, topic_id) DO UPDATE SET statement=excluded.statement, word_count=excluded.word_count, moderator_directive=excluded.moderator_directive, moderator_reason=excluded.moderator_reason`,
           [t.id, roundId, topicId, t.representative_id.replace("rep-", ""), t.representative_id,
            t.party_name, t.persona_title ?? null, t.position ?? null,
            JSON.stringify(t.evidence ?? []), JSON.stringify(t.challenges ?? []),
            JSON.stringify(t.concessions ?? []), t.statement,
-           t.scenario_endorsement ?? null, JSON.stringify(t.clues_cited),
+           t.scenario_endorsement ?? null, t.moderator_directive ?? null, t.moderator_reason ?? null,
+           JSON.stringify(t.clues_cited),
            t.word_count, t.round, t.type, t.timestamp]
         )
       }

@@ -16,6 +16,8 @@ interface Turn {
   challenges?: { target_party: string; challenge: string; clue_id?: string }[]
   concessions?: string[]
   scenario_endorsement?: string
+  moderator_directive?: string
+  moderator_reason?: string
   clues_cited: string[]
   timestamp: string
   round: number
@@ -45,21 +47,28 @@ interface ForumSession {
   scenarios: Scenario[]
 }
 
-const ROUND_LABELS: Record<number, string> = {
-  1: "Round 1: Opening Statements",
-  2: "Round 2: Rebuttals",
-  3: "Round 3: Closings & Scenarios",
+function ModeratorNote({ directive }: { directive: string }) {
+  return (
+    <div className="flex items-start gap-2.5 pl-1">
+      <div className="w-5 h-5 rounded-full shrink-0 flex items-center justify-center bg-amber-500/20 text-amber-400 text-[9px] font-bold mt-0.5">
+        M
+      </div>
+      <div className="flex-1 min-w-0">
+        <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wide">Moderator</span>
+        <p className="text-xs text-amber-200/80 italic leading-relaxed">{directive}</p>
+      </div>
+    </div>
+  )
 }
 
 export function ConversationView({ topicId, sessionId, isLive }: { topicId: string; sessionId: string; isLive?: boolean }) {
   const [session, setSession] = useState<ForumSession | null>(null)
   const [liveTurns, setLiveTurns] = useState<Turn[]>([])
-  const [scrubPos, setScrubPos] = useState<number>(100) // percentage 0-100
+  const [scrubPos, setScrubPos] = useState<number>(100)
   const [selectedClue, setSelectedClue] = useState<string | null>(null)
   const [filterRep, setFilterRep] = useState("")
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  // Load existing session
   useEffect(() => {
     fetch(`/api/topics/${topicId}/forum/${sessionId}`)
       .then(r => r.json())
@@ -67,33 +76,27 @@ export function ConversationView({ topicId, sessionId, isLive }: { topicId: stri
       .catch(() => {})
   }, [topicId, sessionId])
 
-  // SSE for live turns
   useSSE(isLive ? topicId : null, (event) => {
     if (event.type === "forum_turn") {
       setLiveTurns(prev => {
         const turn = event.turn as unknown as Turn
-        // Prevent duplicates
         if (prev.some(t => t.id === turn.id)) return prev
         return [...prev, turn]
       })
-      // Auto-scroll
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100)
     }
   })
 
-  // All turns: from loaded session + live additions
   const allTurns: Turn[] = [
     ...(session?.rounds.flatMap(r => r.turns) ?? []),
     ...liveTurns.filter(lt => !session?.rounds.some(r => r.turns.some(t => t.id === lt.id))),
   ]
 
-  // Apply scrub (replay mode for completed sessions)
   const isComplete = session?.status === "complete"
   const displayedTurns = isComplete
     ? allTurns.slice(0, Math.ceil(allTurns.length * scrubPos / 100))
     : allTurns
 
-  // Apply rep filter
   const filteredTurns = filterRep
     ? displayedTurns.filter(t => t.representative_id === filterRep)
     : displayedTurns
@@ -101,51 +104,37 @@ export function ConversationView({ topicId, sessionId, isLive }: { topicId: stri
   const allReps = [...new Set(allTurns.map(t => t.representative_id))]
   const scenarios = session?.scenarios ?? []
 
-  // Group displayed turns by round
-  const turnsByRound: Record<number, Turn[]> = {}
-  for (const turn of filteredTurns) {
-    if (!turnsByRound[turn.round]) turnsByRound[turn.round] = []
-    turnsByRound[turn.round].push(turn)
-  }
-
   return (
     <div className="flex flex-col h-full relative">
       {/* Filter bar */}
-      <div className="flex items-center gap-3 pb-3 border-b border-gray-100">
+      <div className="flex items-center gap-3 pb-3 border-b border-border">
         <select
-          className="text-xs border border-gray-200 rounded px-2 py-1"
+          className="text-xs border border-border rounded-md px-2 py-1.5 bg-muted text-foreground"
           value={filterRep}
           onChange={e => setFilterRep(e.target.value)}
         >
           <option value="">All representatives</option>
-          {allReps.map(r => <option key={r} value={r}>{r.replace("rep-", "")}</option>)}
+          {allReps.map(r => <option key={r} value={r}>{r.replace("rep-", "").replace(/_/g, " ")}</option>)}
         </select>
-        <span className="text-xs text-gray-400">{filteredTurns.length} turns</span>
+        <span className="text-xs text-muted-foreground tabular-nums">{filteredTurns.length} turns</span>
         {session?.type === "delta" && (
-          <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded">Delta session</span>
+          <span className="text-[10px] bg-orange-500/10 text-orange-400 px-2 py-0.5 rounded-full border border-orange-500/20">Delta session</span>
         )}
       </div>
 
-      {/* Conversation thread */}
-      <div className="flex-1 overflow-y-auto space-y-6 py-4">
-        {Object.entries(turnsByRound).map(([round, turns]) => (
-          <div key={round}>
-            <div className="flex items-center gap-3 mb-3">
-              <div className="flex-1 border-t border-gray-100" />
-              <span className="text-xs text-gray-400 font-medium">{ROUND_LABELS[Number(round)] ?? `Round ${round}`}</span>
-              <div className="flex-1 border-t border-gray-100" />
-            </div>
-            <div className="space-y-4">
-              {turns.map(turn => (
-                <TurnBubble
-                  key={turn.id}
-                  turn={turn}
-                  topicId={topicId}
-                  isDelta={session?.type === "delta"}
-                  onClueClick={setSelectedClue}
-                />
-              ))}
-            </div>
+      {/* Conversation thread — continuous, no round dividers */}
+      <div className="flex-1 overflow-y-auto space-y-3 py-4">
+        {filteredTurns.map(turn => (
+          <div key={turn.id} className="space-y-1.5">
+            {turn.moderator_directive && (
+              <ModeratorNote directive={turn.moderator_directive} />
+            )}
+            <TurnBubble
+              turn={turn}
+              topicId={topicId}
+              isDelta={session?.type === "delta"}
+              onClueClick={setSelectedClue}
+            />
           </div>
         ))}
 
@@ -153,11 +142,11 @@ export function ConversationView({ topicId, sessionId, isLive }: { topicId: stri
         {scenarios.length > 0 && scrubPos >= 100 && (
           <div>
             <div className="flex items-center gap-3 mb-3">
-              <div className="flex-1 border-t border-purple-100" />
-              <span className="text-xs text-purple-500 font-medium">Scenarios Emerging</span>
-              <div className="flex-1 border-t border-purple-100" />
+              <div className="flex-1 border-t border-purple-500/30" />
+              <span className="text-[10px] text-purple-400 font-medium uppercase tracking-wide">Scenarios ({scenarios.length})</span>
+              <div className="flex-1 border-t border-purple-500/30" />
             </div>
-            <div className="space-y-2">
+            <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
               {scenarios.map(s => (
                 <ScenarioCard key={s.id} scenario={s} onClueClick={setSelectedClue} />
               ))}
@@ -166,31 +155,30 @@ export function ConversationView({ topicId, sessionId, isLive }: { topicId: stri
         )}
 
         {isLive && liveTurns.length === 0 && !session && (
-          <div className="text-center text-gray-400 text-sm py-12">Waiting for forum to begin…</div>
+          <div className="text-center text-muted-foreground text-sm py-12">Waiting for forum to begin...</div>
         )}
 
         <div ref={bottomRef} />
       </div>
 
-      {/* Replay scrub bar (completed sessions only) */}
+      {/* Replay scrub bar */}
       {isComplete && allTurns.length > 0 && (
-        <div className="border-t border-gray-100 pt-3 flex items-center gap-3">
-          <span className="text-xs text-gray-400 shrink-0">Replay</span>
+        <div className="border-t border-border pt-3 flex items-center gap-3">
+          <span className="text-[10px] text-muted-foreground shrink-0 uppercase tracking-wide">Replay</span>
           <input
             type="range"
             min={0}
             max={100}
             value={scrubPos}
             onChange={e => setScrubPos(Number(e.target.value))}
-            className="flex-1 accent-blue-500"
+            className="flex-1 accent-primary"
           />
-          <span className="text-xs text-gray-400 shrink-0">
+          <span className="text-xs text-muted-foreground tabular-nums shrink-0">
             {Math.ceil(allTurns.length * scrubPos / 100)}/{allTurns.length}
           </span>
         </div>
       )}
 
-      {/* Clue detail sidebar */}
       {selectedClue && (
         <ClueDetailSidebar
           topicId={topicId}

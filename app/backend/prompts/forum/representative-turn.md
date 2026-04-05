@@ -21,7 +21,7 @@ MOST RECENT EXCHANGES:
 YOUR SITUATION:
 - You have spoken {my_turn_count} times so far (turn {turn_number} overall)
 - Your party weight: {speaking_weight}/100
-
+{moderator_directive}
 ---
 
 You must now decide: speak or pass.

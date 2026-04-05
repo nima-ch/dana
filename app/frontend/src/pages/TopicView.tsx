@@ -3,15 +3,15 @@ import { Navigate, useParams, useSearchParams } from "react-router-dom"
 import { api, type Topic } from "@/api/client"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
 import { PipelineActivityFeed } from "@/components/Pipeline/PipelineActivityFeed"
 import { OperationModal } from "@/components/Pipeline/OperationModal"
 import { PartiesPanel } from "@/components/Topic/PartiesPanel"
 import { CluesPanel } from "@/components/Topic/CluesPanel"
+import { ForumTab } from "@/components/Topic/ForumTab"
+import { VerdictPanel } from "@/components/Expert/VerdictPanel"
 import { usePipelineStore } from "@/stores/pipelineStore"
 
-const TAB_SLUGS = ["overview", "parties", "evidence", "forum"] as const
+const TAB_SLUGS = ["overview", "parties", "evidence", "forum", "verdict"] as const
 
 type TabSlug = typeof TAB_SLUGS[number]
 
@@ -38,24 +38,29 @@ export function TopicView() {
     api.topics.get(id).then(setTopic).catch(() => {})
   }
 
-  async function handlePipelineAction(action: "discover" | "enrich" | "analyze" | "reanalyze") {
+  async function handlePipelineAction(action: string) {
     if (!id) return
-    const labels: Record<string, string> = { discover: "Discovery", enrich: "Enrichment", analyze: "Analysis", reanalyze: "Re-analysis" }
+    const labels: Record<string, string> = {
+      discover: "Discovery", enrich: "Enrichment", forum_prep: "Forum Prep",
+      forum: "Forum", score: "Scenario Scoring", analyze: "Analysis", reanalyze: "Re-analysis",
+    }
     startOp(id, action, labels[action] ?? action)
     try {
-      if (action === "discover") {
-        await api.pipeline.discover(id)
-        setTopic(current => current ? { ...current, status: "discovery" } : current)
-      } else if (action === "enrich") {
-        await api.pipeline.enrich(id)
-        setTopic(current => current ? { ...current, status: "enrichment" } : current)
-      } else if (action === "analyze") {
-        await api.pipeline.analyze(id)
-        setTopic(current => current ? { ...current, status: "weight" } : current)
-      } else if (action === "reanalyze") {
-        await api.pipeline.reanalyze(id)
-        setTopic(current => current ? { ...current, status: "weight" } : current)
+      const statusMap: Record<string, string> = {
+        discover: "discovery", enrich: "enrichment", forum_prep: "forum_prep",
+        forum: "forum", score: "expert_council", analyze: "forum_prep", reanalyze: "forum_prep",
       }
+      const apiCall: Record<string, () => Promise<unknown>> = {
+        discover: () => api.pipeline.discover(id),
+        enrich: () => api.pipeline.enrich(id),
+        forum_prep: () => api.pipeline.forumPrep(id),
+        forum: () => api.pipeline.forum(id),
+        score: () => api.pipeline.score(id),
+        analyze: () => api.pipeline.analyze(id),
+        reanalyze: () => api.pipeline.reanalyze(id),
+      }
+      await apiCall[action]?.()
+      setTopic(current => current ? { ...current, status: statusMap[action] ?? current.status } : current)
     } finally {
       finishOp()
       refreshTopic()
@@ -66,7 +71,7 @@ export function TopicView() {
   if (!id) return <Navigate to="/" replace />
   if (!topic) return <div className="p-6 text-sm text-muted-foreground">Loading topic…</div>
 
-  const pipelineFeed = <PipelineActivityFeed topicId={id} status={topic.status} active={topic.status !== "draft" && topic.status !== "complete"} onAction={handlePipelineAction} />
+  const pipelineFeed = <PipelineActivityFeed topicId={id} status={topic.status} active={topic.status !== "draft"} onAction={handlePipelineAction} onStageComplete={refreshTopic} />
   const content = {
     overview: <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-border/70 bg-card/80 px-4 py-2.5 text-sm">
@@ -82,7 +87,8 @@ export function TopicView() {
     </div>,
     parties: <PartiesPanel topicId={id} status={topic.status} />,
     evidence: <CluesPanel topicId={id} />,
-    forum: <TabEmpty title="Forum" description="No forum session loaded yet." />,
+    forum: <ForumTab topicId={id} />,
+    verdict: <VerdictPanel topicId={id} />,
   }
 
   return (
@@ -98,11 +104,12 @@ export function TopicView() {
       </div>
 
       <Tabs value={activeTab} onValueChange={(value) => setParams(value === "overview" ? {} : { tab: value })}>
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="parties">Parties</TabsTrigger>
           <TabsTrigger value="evidence">Evidence</TabsTrigger>
           <TabsTrigger value="forum">Forum</TabsTrigger>
+          <TabsTrigger value="verdict">Verdict</TabsTrigger>
         </TabsList>
         {TAB_SLUGS.map(slug => <TabsContent key={slug} value={slug} className="mt-4">{content[slug]}</TabsContent>)}
       </Tabs>
@@ -112,8 +119,6 @@ export function TopicView() {
   )
 }
 
-function TabEmpty({ title, description, action, onAction }: { title: string; description: string; action?: string; onAction?: () => void }) {
-  return <div className={cn("rounded-xl border border-dashed p-8 text-center", "bg-card")}> <div className="text-lg font-semibold">{title}</div><div className="mt-2 text-sm text-muted-foreground">{description}</div>{action && onAction && <Button className="mt-4" variant="secondary" onClick={onAction}>{action}</Button>}</div>
-}
+
 
 

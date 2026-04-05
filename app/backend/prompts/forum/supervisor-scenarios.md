@@ -34,7 +34,9 @@ Output ONLY a valid JSON array of scenarios:
 ]
 
 Rules:
+- Keep the total scenario count to 7 or fewer. If you have more, merge the most similar scenarios into one. Drop scenarios with zero support and zero contest.
 - Keep IDs stable — do not rename existing scenario IDs
 - Every scenario must have ≥1 required_condition and ≥1 falsification_condition
 - supported_by and contested_by reflect who has argued for/against in the debate
+- Keep descriptions concise (1-2 sentences max) to stay within output limits
 - Output ONLY the JSON array, no markdown fences, no prose

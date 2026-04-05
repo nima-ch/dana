@@ -25,11 +25,10 @@ const CONTROL_RANGES: Record<keyof AnalysisControls, [number, number]> = {
   smart_edit_max_chars: [5000, 50000],
   // Forum
   forum_max_turns: [20, 200],
-  forum_supervisor_check: [10, 50],
-  forum_compress_interval: [20, 200],
+  forum_compress_interval: [5, 50],
   forum_speaking_budget: [200, 1200],
-  forum_min_speaking_floor: [50, 400],
-  forum_persona_batch: [1, 12],
+  forum_scenario_update_interval: [3, 20],
+  forum_min_turns_multiplier: [1.5, 5],
   // Agentic Loop
   default_max_iterations: [5, 20],
   default_context_warning: [50000, 300000],

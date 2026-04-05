@@ -54,11 +54,10 @@ const CONTROLS_DEFAULTS = {
   smart_edit_queries: 3,
   smart_edit_max_chars: 15000,
   forum_max_turns: 60,
-  forum_supervisor_check: 20,
-  forum_compress_interval: 100,
+  forum_compress_interval: 10,
   forum_speaking_budget: 600,
-  forum_min_speaking_floor: 150,
-  forum_persona_batch: 4,
+  forum_scenario_update_interval: 5,
+  forum_min_turns_multiplier: 2.5,
   default_max_iterations: 5,
   default_context_warning: 150000,
   max_fetch_chars: 10000,
@@ -457,7 +456,7 @@ function PromptsPanel() {
     discovery: "🔍", enrichment: "📊", forum: "💬", scoring: "🎯",
     weight: "⚖️", representative: "🗣️", "clue-extractor": "🧩",
     "clue-processor": "⚙️", "party-intelligence": "🧠",
-    "delta-representative": "🔄", "devils-advocate": "😈",
+    "delta-representative": "🔄",
   }
 
   return (
@@ -674,14 +673,13 @@ const CATEGORIES: ControlCategory[] = [
   },
   {
     id: "forum", label: "Forum", icon: "💬",
-    description: "Controls for the multi-party debate, supervision, and speaking budgets.",
+    description: "Controls for the moderated multi-party debate.",
     fields: [
-      { key: "forum_max_turns", label: "Max debate turns", hint: "Upper limit on total debate turns before forcing closure", min: 20, max: 200 },
-      { key: "forum_supervisor_check", label: "Supervisor check interval", hint: "Evaluate debate progress and scenarios every N turns", min: 10, max: 50 },
-      { key: "forum_compress_interval", label: "History compression", hint: "Compress conversation history every N turns to save context", min: 20, max: 200 },
-      { key: "forum_speaking_budget", label: "Opening statement budget", hint: "Word pool for opening statements (rebuttal = 67%, closing = 50%)", min: 200, max: 1200, step: 50 },
-      { key: "forum_min_speaking_floor", label: "Minimum speaking floor", hint: "Minimum words any party can speak regardless of weight", min: 50, max: 400, step: 10 },
-      { key: "forum_persona_batch", label: "Persona parallelism", hint: "Number of forum personas generated in parallel", min: 1, max: 12 },
+      { key: "forum_max_turns", label: "Max debate turns", hint: "Hard ceiling on total debate turns before forcing closure", min: 20, max: 200 },
+      { key: "forum_min_turns_multiplier", label: "Min turns multiplier", hint: "Minimum turns = parties × this value (e.g., 10 parties × 2.5 = 25 min)", min: 1.5, max: 5, step: 0.5 },
+      { key: "forum_scenario_update_interval", label: "Scenario update interval", hint: "Full scenario list update every N turns", min: 3, max: 20 },
+      { key: "forum_compress_interval", label: "History compression", hint: "Compress conversation history every N turns to save context", min: 5, max: 50 },
+      { key: "forum_speaking_budget", label: "Speaking budget", hint: "Word budget for representative statements", min: 200, max: 1200, step: 50 },
     ],
   },
   {

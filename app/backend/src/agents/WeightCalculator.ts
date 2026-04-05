@@ -37,7 +37,7 @@ const LOW_WEIGHT_THRESHOLD = 15
 function computeSpeakingBudget(weight: number, totalWeight: number, isLowWeight: boolean): SpeakingBudget {
   const controls = dbGetControls()
   const ROUND_POOLS = { opening: controls.forum_speaking_budget, rebuttal: Math.round(controls.forum_speaking_budget * 0.67), closing: Math.round(controls.forum_speaking_budget * 0.5) }
-  const MIN_FLOOR = controls.forum_min_speaking_floor
+  const MIN_FLOOR = 150
   if (isLowWeight) {
     return { opening_statement: MIN_FLOOR, rebuttal: MIN_FLOOR, closing: MIN_FLOOR, minimum_floor: MIN_FLOOR }
   }
@@ -68,8 +68,7 @@ export async function runForumPrep(
   emitThink(topicId, "🎭", "Generating forum representatives", `${parties.length} parties`)
 
   const representatives: Representative[] = []
-  const controls = dbGetControls()
-  const PERSONA_BATCH = controls.forum_persona_batch
+  const PERSONA_BATCH = 4
 
   for (let bi = 0; bi < parties.length; bi += PERSONA_BATCH) {
     const batch = parties.slice(bi, bi + PERSONA_BATCH)

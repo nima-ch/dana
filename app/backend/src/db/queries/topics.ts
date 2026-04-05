@@ -4,7 +4,7 @@ export interface Topic {
   id: string
   title: string
   description: string
-  status: "draft" | "discovery" | "review_parties" | "enrichment" | "review_enrichment" | "forum" | "expert_council" | "verdict" | "complete" | "stale"
+  status: "draft" | "discovery" | "review_parties" | "enrichment" | "review_enrichment" | "forum_prep" | "review_forum_prep" | "forum" | "review_forum" | "expert_council" | "verdict" | "complete" | "stale"
   current_version: number
   models: {
     data_gathering: string

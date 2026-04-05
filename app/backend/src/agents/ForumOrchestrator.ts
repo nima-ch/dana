@@ -4,8 +4,7 @@ import { chatCompletionText } from "../llm/proxyClient"
 import { dbGetControls } from "../db/queries/settings"
 import { runForumPrepAgent } from "./ForumPrepAgent"
 import { runRepresentativeTurn } from "./RepresentativeAgent"
-import { runDevilsAdvocate } from "./DevilsAdvocate"
-import { ForumSupervisor, pickNextSpeaker, DEFAULT_MAX_TURNS, SUPERVISOR_CHECK_INTERVAL, COMPRESS_INTERVAL } from "./ForumSupervisor"
+import { ForumSupervisor, DEFAULT_MAX_TURNS, COMPRESS_INTERVAL } from "./ForumSupervisor"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { writeForumSession, getForumSession } from "../tools/internal/getForumData"
 import { emit, emitThink } from "../routes/stream"
@@ -43,23 +42,18 @@ export async function runForumOrchestrator(
   log.forum(`Parties: ${representatives.map(r => `${r.party_id}(w=${r.speaking_weight})`).join(", ")}`)
   log.separator()
 
-  // ── Initialize or resume session ─────────────────────────────────────────
-  let session: ForumSession
-  try {
-    session = await getForumSession(topicId, sessionId)
-    log.forum("Resuming existing session")
-  } catch {
-    session = {
-      session_id: sessionId,
-      version: 1,
-      type: "full",
-      status: "running",
-      started_at: new Date().toISOString(),
-      rounds: [],
-      scenarios: [],
-    }
-    await writeForumSession(topicId, session)
+  // ── Always start a fresh session ──────────────────────────────────────────
+  const session: ForumSession = {
+    session_id: sessionId,
+    version: 1,
+    type: "full",
+    status: "running",
+    started_at: new Date().toISOString(),
+    rounds: [],
+    scenarios: [],
   }
+  await writeForumSession(topicId, session)
+  log.forum("Starting fresh forum session")
 
   // Retrieve topic title from DB for supervisor/context
   const { dbGetTopic } = await import("../db/queries/topics")
@@ -68,7 +62,8 @@ export async function runForumOrchestrator(
 
   const controls = dbGetControls()
   const maxTurns = controls.forum_max_turns
-  const minTurns = Math.max(8, Math.floor(representatives.length * 1.5))
+  const multiplier = (controls as any).forum_min_turns_multiplier ?? 2.5
+  const minTurns = Math.max(15, Math.floor(representatives.length * multiplier))
 
   // ── Phase 1: Preparation ─────────────────────────────────────────────────
   onProgress?.("Forum: agents preparing scratchpads…")
@@ -77,38 +72,37 @@ export async function runForumOrchestrator(
   await runForumPrepAgent(topicId, topicTitle, sessionId, model, onProgress)
   emit(topicId, { type: "progress", stage: "forum", pct: 0.1, msg: "All representatives ready. Debate opening…" })
 
-  // ── Phase 2: Dynamic debate loop ─────────────────────────────────────────
+  // ── Phase 2: Moderated debate loop ────────────────────────────────────────
   const supervisor = new ForumSupervisor(topicId, sessionId, model, topicTitle, maxTurns, minTurns)
+  const scenarioInterval = (controls as any).forum_scenario_update_interval ?? 5
 
-  // Track consecutive passes per party
-  const consecutivePasses: Record<string, number> = {}
-  representatives.forEach(r => { consecutivePasses[r.party_id] = 0 })
-
-  // Flat list of all turns (for context building)
   const allTurns: ForumTurn[] = session.rounds.flatMap(r => r.turns)
   let turnNumber = allTurns.length + 1
+  let lastTurn: ForumTurn | null = allTurns.at(-1) ?? null
 
   log.forum(`Debate opening at turn ${turnNumber} (max=${maxTurns}, min=${minTurns})`)
   emitThink(topicId, "🎙️", "Forum is open", `${representatives.length} parties ready to debate`)
 
   while (!supervisor.isDone) {
-    // Balance correction — force underrepresented party if needed
-    const forcedPartyId = supervisor.checkBalance(representatives)
-    let selected: Representative
+    // Moderator decides who speaks next
+    const decision = await supervisor.moderate(lastTurn, representatives)
 
-    if (forcedPartyId) {
-      selected = representatives.find(r => r.party_id === forcedPartyId) ?? pickNextSpeaker(representatives)
-      emitThink(topicId, "⚖️", `Balance correction`, `Giving floor to ${forcedPartyId}`)
-    } else {
-      selected = pickNextSpeaker(representatives)
+    if (decision.should_close) {
+      log.forum(`Debate closed by moderator at turn ${allTurns.length}: ${decision.closure_reason ?? decision.reason}`)
+      emit(topicId, { type: "progress", stage: "forum", pct: 0.8, msg: `Moderator closed debate: ${decision.coverage_score}% coverage` })
+      break
+    }
+
+    const selected = representatives.find(r => r.party_id === decision.next_speaker)
+    if (!selected) {
+      log.forum(`Moderator picked unknown party "${decision.next_speaker}", falling back to first rep`)
+      break
     }
 
     onProgress?.(`Forum turn ${turnNumber}: ${selected.party_id}`)
-    emitThink(topicId, "🗣️", `${selected.party_id}`, `Turn ${turnNumber}`)
 
     const myTurnCount = supervisor.turnDistribution[selected.party_id] ?? 0
 
-    // Run the turn
     const { turn, passed } = await runRepresentativeTurn({
       topicId,
       runId,
@@ -119,21 +113,21 @@ export async function runForumOrchestrator(
       turnNumber,
       myTurnCount,
       speakingWeight: selected.speaking_weight,
-      consecutivePasses: consecutivePasses[selected.party_id] ?? 0,
-      recentTurns: allTurns.slice(-8),
+      recentTurns: allTurns.slice(-6),
       compressedHistory: supervisor.compressedHistory,
       liveScenarios: supervisor.liveScenarios,
       topic: topicTitle,
+      moderatorDirective: decision.directive ?? undefined,
     })
 
     if (passed) {
-      consecutivePasses[selected.party_id] = (consecutivePasses[selected.party_id] ?? 0) + 1
-      log.forum(`  ${selected.party_id} passed (consecutive passes: ${consecutivePasses[selected.party_id]})`)
+      log.forum(`  ${selected.party_id} passed turn ${turnNumber}`)
     } else if (turn) {
-      consecutivePasses[selected.party_id] = 0
+      if (decision.directive) turn.moderator_directive = decision.directive
+      if (decision.reason) turn.moderator_reason = decision.reason
       allTurns.push(turn)
+      lastTurn = turn
 
-      // Store turn in session — batch by groups of 10
       const batchNum = turnBatch(turnNumber)
       let roundEntry = session.rounds.find(r => r.round === batchNum)
       if (!roundEntry) {
@@ -143,75 +137,44 @@ export async function runForumOrchestrator(
       roundEntry.turns.push(turn)
       await writeForumSession(topicId, session)
 
-      // Emit live turn event
       emit(topicId, { type: "forum_turn", turn: turn as unknown as Record<string, unknown> })
-
       supervisor.observeTurn(turn)
       turnNumber++
 
-      // Supervisor checks every SUPERVISOR_CHECK_INTERVAL turns
-      if (allTurns.length % SUPERVISOR_CHECK_INTERVAL === 0) {
-        const recentTurns = allTurns.slice(-10)
-        const [scenarios, completion] = await Promise.all([
-          supervisor.updateScenarios(allTurns),
-          supervisor.checkCompletion(recentTurns),
-        ])
-
-        // Update session scenarios
+      // Periodic full scenario update
+      if (allTurns.length % scenarioInterval === 0) {
+        const scenarios = await supervisor.updateScenarios(allTurns)
         session.scenarios = scenarios
         await writeForumSession(topicId, session)
-
-        emit(topicId, { type: "progress", stage: "forum", pct: Math.min(0.1 + (allTurns.length / maxTurns) * 0.7, 0.8), msg: `Turn ${allTurns.length}: ${completion.coverage_score}% coverage` })
-
-        if (completion.done) {
-          log.forum(`Debate closed by supervisor at turn ${allTurns.length}: ${completion.reason}`)
-          break
-        }
+        emit(topicId, { type: "progress", stage: "forum", pct: Math.min(0.1 + (allTurns.length / maxTurns) * 0.7, 0.8), msg: `Turn ${allTurns.length}: ${decision.coverage_score}% coverage` })
       }
 
-      // Compress history every COMPRESS_INTERVAL turns
+      // Periodic history compression
       if (allTurns.length % COMPRESS_INTERVAL === 0) {
         await supervisor.compressHistory(allTurns)
       }
     }
-
-    // Safety: if all parties are passing continuously, force a speak
-    const allPassing = representatives.every(r => (consecutivePasses[r.party_id] ?? 0) >= 2)
-    if (allPassing) {
-      log.forum("All parties passing — resetting pass counts to force engagement")
-      representatives.forEach(r => { consecutivePasses[r.party_id] = 0 })
-    }
   }
 
   log.forum(`Debate ended after ${allTurns.length} turns`)
-  emit(topicId, { type: "progress", stage: "forum", pct: 0.82, msg: "Debate concluded — running Devil's Advocate…" })
 
   // ── Phase 3: Final scenario update ────────────────────────────────────────
+  emit(topicId, { type: "progress", stage: "forum", pct: 0.85, msg: "Finalizing scenarios…" })
   const finalScenarios = await supervisor.updateScenarios(allTurns)
   session.scenarios = finalScenarios
-
-  // ── Phase 4: Devil's Advocate ─────────────────────────────────────────────
   if (finalScenarios.length > 0) {
-    // Sort by support count so DA targets the most-supported scenario
     const sorted = [...finalScenarios].sort((a, b) => b.supported_by.length - a.supported_by.length)
     session.scenarios = sorted
     await writeForumSession(topicId, session)
-
-    try {
-      log.forum("Devil's Advocate starting")
-      await runDevilsAdvocate(topicId, runId, sessionId, model)
-    } catch (e) {
-      log.forum(`Devil's Advocate failed (non-fatal): ${e}`)
-    }
   }
 
   emit(topicId, { type: "progress", stage: "forum", pct: 0.9, msg: "Synthesizing debate summary…" })
 
-  // ── Phase 5: Debate summary for expert council ────────────────────────────
+  // ── Phase 4: Debate summary for expert council ────────────────────────────
   const allScratchpads = dbGetAllScratchpads(topicId, sessionId)
   const debateSummary = await synthesizeDebate(topicTitle, allTurns, finalScenarios, model)
 
-  // ── Phase 6: Finalize session ─────────────────────────────────────────────
+  // ── Phase 5: Finalize session ─────────────────────────────────────────────
   const contestedClues = computeContestedClues(allTurns)
   const uncontestedClues = computeUncontestedClues(allTurns, contestedClues)
 

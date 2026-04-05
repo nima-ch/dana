@@ -17,7 +17,7 @@ const STAGES: { key: PipelineStage; label: string }[] = [
   { key: "expert_council", label: "Scenario Scoring" },
 ]
 
-export type PipelineAction = "discover" | "enrich" | "analyze" | "reanalyze"
+export type PipelineAction = "discover" | "enrich" | "forum_prep" | "forum" | "score" | "analyze" | "reanalyze"
 
 export type PipelineStatus = "draft" | "review_parties" | "review_enrichment" | "forum" | "expert_council" | "complete" | "stale" | string
 
@@ -26,9 +26,10 @@ interface Props {
   status: PipelineStatus
   active?: boolean
   onAction: (action: PipelineAction) => void | Promise<void>
+  onStageComplete?: () => void
 }
 
-export function PipelineActivityFeed({ topicId, status, active = false, onAction }: Props) {
+export function PipelineActivityFeed({ topicId, status, active = false, onAction, onStageComplete }: Props) {
   const [collapsed, setCollapsed] = useState(false)
   const topicRef = useRef(topicId)
   const pushEvent = usePipelineStore((state) => state.pushEvent)
@@ -46,6 +47,7 @@ export function PipelineActivityFeed({ topicId, status, active = false, onAction
   useSSE(active && topicId && !hasActiveOp ? topicId : null, (event) => {
     if (!topicId) return
     pushEvent(topicId, event)
+    if (event.type === "stage_complete") onStageComplete?.()
   })
 
 
@@ -54,19 +56,15 @@ export function PipelineActivityFeed({ topicId, status, active = false, onAction
     const completed = stagesCompletedByStatus(status)
     const running = stageRunningByStatus(status)
     return STAGES.map(stage => {
-      const livePct = session?.liveStages?.[stage.key]
-      if (livePct !== undefined && livePct >= 100) return { ...stage, state: "done" as const }
-      if (livePct !== undefined && livePct > 0) return { ...stage, state: "running" as const }
       if (completed.has(stage.key)) return { ...stage, state: "done" as const }
       if (running === stage.key) return { ...stage, state: "running" as const }
       return { ...stage, state: "pending" as const }
     })
-  }, [session, status])
+  }, [status])
 
   const stageActions = useMemo(() => getStageActions(status), [status])
 
-  const hasActions = Object.values(stageActions).some(a => a !== null)
-  const idle = !active && items.length === 0 && !hasActions
+  const idle = !active && items.length === 0 && status === "draft"
   const minimized = collapsed || idle
 
   return <Card className={cn("border-border/70 bg-card/80 shadow-none", minimized ? "sticky bottom-4 mx-4" : "mx-0")}> 
@@ -93,38 +91,55 @@ export function PipelineActivityFeed({ topicId, status, active = false, onAction
   </Card>
 }
 
-type StageAction = { action: PipelineAction; label: string; variant: "run" | "rerun" } | null
+type StageAction = { action: PipelineAction; label: string; variant: "run" | "rerun"; disabled: boolean; reason?: string }
 
 function getStageActions(status: PipelineStatus): Record<PipelineStage, StageAction> {
   const completed = stagesCompletedByStatus(status)
   const running = stageRunningByStatus(status)
+  const isRunning = running !== null
 
   const discoveryDone = completed.has("discovery")
   const enrichmentDone = completed.has("enrichment")
+  const forumPrepDone = completed.has("forum_prep")
+  const forumDone = completed.has("forum")
   const allDone = completed.has("expert_council")
 
   return {
-    discovery: running
-      ? null
-      : discoveryDone
-        ? { action: "discover", label: "Re-run", variant: "rerun" }
-        : { action: "discover", label: "Run", variant: "run" },
-    enrichment: running
-      ? null
-      : enrichmentDone
-        ? { action: "enrich", label: "Re-run", variant: "rerun" }
-        : discoveryDone
-          ? { action: "enrich", label: "Run", variant: "run" }
-          : null,
-    forum_prep: running
-      ? null
-      : allDone
-        ? { action: "reanalyze", label: "Re-run all", variant: "rerun" }
-        : enrichmentDone
-          ? { action: "analyze", label: "Run all", variant: "run" }
-          : null,
-    forum: null,
-    expert_council: null,
+    discovery: {
+      action: "discover",
+      label: discoveryDone ? "Re-run" : "Run",
+      variant: discoveryDone ? "rerun" : "run",
+      disabled: isRunning,
+      reason: isRunning ? "Pipeline is running" : undefined,
+    },
+    enrichment: {
+      action: "enrich",
+      label: enrichmentDone ? "Re-run" : "Run",
+      variant: enrichmentDone ? "rerun" : "run",
+      disabled: isRunning || !discoveryDone,
+      reason: isRunning ? "Pipeline is running" : !discoveryDone ? "Run Discovery first" : undefined,
+    },
+    forum_prep: {
+      action: "forum_prep",
+      label: forumPrepDone ? "Re-run" : "Run",
+      variant: forumPrepDone ? "rerun" : "run",
+      disabled: isRunning || !enrichmentDone,
+      reason: isRunning ? "Pipeline is running" : !enrichmentDone ? "Run Enrichment first" : undefined,
+    },
+    forum: {
+      action: "forum",
+      label: forumDone ? "Re-run" : "Run",
+      variant: forumDone ? "rerun" : "run",
+      disabled: isRunning || !forumPrepDone,
+      reason: isRunning ? "Pipeline is running" : !forumPrepDone ? "Run Forum Prep first" : undefined,
+    },
+    expert_council: {
+      action: "score",
+      label: allDone ? "Re-run" : "Run",
+      variant: allDone ? "rerun" : "run",
+      disabled: isRunning || !forumDone,
+      reason: isRunning ? "Pipeline is running" : !forumDone ? "Run Forum first" : undefined,
+    },
   }
 }
 
@@ -135,7 +150,9 @@ function stagesCompletedByStatus(status: string): Set<PipelineStage> {
     review_enrichment: ["discovery", "enrichment"],
     weight: ["discovery", "enrichment"],
     forum_prep: ["discovery", "enrichment"],
+    review_forum_prep: ["discovery", "enrichment", "forum_prep"],
     forum: ["discovery", "enrichment", "forum_prep"],
+    review_forum: ["discovery", "enrichment", "forum_prep", "forum"],
     expert_council: ["discovery", "enrichment", "forum_prep", "forum"],
     complete: ["discovery", "enrichment", "forum_prep", "forum", "expert_council"],
     stale: ["discovery", "enrichment", "forum_prep", "forum", "expert_council"],
@@ -170,17 +187,17 @@ function StageCard({ label, state, action, onAction }: {
             {state === "done" ? "Done" : state === "running" ? "Running" : "Pending"}
           </span>
         </div>
-        {action && (
-          <Button
-            size="sm"
-            variant={action.variant === "rerun" ? "outline" : "default"}
-            className="h-6 px-2 text-[11px]"
-            onClick={() => onAction(action.action)}
-          >
-            {action.variant === "rerun" ? <RotateCcw className="mr-1 size-3" /> : <Play className="mr-1 size-3" />}
-            {action.label}
-          </Button>
-        )}
+        <Button
+          size="sm"
+          variant={action.variant === "rerun" ? "outline" : "default"}
+          className="h-6 px-2 text-[11px]"
+          disabled={action.disabled}
+          title={action.reason}
+          onClick={() => onAction(action.action)}
+        >
+          {action.variant === "rerun" ? <RotateCcw className="mr-1 size-3" /> : <Play className="mr-1 size-3" />}
+          {action.label}
+        </Button>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-muted">
         <div className={cn(
@@ -196,7 +213,7 @@ function FeedRow({ item }: { item: PipelineFeedItem }) {
   const meta = (() => {
     switch (item.type) {
       case "think": return { icon: <Sparkles size={14} />, title: item.label, detail: item.detail }
-      case "progress": return { icon: <Clock3 size={14} />, title: `${item.stage} ${Math.round(item.pct)}%`, detail: item.msg }
+      case "progress": return { icon: <Clock3 size={14} />, title: item.msg || item.stage, detail: undefined }
       case "forum_turn": return { icon: <MessagesSquare size={14} />, title: "Forum turn", detail: stringifyTurn(item.turn) }
       case "clue_discovered": return { icon: <Lightbulb size={14} />, title: item.title, detail: `${item.source} · relevance ${Math.round(item.relevance)}` }
       case "stage_complete": return { icon: <CircleDot size={14} />, title: `Stage complete · ${item.stage}`, detail: undefined }

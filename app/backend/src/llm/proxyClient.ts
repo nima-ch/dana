@@ -106,21 +106,32 @@ async function fetchWithTimeout(url: string, options: RequestInit): Promise<Resp
   }
 }
 
+let _modelsCache: { models: ModelInfo[]; fetchedAt: number } | null = null
+const MODELS_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+
 export async function fetchAvailableModels(): Promise<ModelInfo[]> {
+  if (_modelsCache && Date.now() - _modelsCache.fetchedAt < MODELS_CACHE_TTL) {
+    return _modelsCache.models
+  }
   try {
     const res = await fetchWithTimeout(`${PROXY_BASE_URL}/v1/models`, {
       headers: { Authorization: `Bearer ${process.env.PROXY_API_KEY || "sk-dummy"}` },
     })
     if (!res.ok) throw new Error(`Models endpoint returned ${res.status}`)
     const data = await res.json() as { data: ModelInfo[] }
-    return data.data || []
+    const models = data.data || []
+    _modelsCache = { models, fetchedAt: Date.now() }
+    return models
   } catch (e) {
     console.warn("Could not fetch models from proxy:", e)
-    return []
+    return _modelsCache?.models ?? []
   }
 }
 
 export function isProxyAvailable(): Promise<boolean> {
+  if (_modelsCache && Date.now() - _modelsCache.fetchedAt < MODELS_CACHE_TTL) {
+    return Promise.resolve(true)
+  }
   return fetchWithTimeout(`${PROXY_BASE_URL}/v1/models`, {
     method: "GET",
     headers: { Authorization: `Bearer ${process.env.PROXY_API_KEY || "sk-dummy"}` },

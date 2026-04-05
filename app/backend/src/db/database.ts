@@ -175,6 +175,8 @@ function applySchema(db: Database): void {
       concessions TEXT NOT NULL DEFAULT '[]',
       statement TEXT NOT NULL DEFAULT '',
       scenario_endorsement TEXT,
+      moderator_directive TEXT,
+      moderator_reason TEXT,
       clues_cited TEXT NOT NULL DEFAULT '[]',
       word_count INTEGER NOT NULL DEFAULT 0,
       round INTEGER NOT NULL DEFAULT 1,
@@ -328,4 +330,6 @@ function applySchema(db: Database): void {
 
   // Migrations for existing databases
   try { db.run(`ALTER TABLE parties ADD COLUMN weight_evidence TEXT NOT NULL DEFAULT '{}'`) } catch { /* column already exists */ }
+  try { db.run(`ALTER TABLE forum_turns ADD COLUMN moderator_directive TEXT`) } catch { /* already exists */ }
+  try { db.run(`ALTER TABLE forum_turns ADD COLUMN moderator_reason TEXT`) } catch { /* already exists */ }
 }

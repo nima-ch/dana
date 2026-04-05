@@ -2,7 +2,7 @@ import { Elysia } from "elysia"
 import { getTopic } from "../pipeline/topicManager"
 import { runInitialPipeline } from "../pipeline/initialPipeline"
 import { runDeltaPipeline } from "../pipeline/deltaPipeline"
-import { runDiscoverStage, runEnrichStage, runAnalyzeStages, runReanalysis } from "../pipeline/gatedPipeline"
+import { runDiscoverStage, runEnrichStage, runAnalyzeStages, runReanalysis, runForumPrepStage, runForumStage, runScoringStage } from "../pipeline/gatedPipeline"
 
 const activeRuns = new Map<string, { run_id: string; started_at: string }>()
 
@@ -17,6 +17,19 @@ function guardRunning(topicId: string) {
   return null
 }
 
+const STATUS_ORDER = [
+  "draft", "discovery", "review_parties", "enrichment", "review_enrichment",
+  "forum_prep", "review_forum_prep", "forum", "review_forum",
+  "expert_council", "complete", "stale",
+]
+
+function statusAtLeast(current: string, minimum: string): boolean {
+  const ci = STATUS_ORDER.indexOf(current)
+  const mi = STATUS_ORDER.indexOf(minimum)
+  if (ci === -1 || mi === -1) return false
+  return ci >= mi
+}
+
 function trackRun(topicId: string, run_id: string) {
   const started_at = new Date().toISOString()
   activeRuns.set(topicId, { run_id, started_at })
@@ -29,10 +42,7 @@ export const pipelineRouter = new Elysia({ prefix: "/api/topics" })
   .post("/:id/pipeline/discover", async ({ params, set }) => {
     const topicId = params.id
     try {
-      const topic = await getTopic(topicId)
-      if (topic.status !== "draft" && topic.status !== "complete") {
-        set.status = 400; return { message: `Cannot discover from status "${topic.status}"` }
-      }
+      await getTopic(topicId)
     } catch { set.status = 404; return { message: "Topic not found" } }
 
     const conflict = guardRunning(topicId)
@@ -52,8 +62,8 @@ export const pipelineRouter = new Elysia({ prefix: "/api/topics" })
     const topicId = params.id
     try {
       const topic = await getTopic(topicId)
-      if (topic.status !== "review_parties") {
-        set.status = 400; return { message: `Cannot enrich from status "${topic.status}". Approve parties first.` }
+      if (!statusAtLeast(topic.status, "review_parties")) {
+        set.status = 400; return { message: `Cannot enrich from status "${topic.status}". Run Discovery first.` }
       }
     } catch { set.status = 404; return { message: "Topic not found" } }
 
@@ -74,8 +84,8 @@ export const pipelineRouter = new Elysia({ prefix: "/api/topics" })
     const topicId = params.id
     try {
       const topic = await getTopic(topicId)
-      if (topic.status !== "review_enrichment") {
-        set.status = 400; return { message: `Cannot analyze from status "${topic.status}". Approve clues first.` }
+      if (!statusAtLeast(topic.status, "review_enrichment")) {
+        set.status = 400; return { message: `Cannot analyze from status "${topic.status}". Run Enrichment first.` }
       }
     } catch { set.status = 404; return { message: "Topic not found" } }
 
@@ -85,6 +95,72 @@ export const pipelineRouter = new Elysia({ prefix: "/api/topics" })
     const { run_id, started_at } = trackRun(topicId, "analyze")
 
     runAnalyzeStages(topicId).then(() => {
+      activeRuns.delete(topicId)
+    }).catch(() => { activeRuns.delete(topicId) })
+
+    return { run_id, started_at, status: "started" }
+  })
+
+  // Gated: Forum Prep only → review_forum_prep
+  .post("/:id/pipeline/forum-prep", async ({ params, set }) => {
+    const topicId = params.id
+    try {
+      const topic = await getTopic(topicId)
+      if (!statusAtLeast(topic.status, "review_enrichment")) {
+        set.status = 400; return { message: `Cannot run forum prep from status "${topic.status}". Run Enrichment first.` }
+      }
+    } catch { set.status = 404; return { message: "Topic not found" } }
+
+    const conflict = guardRunning(topicId)
+    if (conflict) { set.status = 409; return { message: "Pipeline already running", ...conflict } }
+
+    const { run_id, started_at } = trackRun(topicId, "forum-prep")
+
+    runForumPrepStage(topicId).then(() => {
+      activeRuns.delete(topicId)
+    }).catch(() => { activeRuns.delete(topicId) })
+
+    return { run_id, started_at, status: "started" }
+  })
+
+  // Gated: Forum only → review_forum
+  .post("/:id/pipeline/forum", async ({ params, set }) => {
+    const topicId = params.id
+    try {
+      const topic = await getTopic(topicId)
+      if (!statusAtLeast(topic.status, "review_forum_prep")) {
+        set.status = 400; return { message: `Cannot run forum from status "${topic.status}". Run Forum Prep first.` }
+      }
+    } catch { set.status = 404; return { message: "Topic not found" } }
+
+    const conflict = guardRunning(topicId)
+    if (conflict) { set.status = 409; return { message: "Pipeline already running", ...conflict } }
+
+    const { run_id, started_at } = trackRun(topicId, "forum")
+
+    runForumStage(topicId).then(() => {
+      activeRuns.delete(topicId)
+    }).catch(() => { activeRuns.delete(topicId) })
+
+    return { run_id, started_at, status: "started" }
+  })
+
+  // Gated: Scoring only → complete
+  .post("/:id/pipeline/score", async ({ params, set }) => {
+    const topicId = params.id
+    try {
+      const topic = await getTopic(topicId)
+      if (!statusAtLeast(topic.status, "review_forum")) {
+        set.status = 400; return { message: `Cannot run scoring from status "${topic.status}". Run Forum first.` }
+      }
+    } catch { set.status = 404; return { message: "Topic not found" } }
+
+    const conflict = guardRunning(topicId)
+    if (conflict) { set.status = 409; return { message: "Pipeline already running", ...conflict } }
+
+    const { run_id, started_at } = trackRun(topicId, "score")
+
+    runScoringStage(topicId).then(() => {
       activeRuns.delete(topicId)
     }).catch(() => { activeRuns.delete(topicId) })
 

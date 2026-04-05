@@ -6,7 +6,7 @@ const TASK_CATEGORIES = [
   { key: "extraction", label: "Extraction", desc: "ClueProcessor" },
   { key: "enrichment", label: "Enrichment", desc: "Discovery, Enrichment, Forum Prep" },
   { key: "delta_updates", label: "Delta Updates", desc: "Delta reps, delta experts" },
-  { key: "forum_reasoning", label: "Forum Reasoning", desc: "Representatives, Forum, Devil's Advocate" },
+  { key: "forum_reasoning", label: "Forum Reasoning", desc: "Representatives, Forum Moderation" },
   { key: "expert_council", label: "Scenario Scoring", desc: "Evidence-based scenario probability ranking" },
 ]
 

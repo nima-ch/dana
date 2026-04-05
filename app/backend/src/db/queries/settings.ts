@@ -41,11 +41,10 @@ export interface AnalysisControls {
   smart_edit_max_chars: number
   // Forum
   forum_max_turns: number
-  forum_supervisor_check: number
   forum_compress_interval: number
   forum_speaking_budget: number
-  forum_min_speaking_floor: number
-  forum_persona_batch: number
+  forum_scenario_update_interval: number
+  forum_min_turns_multiplier: number
   // Agentic Loop defaults
   default_max_iterations: number
   default_context_warning: number
@@ -72,11 +71,10 @@ export const DEFAULT_CONTROLS: AnalysisControls = {
   smart_edit_max_chars: 15000,
   // Forum
   forum_max_turns: 60,
-  forum_supervisor_check: 20,
-  forum_compress_interval: 100,
+  forum_compress_interval: 10,
   forum_speaking_budget: 600,
-  forum_min_speaking_floor: 150,
-  forum_persona_batch: 4,
+  forum_scenario_update_interval: 5,
+  forum_min_turns_multiplier: 2.5,
   // Agentic Loop defaults
   default_max_iterations: 5,
   default_context_warning: 150000,

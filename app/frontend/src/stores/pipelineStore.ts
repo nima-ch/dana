@@ -21,7 +21,6 @@ export interface ActiveOperation {
 
 interface TopicPipelineState {
   items: PipelineFeedItem[]
-  liveStages: Record<string, number>
 }
 
 interface PipelineStore {
@@ -58,7 +57,7 @@ export const usePipelineStore = create<PipelineStore>((set) => ({
   resetTopic: (topicId) => set((state) => ({
     sessions: {
       ...state.sessions,
-      [topicId]: { items: [], liveStages: {} },
+      [topicId]: { items: [] },
     },
   })),
 
@@ -77,13 +76,9 @@ export const usePipelineStore = create<PipelineStore>((set) => ({
       const item = normalizeEvent(id, event)
 
       // Push to persistent session feed
-      const current = state.sessions[topicId] ?? { items: [], liveStages: {} }
-      const nextStages = { ...current.liveStages }
-      if (event.type === "progress") nextStages[event.stage] = event.pct
-      if (event.type === "stage_complete") nextStages[event.stage] = 100
+      const current = state.sessions[topicId] ?? { items: [] }
       const nextSession = {
         items: [...current.items.slice(-99), item],
-        liveStages: nextStages,
       }
 
       // Also push to active operation if it matches
