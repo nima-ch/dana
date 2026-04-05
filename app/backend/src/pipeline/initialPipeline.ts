@@ -1,7 +1,7 @@
 import { log } from "../utils/logger"
 import { runDiscoveryAgent } from "../agents/DiscoveryAgent"
 import { runEnrichmentAgent } from "../agents/EnrichmentAgent"
-import { runWeightCalculator } from "../agents/WeightCalculator"
+import { runForumPrep } from "../agents/WeightCalculator"
 import { runForumOrchestrator } from "../agents/ForumOrchestrator"
 import { runScenarioScorer } from "../agents/ScenarioScorer"
 import { writeCheckpoint, readCheckpoint, isStageComplete } from "./checkpointManager"
@@ -73,23 +73,23 @@ export async function runInitialPipeline(topicId: string, runId?: string): Promi
       emit(topicId, { type: "stage_complete", stage: "enrichment" })
     } else { log.enrichment("Stage 2/6: ENRICHMENT skipped (checkpoint)") }
 
-    // Stage 3: Weight Calculation
-    if (!isStageComplete(checkpoint, "weight")) {
-      log.weight("Stage 3/5: WEIGHT CALCULATION starting")
-      emit(topicId, { type: "progress", stage: "weight", pct: 0, msg: "Calculating weights..." })
+    // Stage 3: Forum Prep (persona generation + speaking budgets)
+    if (!isStageComplete(checkpoint, "forum_prep") && !isStageComplete(checkpoint, "weight")) {
+      log.weight("Stage 3/5: FORUM PREP starting")
+      emit(topicId, { type: "progress", stage: "forum_prep", pct: 0, msg: "Generating forum representatives..." })
 
-      await runWeightCalculator(
+      await runForumPrep(
         topicId,
         topic.title,
         topic.models.enrichment,
         runId,
-        (msg) => emit(topicId, { type: "progress", stage: "weight", pct: 0.5, msg })
+        (msg) => emit(topicId, { type: "progress", stage: "forum_prep", pct: 0.5, msg })
       )
 
       await writeCheckpoint(topicId, runId, { stage: "forum", step: 0 })
-      log.weight("Stage 3/5: WEIGHT CALCULATION complete")
-      emit(topicId, { type: "stage_complete", stage: "weight" })
-    } else { log.weight("Stage 3/5: WEIGHT CALCULATION skipped (checkpoint)") }
+      log.weight("Stage 3/5: FORUM PREP complete")
+      emit(topicId, { type: "stage_complete", stage: "forum_prep" })
+    } else { log.weight("Stage 3/5: FORUM PREP skipped (checkpoint)") }
 
     // Stage 4: Forum
     if (!isStageComplete(checkpoint, "forum")) {

@@ -25,7 +25,7 @@ export async function runForumPrepAgent(
   const parties = dbGetParties(topicId)
   const allClues = dbGetClues(topicId)
 
-  if (!representatives.length) throw new Error("No representatives found — run WeightCalculator first")
+  if (!representatives.length) throw new Error("No representatives found — run Forum Prep first")
 
   log.forum(`ForumPrepAgent: preparing ${representatives.length} representatives`)
   emitThink(topicId, "📋", "Forum preparation", `${representatives.length} representatives reading evidence…`)

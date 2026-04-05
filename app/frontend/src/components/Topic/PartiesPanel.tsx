@@ -214,7 +214,7 @@ function PartyCard({
 
           <div className="grid gap-4 lg:grid-cols-[auto_1fr]">
             <div className="rounded-lg border border-border bg-background p-3">
-              <RadarChart data={factors} size={140} color="hsl(var(--primary))" />
+              <RadarChart data={factors} size={140} />
             </div>
             <div className="space-y-2">
               {sortedFactors.map(([key, value]) => {

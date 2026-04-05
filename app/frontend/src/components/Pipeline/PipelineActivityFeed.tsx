@@ -7,12 +7,12 @@ import { cn } from "@/lib/utils"
 import { useSSE } from "@/hooks/useSSE"
 import { usePipelineStore, type PipelineFeedItem } from "@/stores/pipelineStore"
 
-export type PipelineStage = "discovery" | "enrichment" | "weight" | "forum" | "expert_council"
+export type PipelineStage = "discovery" | "enrichment" | "forum_prep" | "forum" | "expert_council"
 
 const STAGES: { key: PipelineStage; label: string }[] = [
   { key: "discovery", label: "Discovery" },
   { key: "enrichment", label: "Enrichment" },
-  { key: "weight", label: "Weight" },
+  { key: "forum_prep", label: "Forum Prep" },
   { key: "forum", label: "Forum" },
   { key: "expert_council", label: "Scenario Scoring" },
 ]
@@ -116,7 +116,7 @@ function getStageActions(status: PipelineStatus): Record<PipelineStage, StageAct
         : discoveryDone
           ? { action: "enrich", label: "Run", variant: "run" }
           : null,
-    weight: running
+    forum_prep: running
       ? null
       : allDone
         ? { action: "reanalyze", label: "Re-run all", variant: "rerun" }
@@ -134,10 +134,11 @@ function stagesCompletedByStatus(status: string): Set<PipelineStage> {
     enrichment: ["discovery"],
     review_enrichment: ["discovery", "enrichment"],
     weight: ["discovery", "enrichment"],
-    forum: ["discovery", "enrichment", "weight"],
-    expert_council: ["discovery", "enrichment", "weight", "forum"],
-    complete: ["discovery", "enrichment", "weight", "forum", "expert_council"],
-    stale: ["discovery", "enrichment", "weight", "forum", "expert_council"],
+    forum_prep: ["discovery", "enrichment"],
+    forum: ["discovery", "enrichment", "forum_prep"],
+    expert_council: ["discovery", "enrichment", "forum_prep", "forum"],
+    complete: ["discovery", "enrichment", "forum_prep", "forum", "expert_council"],
+    stale: ["discovery", "enrichment", "forum_prep", "forum", "expert_council"],
   }
   return new Set(map[status] ?? [])
 }
@@ -146,7 +147,8 @@ function stageRunningByStatus(status: string): PipelineStage | null {
   const map: Record<string, PipelineStage> = {
     discovery: "discovery",
     enrichment: "enrichment",
-    weight: "weight",
+    weight: "forum_prep",
+    forum_prep: "forum_prep",
     forum: "forum",
     expert_council: "expert_council",
   }
@@ -199,7 +201,7 @@ function FeedRow({ item }: { item: PipelineFeedItem }) {
       case "clue_discovered": return { icon: <Lightbulb size={14} />, title: item.title, detail: `${item.source} · relevance ${Math.round(item.relevance)}` }
       case "stage_complete": return { icon: <CircleDot size={14} />, title: `Stage complete · ${item.stage}`, detail: undefined }
       case "error": return { icon: <TriangleAlert size={14} />, title: "Error", detail: item.message }
-      case "weight_result": return { icon: <Search size={14} />, title: "Weight results", detail: item.parties.map(p => `${p.name} ${p.weight}`).join(" · ") }
+      case "weight_result": return { icon: <Search size={14} />, title: "Forum prep results", detail: item.parties.map(p => `${p.name} ${p.weight}`).join(" · ") }
       case "expert_assessment": return { icon: <Sparkles size={14} />, title: item.expert, detail: `${item.domain} · ${item.summary}` }
       case "verdict_content": return { icon: <AlertCircle size={14} />, title: "Verdict", detail: item.headline }
     }

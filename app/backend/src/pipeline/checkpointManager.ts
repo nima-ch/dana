@@ -3,7 +3,7 @@ import { mkdir } from "fs/promises"
 
 function getDataDir() { return process.env.DATA_DIR || "/home/nima/dana/data" }
 
-export type PipelineStage = "discovery" | "enrichment" | "weight" | "forum" | "expert_council" | "verdict"
+export type PipelineStage = "discovery" | "enrichment" | "weight" | "forum_prep" | "forum" | "expert_council" | "verdict"
 
 export interface Checkpoint {
   run_id: string
@@ -69,6 +69,6 @@ export function isTurnComplete(checkpoint: Checkpoint | null, turnId: string): b
 
 export function isStageComplete(checkpoint: Checkpoint | null, stage: PipelineStage): boolean {
   if (!checkpoint) return false
-  const order: PipelineStage[] = ["discovery", "enrichment", "weight", "forum", "expert_council", "verdict"]
+  const order: PipelineStage[] = ["discovery", "enrichment", "weight", "forum_prep", "forum", "expert_council", "verdict"]
   return order.indexOf(checkpoint.stage) > order.indexOf(stage)
 }

@@ -87,7 +87,7 @@ function eventMeta(item: PipelineFeedItem) {
     case "clue_discovered": return { icon: <Lightbulb size={14} />, title: item.title, detail: `${item.source} - relevance ${Math.round(item.relevance)}` }
     case "stage_complete": return { icon: <CircleDot size={14} />, title: `Stage complete: ${item.stage}`, detail: undefined }
     case "error": return { icon: <TriangleAlert size={14} />, title: "Error", detail: item.message }
-    case "weight_result": return { icon: <Search size={14} />, title: "Weight results", detail: item.parties.map(p => `${p.name} ${p.weight}`).join(" / ") }
+    case "weight_result": return { icon: <Search size={14} />, title: "Forum prep results", detail: item.parties.map(p => `${p.name} ${p.weight}`).join(" / ") }
     case "expert_assessment": return { icon: <Sparkles size={14} />, title: item.expert, detail: `${item.domain} - ${item.summary}` }
     case "verdict_content": return { icon: <AlertCircle size={14} />, title: "Verdict", detail: item.headline }
   }

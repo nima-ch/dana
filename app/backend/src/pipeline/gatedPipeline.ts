@@ -3,7 +3,7 @@ import { join } from "path"
 import { log } from "../utils/logger"
 import { runDiscoveryAgent } from "../agents/DiscoveryAgent"
 import { runEnrichmentAgent } from "../agents/EnrichmentAgent"
-import { runWeightCalculator } from "../agents/WeightCalculator"
+import { runForumPrep } from "../agents/WeightCalculator"
 import { runForumOrchestrator } from "../agents/ForumOrchestrator"
 import { runScenarioScorer } from "../agents/ScenarioScorer"
 import { writeCheckpoint, readCheckpoint, isStageComplete } from "./checkpointManager"
@@ -104,25 +104,25 @@ export async function runAnalyzeStages(topicId: string): Promise<{ run_id: strin
   const pipelineStart = Date.now()
 
   try {
-    // Stage 3: Weight
-    if (!isStageComplete(checkpoint, "weight")) {
-      log.weight("Stage 3/5: WEIGHT CALCULATION starting")
-      emit(topicId, { type: "progress", stage: "weight", pct: 0, msg: "Calculating weights..." })
+    // Stage 3: Forum Prep (persona generation + speaking budgets)
+    if (!isStageComplete(checkpoint, "forum_prep") && !isStageComplete(checkpoint, "weight")) {
+      log.weight("Stage 3/5: FORUM PREP starting")
+      emit(topicId, { type: "progress", stage: "forum_prep", pct: 0, msg: "Generating forum representatives..." })
 
-      await runWeightCalculator(
+      await runForumPrep(
         topicId, topic.title, topic.models.enrichment, runId,
-        (msg) => emit(topicId, { type: "progress", stage: "weight", pct: 0.5, msg })
+        (msg) => emit(topicId, { type: "progress", stage: "forum_prep", pct: 0.5, msg })
       )
 
       try {
-        const weightedParties = dbGetParties(topicId)
-        emit(topicId, { type: "weight_result", parties: weightedParties.map(p => ({ name: p.name, weight: p.weight })) })
+        const parties = dbGetParties(topicId)
+        emit(topicId, { type: "weight_result", parties: parties.map(p => ({ name: p.name, weight: p.weight })) })
       } catch { /* non-fatal */ }
 
       await writeCheckpoint(topicId, runId, { stage: "forum", step: 0 })
-      log.weight("Stage 3/5: WEIGHT CALCULATION complete")
-      emit(topicId, { type: "stage_complete", stage: "weight" })
-    } else { log.weight("Stage 3/5: WEIGHT skipped (checkpoint)") }
+      log.weight("Stage 3/5: FORUM PREP complete")
+      emit(topicId, { type: "stage_complete", stage: "forum_prep" })
+    } else { log.weight("Stage 3/5: FORUM PREP skipped (checkpoint)") }
 
     // Stage 4: Forum
     if (!isStageComplete(checkpoint, "forum")) {
@@ -192,22 +192,22 @@ export async function runReanalysis(topicId: string): Promise<{ run_id: string; 
   const pipelineStart = Date.now()
 
   try {
-    // Stage 3: Weight (re-score with updated parties/clues)
-    log.weight("Stage 3/5: WEIGHT CALCULATION starting (fresh)")
-    emit(topicId, { type: "progress", stage: "weight", pct: 0, msg: "Re-scoring party weights..." })
+    // Stage 3: Forum Prep (fresh persona generation)
+    log.weight("Stage 3/5: FORUM PREP starting (fresh)")
+    emit(topicId, { type: "progress", stage: "forum_prep", pct: 0, msg: "Generating forum representatives..." })
 
-    await runWeightCalculator(
+    await runForumPrep(
       topicId, topic.title, topic.models.enrichment, runId,
-      (msg) => emit(topicId, { type: "progress", stage: "weight", pct: 0.5, msg })
+      (msg) => emit(topicId, { type: "progress", stage: "forum_prep", pct: 0.5, msg })
     )
 
     try {
-      const weightedParties = dbGetParties(topicId)
-      emit(topicId, { type: "weight_result", parties: weightedParties.map(p => ({ name: p.name, weight: p.weight })) })
+      const parties = dbGetParties(topicId)
+      emit(topicId, { type: "weight_result", parties: parties.map(p => ({ name: p.name, weight: p.weight })) })
     } catch { /* non-fatal */ }
 
-    log.weight("Stage 3/5: WEIGHT CALCULATION complete")
-    emit(topicId, { type: "stage_complete", stage: "weight" })
+    log.weight("Stage 3/5: FORUM PREP complete")
+    emit(topicId, { type: "stage_complete", stage: "forum_prep" })
 
     // Stage 4: Forum (fresh session)
     await updateTopicStatus(topicId, "forum")

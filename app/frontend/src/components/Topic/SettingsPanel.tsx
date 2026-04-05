@@ -4,7 +4,7 @@ import { api, type Topic } from "../../api/client"
 const TASK_CATEGORIES = [
   { key: "data_gathering", label: "Data Gathering", desc: "Web search, HTTP fetch" },
   { key: "extraction", label: "Extraction", desc: "ClueProcessor" },
-  { key: "enrichment", label: "Enrichment", desc: "Discovery, Enrichment, Weight" },
+  { key: "enrichment", label: "Enrichment", desc: "Discovery, Enrichment, Forum Prep" },
   { key: "delta_updates", label: "Delta Updates", desc: "Delta reps, delta experts" },
   { key: "forum_reasoning", label: "Forum Reasoning", desc: "Representatives, Forum, Devil's Advocate" },
   { key: "expert_council", label: "Scenario Scoring", desc: "Evidence-based scenario probability ranking" },

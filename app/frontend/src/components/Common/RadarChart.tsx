@@ -1,7 +1,6 @@
 interface RadarProps {
   data: Record<string, number>
   size?: number
-  color?: string
 }
 
 const LABELS: Record<string, string> = {
@@ -12,7 +11,7 @@ const LABELS: Record<string, string> = {
   internal_legitimacy: "Legit",
 }
 
-export function RadarChart({ data, size = 80, color = "#3b82f6" }: RadarProps) {
+export function RadarChart({ data, size = 80 }: RadarProps) {
   const keys = Object.keys(data)
   const n = keys.length
   if (n < 3) return null
@@ -38,36 +37,34 @@ export function RadarChart({ data, size = 80, color = "#3b82f6" }: RadarProps) {
   const polyPoints = keys.map((k, i) => point(i, data[k])).map(([x, y]) => `${x},${y}`).join(" ")
 
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="text-muted-foreground">
       {/* Grid rings */}
       {rings.map(pct => {
         const pts = keys.map((_, i) => {
           const angle = (2 * Math.PI * i) / n - Math.PI / 2
           return `${cx + r * (pct / 100) * Math.cos(angle)},${cy + r * (pct / 100) * Math.sin(angle)}`
         }).join(" ")
-        return <polygon key={pct} points={pts} fill="none" stroke="#e5e7eb" strokeWidth="0.5" />
+        return <polygon key={pct} points={pts} fill="none" stroke="currentColor" strokeWidth="0.5" opacity={0.4} />
       })}
 
       {/* Spokes */}
       {keys.map((_, i) => {
         const [x, y] = point(i, 100)
-        return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="#e5e7eb" strokeWidth="0.5" />
+        return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="currentColor" strokeWidth="0.5" opacity={0.4} />
       })}
 
       {/* Data polygon */}
       <polygon
         points={polyPoints}
-        fill={color}
-        fillOpacity={0.15}
-        stroke={color}
-        strokeWidth="1.5"
+        className="fill-primary/25 stroke-primary"
+        strokeWidth="2"
         strokeLinejoin="round"
       />
 
       {/* Data points */}
       {keys.map((k, i) => {
         const [x, y] = point(i, data[k])
-        return <circle key={k} cx={x} cy={y} r="2" fill={color} />
+        return <circle key={k} cx={x} cy={y} r="2.5" className="fill-primary" />
       })}
 
       {/* Labels */}
@@ -81,7 +78,7 @@ export function RadarChart({ data, size = 80, color = "#3b82f6" }: RadarProps) {
             textAnchor="middle"
             dominantBaseline="middle"
             fontSize="6"
-            fill="#6b7280"
+            fill="currentColor"
           >
             {LABELS[k] ?? k.slice(0, 5)}
           </text>
