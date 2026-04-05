@@ -23,15 +23,20 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
       const now = new Date().toISOString()
       const timelineDate = b.timeline_date ?? now.slice(0, 10)
 
+      const sourceUrls = b.source_urls ?? (b.source_url ? [b.source_url] : [])
+      const sourceOutlets = b.source_outlets ?? []
+
       const version: ClueVersion = {
         v: 1, date: now,
         title: b.title,
-        raw_source: { url: b.source_url || "", fetched_at: now },
+        raw_source: { urls: sourceUrls, outlets: sourceOutlets, fetched_at: now },
         source_credibility: {
           score: b.credibility_score ?? 50,
           notes: b.credibility_notes ?? "",
           bias_flags: b.bias_flags ?? [],
-          origin_source: b.origin_source ?? { url: "", outlet: "", is_republication: false },
+          origin_sources: sourceUrls.map((url: string, i: number) => ({
+            url, outlet: sourceOutlets[i] ?? "", is_republication: false,
+          })),
         },
         bias_corrected_summary: b.bias_corrected_summary ?? "",
         relevance_score: b.relevance_score ?? 50,
@@ -116,8 +121,8 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
       bias_flags: cur.source_credibility.bias_flags,
       relevance: cur.relevance_score,
       parties: cur.party_relevance,
-      source_url: cur.raw_source?.url || "",
-      source_outlet: cur.source_credibility.origin_source?.outlet || "",
+      source_url: cur.raw_source?.urls?.[0] ?? cur.raw_source?.url ?? "",
+      source_outlet: cur.source_credibility.origin_sources?.[0]?.outlet ?? cur.source_credibility.origin_source?.outlet ?? "",
       date: cur.timeline_date,
       clue_type: cur.clue_type,
     }
@@ -173,14 +178,18 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
           for (const item of extracted) {
             const now = new Date().toISOString()
             const id = dbNextClueId(topicId)
+            const urls = item.source_urls ?? (item.source_url ? [item.source_url] : [])
+            const outlets = item.source_outlets ?? (item.source_outlet ? [item.source_outlet] : ["user"])
             const version: ClueVersion = {
               v: 1, date: now, title: item.title,
-              raw_source: { url: item.source_url || "", fetched_at: now },
+              raw_source: { urls, outlets, fetched_at: now },
               source_credibility: {
                 score: item.credibility ?? 50,
-                notes: `Source: ${item.source_outlet || "user-submitted"}`,
+                notes: `Source: ${outlets.join(", ") || "user-submitted"}`,
                 bias_flags: item.bias_flags ?? [],
-                origin_source: { url: item.source_url || "", outlet: item.source_outlet || "user", is_republication: false },
+                origin_sources: urls.map((url: string, i: number) => ({
+                  url, outlet: outlets[i] ?? "user", is_republication: false,
+                })),
               },
               bias_corrected_summary: item.summary,
               relevance_score: item.relevance ?? 70,
@@ -237,14 +246,18 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     for (const item of extracted) {
       const now = new Date().toISOString()
       const id = dbNextClueId(topicId)
+      const urls = item.source_urls ?? (item.source_url ? [item.source_url] : [])
+      const outlets = item.source_outlets ?? (item.source_outlet ? [item.source_outlet] : ["research"])
       const version: ClueVersion = {
         v: 1, date: now, title: item.title,
-        raw_source: { url: item.source_url || "", fetched_at: now },
+        raw_source: { urls, outlets, fetched_at: now },
         source_credibility: {
           score: item.credibility ?? 50,
           notes: `Research: ${b.query.slice(0, 60)}`,
           bias_flags: item.bias_flags ?? [],
-          origin_source: { url: item.source_url || "", outlet: item.source_outlet || "research", is_republication: false },
+          origin_sources: urls.map((url: string, i: number) => ({
+            url, outlet: outlets[i] ?? "research", is_republication: false,
+          })),
         },
         bias_corrected_summary: item.summary,
         relevance_score: item.relevance ?? 70,
@@ -338,12 +351,12 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
           id: `clue-${g.group_id}`,
           version: {
             v: 1, date: now, title: g.merged_title,
-            raw_source: { url: "", fetched_at: now },
+            raw_source: { urls: [], outlets: ["consolidated"], fetched_at: now },
             source_credibility: {
               score: g.merged_credibility ?? 60,
               notes: `Merged from ${g.source_clue_ids.length} clues`,
               bias_flags: g.merged_bias_flags ?? [],
-              origin_source: { url: "", outlet: "consolidated", is_republication: false },
+              origin_sources: [{ url: "", outlet: "consolidated", is_republication: false }],
             },
             bias_corrected_summary: g.merged_summary,
             relevance_score: g.merged_relevance ?? 70,

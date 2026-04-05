@@ -1,12 +1,10 @@
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { dbGetControls } from "../db/queries/settings"
 import { log } from "../utils/logger"
-import { dbCountClues, dbGetClues, dbUpdateClueVersion } from "../db/queries/clues"
+import { dbCountClues, dbGetClues } from "../db/queries/clues"
 import { dbGetParties, dbSetParties } from "../db/queries/parties"
 import { emit } from "../routes/stream"
-import { emitThink } from "../routes/stream"
 import { runPartyEnrichmentAgent } from "./PartyEnrichmentAgent"
-import { getDb } from "../db/database"
 import type { Party } from "./DiscoveryAgent"
 
 export interface EnrichmentOutput {
@@ -66,26 +64,23 @@ export async function runEnrichmentAgent(
           log.enrichment(`Profile updated: ${party.name}`)
         }
       }
-
-      for (const fc of result.factCheckResults) {
-        if (fc.verdict === "verified") factCheckTotals.verified++
-        else if (fc.verdict === "disputed") {
-          factCheckTotals.disputed++
-          applyFactCheckVerdict(topicId, fc.clue_title, fc.verdict, fc.note)
-        } else if (fc.verdict === "misleading") {
-          factCheckTotals.misleading++
-          applyFactCheckVerdict(topicId, fc.clue_title, fc.verdict, fc.note)
-        }
-      }
     }
   }
 
   // Save enriched party profiles back to DB
   dbSetParties(topicId, parties)
 
-  // Orphan fact-check pass: review clues with no party association
-  const orphanCount = runOrphanFactCheck(topicId, factCheckTotals)
-  factCheckTotals.skipped += orphanCount
+  // Tally fact-check verdicts from the DB (set by FactCheckAgent inline during enrichment)
+  const allClues = dbGetClues(topicId)
+  for (const c of allClues) {
+    const cur = c.versions.find(v => v.v === c.current)
+    if (!cur?.fact_check) { factCheckTotals.skipped++; continue }
+    const v = cur.fact_check.verdict
+    if (v === "verified") factCheckTotals.verified++
+    else if (v === "disputed") factCheckTotals.disputed++
+    else if (v === "misleading") factCheckTotals.misleading++
+    else factCheckTotals.skipped++
+  }
 
   const totalCluesAfter = dbCountClues(topicId)
 
@@ -128,36 +123,4 @@ function getExistingCluesForParty(topicId: string, partyId: string) {
     })
 }
 
-function applyFactCheckVerdict(topicId: string, clueTitle: string, verdict: string, note: string) {
-  try {
-    const allClues = dbGetClues(topicId)
-    const clue = allClues.find(c => {
-      const cur = c.versions.find(v => v.v === c.current)
-      return cur?.title === clueTitle
-    })
-    if (!clue) return
 
-    const status = verdict === "verified" ? "verified" : "disputed"
-    dbUpdateClueVersion(topicId, clue.id, {
-      change_note: `Fact-check: ${verdict} — ${note}`,
-    })
-    getDb().run(
-      "UPDATE clues SET status = ?, last_updated_at = ? WHERE id = ? AND topic_id = ?",
-      [status, new Date().toISOString(), clue.id, topicId]
-    )
-    emitThink(topicId, verdict === "disputed" ? "🔶" : "⚠️", `${verdict.toUpperCase()}: ${clueTitle.slice(0, 50)}`, note)
-    log.enrichment(`Fact-check applied: ${verdict} for "${clueTitle.slice(0, 50)}"`)
-  } catch (e) {
-    log.enrichment(`Failed to apply fact-check verdict: ${e}`)
-  }
-}
-
-function runOrphanFactCheck(topicId: string, totals: { skipped: number }) {
-  const allClues = dbGetClues(topicId)
-  const orphans = allClues.filter(c => {
-    const cur = c.versions.find(v => v.v === c.current)
-    return !cur?.party_relevance?.length
-  })
-  log.enrichment(`Orphan fact-check: ${orphans.length} clues with no party association (skipped)`)
-  return orphans.length
-}

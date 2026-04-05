@@ -1,11 +1,8 @@
 import { chatCompletionText } from "../../llm/proxyClient"
 import { resolvePrompt } from "../../llm/promptLoader"
 
-export interface OriginSource {
-  url: string
-  outlet: string
-  is_republication: boolean
-}
+import type { OriginSource } from "../../db/queries/clues"
+export type { OriginSource }
 
 export interface ClueProcessorOutput {
   extracted_content: string
@@ -13,7 +10,8 @@ export interface ClueProcessorOutput {
   bias_flags: string[]
   source_credibility_score: number
   credibility_notes: string
-  origin_source: OriginSource
+  origin_sources: OriginSource[]
+  origin_source?: OriginSource   // legacy compat
   key_points: string[]
   date_references: string[]
   relevance_score: number
@@ -86,7 +84,7 @@ Extract, bias-correct, and analyze this content for the topic context above.`
         bias_flags: [],
         source_credibility_score: 50,
         credibility_notes: "",
-        origin_source: { url: sourceUrl, outlet: "", is_republication: false },
+        origin_sources: [{ url: sourceUrl, outlet: "", is_republication: false }],
         key_points: [],
         date_references: [],
         relevance_score: parsed.relevance_score,
@@ -111,16 +109,23 @@ Extract, bias-correct, and analyze this content for the topic context above.`
   const jsonStr = jsonMatch ? jsonMatch[1] : text
 
   try {
-    const parsed = JSON.parse(jsonStr) as ClueProcessorOutput
-    const required: (keyof ClueProcessorOutput)[] = [
+    const parsed = JSON.parse(jsonStr) as any
+    const required = [
       "extracted_content", "bias_corrected_summary", "bias_flags",
-      "source_credibility_score", "credibility_notes", "origin_source",
+      "source_credibility_score", "credibility_notes",
       "key_points", "date_references", "relevance_score"
     ]
     for (const field of required) {
       if (parsed[field] === undefined) throw new Error(`Missing field: ${field}`)
     }
-    return parsed
+    // Normalize origin_source → origin_sources
+    if (!parsed.origin_sources && parsed.origin_source) {
+      parsed.origin_sources = [parsed.origin_source]
+    }
+    if (!parsed.origin_sources) {
+      parsed.origin_sources = [{ url: sourceUrl, outlet: "", is_republication: false }]
+    }
+    return parsed as ClueProcessorOutput
   } catch (e) {
     throw new Error(`ClueProcessor: failed to parse LLM response as JSON: ${e}\nResponse: ${text.slice(0, 200)}`)
   }

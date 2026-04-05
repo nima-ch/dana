@@ -1,14 +1,14 @@
 import { dbInsertClue, dbClueExists, dbNextClueId } from "../../db/queries/clues"
-import type { ClueVersion, Clue } from "../../db/queries/clues"
+import type { ClueVersion, Clue, ClueStatus, OriginSource } from "../../db/queries/clues"
 import type { ClueProcessorOutput } from "./clueProcessor"
 
-// Re-export types for compatibility
-export type { ClueVersion, Clue }
+export type { ClueVersion, Clue, ClueStatus, OriginSource }
 
 export interface StoreClueInput {
   topicId: string
   title: string
-  sourceUrl: string
+  sourceUrls: string[]
+  sourceOutlets?: string[]
   fetchedAt: string
   processed: ClueProcessorOutput
   partyRelevance?: string[]
@@ -17,6 +17,7 @@ export interface StoreClueInput {
   clueType?: string
   addedBy?: "auto" | "user"
   changeNote?: string
+  initialStatus?: ClueStatus
 }
 
 export interface StoreClueResult {
@@ -25,11 +26,15 @@ export interface StoreClueResult {
   status: "created" | "duplicate"
 }
 
+function domainOf(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, "") } catch { return url }
+}
+
 export async function storeClue(input: StoreClueInput): Promise<StoreClueResult> {
   const timelineDate = input.timelineDate || input.processed.date_references[0] || new Date().toISOString().slice(0, 10)
+  const primaryUrl = input.sourceUrls[0] ?? ""
 
-  // Check for duplicate: same URL + same timeline_date
-  const existingId = dbClueExists(input.topicId, input.sourceUrl, timelineDate)
+  const existingId = dbClueExists(input.topicId, primaryUrl, timelineDate)
   if (existingId) {
     return { clue_id: existingId, version: 1, status: "duplicate" }
   }
@@ -37,19 +42,30 @@ export async function storeClue(input: StoreClueInput): Promise<StoreClueResult>
   const id = dbNextClueId(input.topicId)
   const now = new Date().toISOString()
 
+  const outlets = input.sourceOutlets?.length
+    ? input.sourceOutlets
+    : input.sourceUrls.map(u => domainOf(u))
+
+  const originSources: OriginSource[] = input.sourceUrls.map((url, i) => ({
+    url,
+    outlet: outlets[i] ?? domainOf(url),
+    is_republication: false,
+  }))
+
   const version: ClueVersion = {
     v: 1,
     date: now,
     title: input.title,
     raw_source: {
-      url: input.sourceUrl,
+      urls: input.sourceUrls,
+      outlets,
       fetched_at: input.fetchedAt,
     },
     source_credibility: {
       score: input.processed.source_credibility_score,
       notes: input.processed.credibility_notes,
       bias_flags: input.processed.bias_flags,
-      origin_source: input.processed.origin_source,
+      origin_sources: originSources,
     },
     bias_corrected_summary: input.processed.bias_corrected_summary,
     relevance_score: input.processed.relevance_score,
@@ -67,7 +83,7 @@ export async function storeClue(input: StoreClueInput): Promise<StoreClueResult>
     added_at: now,
     last_updated_at: now,
     added_by: input.addedBy || "auto",
-    status: "verified",
+    status: input.initialStatus ?? "pending",
     version,
   })
 

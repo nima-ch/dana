@@ -21,7 +21,6 @@ export interface PartyEnrichmentResult {
   partyId: string
   storedClueIds: string[]
   profileUpdate: Partial<Party> | null
-  factCheckResults: { clue_title: string; verdict: string; note: string }[]
 }
 
 function domainOf(url: string): string {
@@ -78,25 +77,26 @@ export async function runPartyEnrichmentAgent(
 
   const storeClueHandler: CustomToolHandler = async (args) => {
     try {
-      const primaryUrl = (args.source_urls as string[])?.[0] ?? ""
-      const outlets = (args.source_outlets as string[]) ?? [domainOf(primaryUrl)]
+      const sourceUrls = (args.source_urls as string[]) ?? []
+      const sourceOutlets = (args.source_outlets as string[]) ?? sourceUrls.map(u => domainOf(u))
 
       const result = await storeClue({
         topicId,
         title: String(args.title ?? ""),
-        sourceUrl: primaryUrl,
+        sourceUrls,
+        sourceOutlets,
         fetchedAt: new Date().toISOString(),
         processed: {
           extracted_content: "",
           bias_corrected_summary: String(args.summary ?? ""),
           bias_flags: (args.bias_flags as string[]) ?? [],
           source_credibility_score: Number(args.credibility ?? 50),
-          credibility_notes: `Sources: ${outlets.join(", ")}`,
-          origin_source: {
-            url: primaryUrl,
-            outlet: outlets[0] ?? "",
+          credibility_notes: `Sources: ${sourceOutlets.join(", ")}`,
+          origin_sources: sourceUrls.map((url, i) => ({
+            url,
+            outlet: sourceOutlets[i] ?? domainOf(url),
             is_republication: false,
-          },
+          })),
           key_points: (args.key_points as string[]) ?? [],
           date_references: [String(args.date ?? today)],
           relevance_score: Number(args.relevance ?? 50),
@@ -107,13 +107,44 @@ export async function runPartyEnrichmentAgent(
         clueType: String(args.clue_type ?? "fact"),
         addedBy: "auto",
         changeNote: `Enrichment agent: ${party.name}`,
+        initialStatus: "pending",
       })
 
       if (result.status === "created") {
         storedClueIds.push(result.clue_id)
         emitThink(topicId, "📌", `Clue stored: ${String(args.title ?? "").slice(0, 50)}`, `${result.clue_id} · cred=${args.credibility}`)
         log.enrichment(`  Clue stored: ${result.clue_id} "${String(args.title ?? "").slice(0, 50)}"`)
-        return JSON.stringify({ status: "created", clue_id: result.clue_id })
+
+        // Run adversarial fact-check on the distilled clue
+        try {
+          const { runFactCheck } = await import("./FactCheckAgent")
+          const verdict = await runFactCheck({
+            topicId,
+            clueId: result.clue_id,
+            title: String(args.title ?? ""),
+            summary: String(args.summary ?? ""),
+            sourceUrls,
+            sourceOutlets,
+            keyPoints: (args.key_points as string[]) ?? [],
+            biasFlags: (args.bias_flags as string[]) ?? [],
+            credibility: Number(args.credibility ?? 50),
+            partyContext: party.name,
+            topicTitle: title,
+            topicDescription: description,
+            model: effectiveModel,
+          })
+          log.enrichment(`  Fact-check: ${verdict.verdict} for "${String(args.title ?? "").slice(0, 40)}"`)
+          emitThink(
+            topicId,
+            verdict.verdict === "verified" ? "✅" : verdict.verdict === "disputed" ? "🔶" : "⚠️",
+            `${verdict.verdict.toUpperCase()}: ${String(args.title ?? "").slice(0, 50)}`,
+            verdict.bias_analysis.slice(0, 100),
+          )
+          return JSON.stringify({ status: "created", clue_id: result.clue_id, fact_check: verdict.verdict, bias: verdict.bias_analysis.slice(0, 200) })
+        } catch (fcErr) {
+          log.enrichment(`  Fact-check failed for ${result.clue_id}: ${fcErr}`)
+          return JSON.stringify({ status: "created", clue_id: result.clue_id, fact_check: "skipped" })
+        }
       } else {
         log.enrichment(`  Duplicate clue skipped: ${result.clue_id}`)
         return JSON.stringify({ status: "duplicate", clue_id: result.clue_id, message: "This clue already exists" })
@@ -149,19 +180,17 @@ export async function runPartyEnrichmentAgent(
     customTools: { store_clue: storeClueHandler },
     messages: [
       { role: "system", content: config.content },
-      { role: "user", content: `Begin your research on ${party.name}. Use the tools to search, fetch, and store clues. Output your final profile update and fact-check results as JSON when done.${corpusContext}` },
+      { role: "user", content: `Begin your research on ${party.name}. Use the tools to search, fetch, and store clues. Each clue will be independently fact-checked. Output your final profile update as JSON when done.${corpusContext}` },
     ],
   })
 
   let profileUpdate: Partial<Party> | null = null
-  let factCheckResults: { clue_title: string; verdict: string; note: string }[] = []
 
   try {
     const match = raw.match(/\{[\s\S]+\}/)
     if (match) {
       const parsed = JSON.parse(match[0])
       profileUpdate = parsed.profile_update ?? null
-      factCheckResults = parsed.fact_check_results ?? []
     }
   } catch (e) {
     log.enrichment(`PartyEnrichmentAgent: failed to parse final output for ${party.name}: ${e}`)
@@ -174,6 +203,5 @@ export async function runPartyEnrichmentAgent(
     partyId: party.id,
     storedClueIds,
     profileUpdate,
-    factCheckResults,
   }
 }

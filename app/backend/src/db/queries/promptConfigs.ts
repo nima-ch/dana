@@ -20,6 +20,7 @@ export const BUILTIN_DEFAULTS: Record<string, PromptDefault> = {
   // Agentic tasks — tools + balanced
   "discovery/agentic-research":  { tools: ["web_search", "fetch_url"], task_profile: "balanced" },
   "enrichment/agentic-enrich":   { tools: ["web_search", "fetch_url"], task_profile: "balanced" },
+  "enrichment/fact-check":       { tools: ["web_search", "fetch_url"], task_profile: "balanced" },
   "party-intelligence/edit":     { tools: ["web_search", "fetch_url"], task_profile: "balanced" },
   "clue-extractor/edit":         { tools: ["web_search", "fetch_url"], task_profile: "balanced" },
 

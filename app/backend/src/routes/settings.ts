@@ -17,6 +17,7 @@ const CONTROL_RANGES: Record<keyof AnalysisControls, [number, number]> = {
   enrichment_iterations: [2, 25],
   enrichment_context_warning: [50000, 200000],
   enrichment_batch_size: [1, 8],
+  fact_check_iterations: [1, 8],
   smart_extract_url_limit: [3, 30],
   research_search_queries: [2, 20],
   // Smart Edit

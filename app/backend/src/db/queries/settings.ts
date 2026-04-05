@@ -33,6 +33,7 @@ export interface AnalysisControls {
   enrichment_iterations: number
   enrichment_context_warning: number
   enrichment_batch_size: number
+  fact_check_iterations: number
   smart_extract_url_limit: number
   research_search_queries: number
   // Smart Edit
@@ -63,6 +64,7 @@ export const DEFAULT_CONTROLS: AnalysisControls = {
   enrichment_iterations: 8,
   enrichment_context_warning: 100000,
   enrichment_batch_size: 2,
+  fact_check_iterations: 3,
   smart_extract_url_limit: 10,
   research_search_queries: 4,
   // Smart Edit

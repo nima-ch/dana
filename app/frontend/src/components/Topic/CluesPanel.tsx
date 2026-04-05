@@ -62,6 +62,33 @@ function labelBias(flag: string) {
   return flag.replace(/_/g, " ")
 }
 
+const VERDICT_STYLES: Record<string, { bg: string; text: string; label: string }> = {
+  verified: { bg: "bg-emerald-500/10 border-emerald-500/30", text: "text-emerald-700 dark:text-emerald-400", label: "Verified" },
+  disputed: { bg: "bg-amber-500/10 border-amber-500/30", text: "text-amber-700 dark:text-amber-400", label: "Disputed" },
+  misleading: { bg: "bg-red-500/10 border-red-500/30", text: "text-red-700 dark:text-red-400", label: "Misleading" },
+  unverifiable: { bg: "bg-zinc-500/10 border-zinc-500/30", text: "text-zinc-600 dark:text-zinc-400", label: "Unverifiable" },
+  pending: { bg: "bg-blue-500/10 border-blue-500/30", text: "text-blue-700 dark:text-blue-400", label: "Pending" },
+}
+
+function VerdictBadge({ status, verdict }: { status: string; verdict?: string }) {
+  const key = verdict ?? status
+  const style = VERDICT_STYLES[key] ?? VERDICT_STYLES.pending
+  return <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium", style.bg, style.text)}>{style.label}</span>
+}
+
+function getSourceUrls(current: any): string[] {
+  if (current.raw_source?.urls?.length) return current.raw_source.urls
+  const legacy = current.raw_source?.url || current.source_url || current.source_credibility?.origin_source?.url
+  return legacy ? [legacy] : []
+}
+
+function getSourceOutlets(current: any): string[] {
+  if (current.raw_source?.outlets?.length) return current.raw_source.outlets
+  if (current.source_credibility?.origin_sources?.length) return current.source_credibility.origin_sources.map((s: any) => s.outlet).filter(Boolean)
+  const legacy = current.source_credibility?.origin_source?.outlet
+  return legacy ? [legacy] : []
+}
+
 function ClueCard({ clue, expanded, onToggleExpanded, onEdit, onSmartEdit, onDelete }: {
   clue: Clue
   expanded: boolean
@@ -73,12 +100,14 @@ function ClueCard({ clue, expanded, onToggleExpanded, onEdit, onSmartEdit, onDel
   const current = getCurrent(clue)
   const credibility = Number(current.source_credibility?.score ?? 0)
   const relevance = Math.round(current.relevance_score ?? 0)
-  const sourceOutlet = current.source_credibility?.origin_source?.outlet
-  const sourceUrl = current.source_url || current.source_credibility?.origin_source?.url
+  const sourceUrls = getSourceUrls(current)
+  const sourceOutlets = getSourceOutlets(current)
   const biasNotes = current.source_credibility?.notes
   const biasFlags = current.source_credibility?.bias_flags ?? []
   const keyPoints = current.key_points ?? []
   const timelineDate = safeText(current.timeline_date)
+  const factCheck = current.fact_check
+  const verdict = factCheck?.verdict ?? (clue.status === "verified" ? undefined : clue.status)
 
   return (
     <div className="rounded-lg border border-border bg-card transition-colors">
@@ -88,6 +117,7 @@ function ClueCard({ clue, expanded, onToggleExpanded, onEdit, onSmartEdit, onDel
           <div className="flex items-center gap-2">
             <CredibilityRing score={credibility} size={20} />
             <span className="truncate text-sm font-medium">{current.title}</span>
+            <VerdictBadge status={clue.status} verdict={verdict} />
             <Badge variant="secondary">{current.clue_type ?? "UNKNOWN"}</Badge>
             <Badge variant="outline">Rel {relevance}</Badge>
           </div>
@@ -100,6 +130,24 @@ function ClueCard({ clue, expanded, onToggleExpanded, onEdit, onSmartEdit, onDel
       {expanded && (
         <div className="space-y-3 border-t border-border/60 px-4 pb-4 pt-4">
           <p className="whitespace-pre-wrap text-sm text-muted-foreground">{current.bias_corrected_summary || current.summary || "No summary provided."}</p>
+
+          {factCheck && (
+            <div className={cn("rounded-lg border p-3 space-y-2", VERDICT_STYLES[factCheck.verdict]?.bg ?? "bg-muted/50")}>
+              <div className="flex items-center gap-2">
+                <VerdictBadge status={clue.status} verdict={factCheck.verdict} />
+                <span className="text-xs font-medium">Fact-Check Analysis</span>
+              </div>
+              {factCheck.bias_analysis && (
+                <div><div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Bias Analysis</div><p className="text-xs text-muted-foreground mt-0.5">{factCheck.bias_analysis}</p></div>
+              )}
+              {factCheck.cui_bono && (
+                <div><div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Cui Bono</div><p className="text-xs text-muted-foreground mt-0.5">{factCheck.cui_bono}</p></div>
+              )}
+              {factCheck.counter_evidence && factCheck.verdict !== "verified" && (
+                <div><div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Counter-Evidence</div><p className="text-xs text-muted-foreground mt-0.5">{factCheck.counter_evidence}</p></div>
+              )}
+            </div>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="rounded-lg border border-border bg-background p-3">
@@ -131,14 +179,22 @@ function ClueCard({ clue, expanded, onToggleExpanded, onEdit, onSmartEdit, onDel
             {biasFlags.length > 0 && biasFlags.map((flag: string) => <Badge key={flag} variant="destructive" className="text-[10px]">{labelBias(flag)}</Badge>)}
           </div>
 
-          {(sourceOutlet || sourceUrl || biasNotes || timelineDate) && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {sourceOutlet && <div className="rounded-lg border border-border bg-background p-3"><div className="text-xs text-muted-foreground">Source</div><div className="mt-1 text-sm">{sourceOutlet}</div></div>}
-              {sourceUrl && <div className="rounded-lg border border-border bg-background p-3"><div className="text-xs text-muted-foreground">URL</div><a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="mt-1 block truncate text-sm text-primary underline">{sourceUrl}</a></div>}
-              {biasNotes && <div className="rounded-lg border border-border bg-background p-3"><div className="text-xs text-muted-foreground">Bias notes</div><div className="mt-1 text-sm text-muted-foreground">{biasNotes}</div></div>}
-              {timelineDate && <div className="rounded-lg border border-border bg-background p-3"><div className="text-xs text-muted-foreground">Date</div><div className="mt-1 text-sm">{timelineDate}</div></div>}
-            </div>
-          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+            {sourceOutlets.length > 0 && (
+              <div className="rounded-lg border border-border bg-background p-3">
+                <div className="text-xs text-muted-foreground">Sources ({sourceOutlets.length})</div>
+                <div className="mt-1 space-y-0.5">{sourceOutlets.map((o: string, i: number) => <div key={i} className="text-sm">{o}</div>)}</div>
+              </div>
+            )}
+            {sourceUrls.length > 0 && (
+              <div className="rounded-lg border border-border bg-background p-3">
+                <div className="text-xs text-muted-foreground">URLs ({sourceUrls.length})</div>
+                <div className="mt-1 space-y-0.5">{sourceUrls.map((url: string, i: number) => <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="block truncate text-sm text-primary underline">{url}</a>)}</div>
+              </div>
+            )}
+            {biasNotes && <div className="rounded-lg border border-border bg-background p-3"><div className="text-xs text-muted-foreground">Bias notes</div><div className="mt-1 text-sm text-muted-foreground">{biasNotes}</div></div>}
+            {timelineDate && <div className="rounded-lg border border-border bg-background p-3"><div className="text-xs text-muted-foreground">Date</div><div className="mt-1 text-sm">{timelineDate}</div></div>}
+          </div>
 
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={onEdit}><PencilLine className="size-4" /> Edit</Button>

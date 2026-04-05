@@ -93,10 +93,16 @@ function applySchema(db: Database): void {
       clue_type TEXT NOT NULL DEFAULT 'event',
       change_note TEXT NOT NULL DEFAULT '',
       key_points TEXT NOT NULL DEFAULT '[]',
+      fact_check TEXT NOT NULL DEFAULT '{}',
       PRIMARY KEY (clue_id, topic_id, version),
       FOREIGN KEY (clue_id, topic_id) REFERENCES clues(id, topic_id) ON DELETE CASCADE
     )
   `)
+
+  // Migration: add fact_check column if missing
+  try {
+    db.run(`ALTER TABLE clue_versions ADD COLUMN fact_check TEXT NOT NULL DEFAULT '{}'`)
+  } catch { /* column already exists */ }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS states (

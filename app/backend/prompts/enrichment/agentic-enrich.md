@@ -22,29 +22,27 @@ DESCRIPTION: {description}
 
 Conduct a thorough investigation of this party across three phases:
 
-### Phase 1: Capability Facts (~6 tool calls)
+### Phase 1: Capability Facts
 Search for verifiable FACTS about this party's capabilities, resources, and policy positions:
 - Specific metrics: production figures, troop counts, reserves, market share
 - Policy positions: treaties signed, sanctions imposed, decisions announced
 - Structural power: infrastructure, alliances, leverage points
 - Use `store_clue` with clue_type "fact" for each solid finding
+- **Always include ALL source URLs** you drew from in the `source_urls` array — every clue should cite every article that contributed to it
 
-### Phase 2: Recent News (~5 tool calls)
+### Phase 2: Recent News
 Search for developments in the last 90 days affecting this party:
 - Recent decisions, statements, military actions
 - Events that shift their position or capabilities
 - Include month and year ({current_month} {year}) in all news queries
 - Use `store_clue` with clue_type "news" or "event" for each finding
+- **Synthesize from multiple sources** — search, fetch 2-3 articles on the same topic, then store ONE distilled clue with ALL source URLs
 
-### Phase 3: Fact-Check (~4 tool calls)
-Review what you've found and the existing clues:
-- If any claim seems single-sourced, biased, or suspicious, search for counter-evidence
-- Cross-reference key claims across multiple sources
-- Note any clues that should be marked as "disputed" or "misleading"
+NOTE: Each clue you store will be automatically fact-checked by an independent adversarial agent. You will receive the verdict in the tool response. Focus on thorough research and multi-source clues — the fact-checking is handled for you.
 
 ## Budget
 
-You have approximately 15 tool calls total. Prioritize quality over quantity — 2-4 well-sourced clues are better than 8 shallow ones.
+Prioritize quality over quantity — 2-4 well-sourced, multi-source clues are better than 8 shallow single-source ones.
 
 ## Rules
 
@@ -66,10 +64,5 @@ After completing your research, output a final JSON object (no markdown fences):
     "circle": { "visible": ["<updated>"], "shadow": ["<updated>"] },
     "vulnerabilities": ["<updated>"],
     "stance": "<updated stance>"
-  },
-  "fact_check_results": [
-    { "clue_title": "<existing clue that was reviewed>", "verdict": "<verified|disputed|misleading>", "note": "<reason>" }
-  ]
+  }
 }
-
-If no existing clues needed fact-checking, return an empty fact_check_results array.

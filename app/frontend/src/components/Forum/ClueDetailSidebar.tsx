@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react"
 
+interface OriginSource { url: string; outlet: string; is_republication: boolean }
+
 interface ClueVersion {
   v: number
   title: string
   bias_corrected_summary: string
-  source_credibility: { score: number; notes: string; bias_flags: string[]; origin_source: { url: string; outlet: string; is_republication: boolean } }
+  source_credibility: { score: number; notes: string; bias_flags: string[]; origin_sources?: OriginSource[]; origin_source?: OriginSource }
   relevance_score: number
   timeline_date: string
   key_points: string[]
@@ -54,12 +56,16 @@ export function ClueDetailSidebar({ topicId, clueId, onClose }: { topicId: strin
               </div>
             )}
             <p className="text-sm text-gray-700 leading-relaxed">{cur.bias_corrected_summary}</p>
-            {cur.source_credibility.origin_source.outlet && (
-              <p className="text-xs text-gray-400">
-                Origin: <span className="font-medium">{cur.source_credibility.origin_source.outlet}</span>
-                {cur.source_credibility.origin_source.is_republication && " (republication)"}
-              </p>
-            )}
+            {(() => {
+              const sources = cur.source_credibility.origin_sources ?? (cur.source_credibility.origin_source ? [cur.source_credibility.origin_source] : [])
+              const outlets = sources.filter(s => s.outlet)
+              if (!outlets.length) return null
+              return (
+                <p className="text-xs text-gray-400">
+                  Sources: {outlets.map((s, i) => <span key={i} className="font-medium">{s.outlet}{i < outlets.length - 1 ? ", " : ""}</span>)}
+                </p>
+              )
+            })()}
             {cur.key_points.length > 0 && (
               <div>
                 <p className="text-xs font-medium text-gray-600 mb-1">Key points:</p>

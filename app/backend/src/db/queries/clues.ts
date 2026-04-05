@@ -1,23 +1,38 @@
 import { getDb } from "../database"
 
+export interface OriginSource {
+  url: string
+  outlet: string
+  is_republication: boolean
+}
+
+export interface FactCheckResult {
+  verdict: "verified" | "disputed" | "misleading" | "unverifiable"
+  bias_analysis: string
+  counter_evidence: string
+  cui_bono: string
+  adjusted_credibility: number
+  adjusted_bias_flags: string[]
+  checked_at: string
+}
+
 export interface ClueVersion {
   v: number
   date: string
   title: string
   raw_source: {
-    url: string
+    urls: string[]
+    outlets: string[]
     fetched_at: string
+    url?: string              // legacy single-source compat
     raw_text_file?: string
   }
   source_credibility: {
     score: number
     notes: string
     bias_flags: string[]
-    origin_source: {
-      url: string
-      outlet: string
-      is_republication: boolean
-    }
+    origin_sources: OriginSource[]
+    origin_source?: OriginSource  // legacy compat
   }
   bias_corrected_summary: string
   relevance_score: number
@@ -27,7 +42,10 @@ export interface ClueVersion {
   clue_type: string
   change_note: string
   key_points: string[]
+  fact_check?: FactCheckResult
 }
+
+export type ClueStatus = "raw" | "processing" | "pending" | "verified" | "disputed" | "misleading" | "unverifiable"
 
 export interface Clue {
   id: string
@@ -36,7 +54,7 @@ export interface Clue {
   last_updated_at: string
   added_by: "auto" | "user" | "research" | "cleanup"
   versions: ClueVersion[]
-  status: "raw" | "processing" | "verified" | "disputed"
+  status: ClueStatus
 }
 
 type ClueRow = {
@@ -65,15 +83,34 @@ type ClueVersionRow = {
   clue_type: string
   change_note: string
   key_points: string
+  fact_check: string
+}
+
+function migrateRawSource(raw: any): ClueVersion["raw_source"] {
+  if (raw.urls) return raw
+  // Legacy: single url → array
+  return { urls: raw.url ? [raw.url] : [], outlets: [], fetched_at: raw.fetched_at ?? "", raw_text_file: raw.raw_text_file }
+}
+
+function migrateCredibility(cred: any): ClueVersion["source_credibility"] {
+  if (cred.origin_sources) return cred
+  // Legacy: single origin_source → array
+  const sources: OriginSource[] = cred.origin_source ? [cred.origin_source] : []
+  return { score: cred.score, notes: cred.notes, bias_flags: cred.bias_flags ?? [], origin_sources: sources }
 }
 
 function versionRowToClueVersion(row: ClueVersionRow): ClueVersion {
+  const rawSource = migrateRawSource(JSON.parse(row.raw_source))
+  const cred = migrateCredibility(JSON.parse(row.source_credibility))
+  const kp = JSON.parse(row.key_points)
+  const fc = row.fact_check ? JSON.parse(row.fact_check) : undefined
+  const factCheck = fc?.verdict ? fc as FactCheckResult : undefined
   return {
     v: row.version,
     date: row.date,
     title: row.title,
-    raw_source: JSON.parse(row.raw_source),
-    source_credibility: JSON.parse(row.source_credibility),
+    raw_source: rawSource,
+    source_credibility: cred,
     bias_corrected_summary: row.bias_corrected_summary,
     relevance_score: row.relevance_score,
     party_relevance: JSON.parse(row.party_relevance),
@@ -81,7 +118,8 @@ function versionRowToClueVersion(row: ClueVersionRow): ClueVersion {
     timeline_date: row.timeline_date,
     clue_type: row.clue_type,
     change_note: row.change_note,
-    key_points: JSON.parse(row.key_points),
+    key_points: kp,
+    fact_check: factCheck,
   }
 }
 
@@ -174,12 +212,12 @@ export function dbInsertClue(topicId: string, clue: Omit<Clue, "versions"> & { v
     )
     const v = clue.version
     db.run(
-      `INSERT INTO clue_versions (clue_id, topic_id, version, date, title, raw_source, source_credibility, bias_corrected_summary, relevance_score, party_relevance, domain_tags, timeline_date, clue_type, change_note, key_points)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO clue_versions (clue_id, topic_id, version, date, title, raw_source, source_credibility, bias_corrected_summary, relevance_score, party_relevance, domain_tags, timeline_date, clue_type, change_note, key_points, fact_check)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [clue.id, topicId, v.v, v.date, v.title, JSON.stringify(v.raw_source),
        JSON.stringify(v.source_credibility), v.bias_corrected_summary, v.relevance_score,
        JSON.stringify(v.party_relevance), JSON.stringify(v.domain_tags), v.timeline_date,
-       v.clue_type, v.change_note, JSON.stringify(v.key_points)]
+       v.clue_type, v.change_note, JSON.stringify(v.key_points), JSON.stringify(v.fact_check ?? {})]
     )
   })
   txn()
@@ -193,12 +231,12 @@ export function dbUpdateClueVersion(topicId: string, clueId: string, patch: Part
   const updated = { ...existing, ...patch }
   const db = getDb()
   db.run(
-    `UPDATE clue_versions SET title=?, bias_corrected_summary=?, relevance_score=?, party_relevance=?, domain_tags=?, timeline_date=?, clue_type=?, change_note=?, key_points=?, source_credibility=?
+    `UPDATE clue_versions SET title=?, bias_corrected_summary=?, relevance_score=?, party_relevance=?, domain_tags=?, timeline_date=?, clue_type=?, change_note=?, key_points=?, source_credibility=?, fact_check=?
      WHERE clue_id=? AND topic_id=? AND version=?`,
     [updated.title, updated.bias_corrected_summary, updated.relevance_score,
      JSON.stringify(updated.party_relevance), JSON.stringify(updated.domain_tags),
      updated.timeline_date, updated.clue_type, updated.change_note, JSON.stringify(updated.key_points),
-     JSON.stringify(updated.source_credibility), clueId, topicId, clue.current]
+     JSON.stringify(updated.source_credibility), JSON.stringify(updated.fact_check ?? {}), clueId, topicId, clue.current]
   )
   db.run(
     "UPDATE clues SET last_updated_at=? WHERE id=? AND topic_id=?",
@@ -222,12 +260,12 @@ export function dbReplaceClues(topicId: string, clues: Clue[]): void {
       )
       for (const v of clue.versions) {
         db.run(
-          `INSERT INTO clue_versions (clue_id, topic_id, version, date, title, raw_source, source_credibility, bias_corrected_summary, relevance_score, party_relevance, domain_tags, timeline_date, clue_type, change_note, key_points)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO clue_versions (clue_id, topic_id, version, date, title, raw_source, source_credibility, bias_corrected_summary, relevance_score, party_relevance, domain_tags, timeline_date, clue_type, change_note, key_points, fact_check)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [clue.id, topicId, v.v, v.date, v.title, JSON.stringify(v.raw_source),
            JSON.stringify(v.source_credibility), v.bias_corrected_summary, v.relevance_score,
            JSON.stringify(v.party_relevance), JSON.stringify(v.domain_tags), v.timeline_date,
-           v.clue_type, v.change_note, JSON.stringify(v.key_points)]
+           v.clue_type, v.change_note, JSON.stringify(v.key_points), JSON.stringify(v.fact_check ?? {})]
         )
       }
     }
@@ -248,14 +286,16 @@ export function dbNextClueId(topicId: string): string {
 }
 
 export function dbClueExists(topicId: string, sourceUrl: string, timelineDate: string): string | null {
+  if (!sourceUrl) return null
   type Row = { id: string }
-  const row = getDb().query<Row, [string, string, string]>(`
+  // Check both new (urls array) and legacy (url string) formats
+  const row = getDb().query<Row, [string, string, string, string]>(`
     SELECT c.id FROM clues c
     JOIN clue_versions cv ON cv.clue_id = c.id AND cv.topic_id = c.topic_id AND cv.version = c.current_version
     WHERE c.topic_id = ?
-      AND JSON_EXTRACT(cv.raw_source, '$.url') = ?
+      AND (JSON_EXTRACT(cv.raw_source, '$.urls[0]') = ? OR JSON_EXTRACT(cv.raw_source, '$.url') = ?)
       AND cv.timeline_date = ?
     LIMIT 1
-  `).get(topicId, sourceUrl, timelineDate)
+  `).get(topicId, sourceUrl, sourceUrl, timelineDate)
   return row?.id ?? null
 }
