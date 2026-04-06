@@ -72,6 +72,7 @@ export interface ForumSession {
   rounds: { round: number; type: string; turns: ForumTurn[] }[]
   scenarios: ForumScenario[]
   scenario_summary?: ScenarioSummary
+  debate_summary?: string
 }
 
 export interface Representative {
@@ -128,7 +129,7 @@ export function dbGetForumSession(topicId: string, sessionId: string): ForumSess
   const db = getDb()
   type SessionRow = {
     id: string; topic_id: string; version: number; type: string; status: string
-    started_at: string; completed_at: string | null
+    started_at: string; completed_at: string | null; debate_summary: string | null
   }
   const sessionRow = db.query<SessionRow, [string, string]>(
     "SELECT * FROM forum_sessions WHERE topic_id = ? AND id = ?"
@@ -210,6 +211,7 @@ export function dbGetForumSession(topicId: string, sessionId: string): ForumSess
     rounds,
     scenarios,
     scenario_summary: summaryRow ? JSON.parse(summaryRow.summary) : undefined,
+    debate_summary: sessionRow.debate_summary ?? undefined,
   }
 }
 
@@ -228,11 +230,11 @@ export function dbUpsertForumSession(topicId: string, session: ForumSession): vo
     }
 
     db.run(
-      `INSERT INTO forum_sessions (id, topic_id, version, type, status, started_at, completed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id, topic_id) DO UPDATE SET status=excluded.status, completed_at=excluded.completed_at, version=excluded.version, started_at=excluded.started_at`,
+      `INSERT INTO forum_sessions (id, topic_id, version, type, status, started_at, completed_at, debate_summary)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id, topic_id) DO UPDATE SET status=excluded.status, completed_at=excluded.completed_at, version=excluded.version, started_at=excluded.started_at, debate_summary=excluded.debate_summary`,
       [session.session_id, topicId, session.version, session.type, session.status,
-       session.started_at, session.completed_at ?? null]
+       session.started_at, session.completed_at ?? null, session.debate_summary ?? null]
     )
 
     // Upsert rounds and turns

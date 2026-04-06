@@ -236,8 +236,61 @@ function EditClueCard({ clue, onSave, onCancel }: { clue: Clue; onSave: (patch: 
 function BulkImportDialog({ topicId, open, onOpenChange, onImported }: { topicId: string; open: boolean; onOpenChange: (open: boolean) => void; onImported: () => void }) {
   const [content, setContent] = useState("")
   const [busy, setBusy] = useState(false)
+  const [statusMsg, setStatusMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>Bulk import clues</DialogTitle><DialogDescription>Paste research notes or mixed text to extract multiple clues.</DialogDescription></DialogHeader><Textarea value={content} onChange={(e) => setContent(e.target.value)} className="min-h-64" placeholder="Paste text here..." />{error && <p className="text-sm text-destructive">{error}</p>}<DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button disabled={busy || !content.trim()} onClick={async () => { setBusy(true); setError(null); try { await api.clues.bulkImportStart(topicId, content); onImported(); onOpenChange(false); } catch (err) { setError(err instanceof Error ? err.message : "Bulk import failed") } finally { setBusy(false) } }}>{busy ? "Importing..." : "Import"}</Button></DialogFooter></DialogContent></Dialog>
+
+  const handleImport = async () => {
+    setBusy(true)
+    setError(null)
+    setStatusMsg("Starting import…")
+    try {
+      await api.clues.bulkImportStart(topicId, content)
+      setStatusMsg("Extracting clues…")
+
+      // Poll until done or error
+      while (true) {
+        await new Promise(r => setTimeout(r, 2000))
+        const job = await api.clues.bulkImportStatus(topicId)
+        if (job.status === "done") {
+          setStatusMsg(null)
+          onImported()
+          onOpenChange(false)
+          setContent("")
+          break
+        }
+        if (job.status === "error") {
+          setError(job.error ?? "Bulk import failed")
+          setStatusMsg(null)
+          break
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Bulk import failed")
+      setStatusMsg(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!busy) onOpenChange(o) }}>
+      <DialogContent className="flex max-h-[90vh] flex-col">
+        <DialogHeader className="shrink-0">
+          <DialogTitle>Bulk import clues</DialogTitle>
+          <DialogDescription>Paste research notes or mixed text to extract multiple clues.</DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <Textarea value={content} onChange={(e) => setContent(e.target.value)} className="min-h-64 resize-none" placeholder="Paste text here..." disabled={busy} />
+        </div>
+        {statusMsg && <p className="shrink-0 text-sm text-muted-foreground">{statusMsg}</p>}
+        {error && <p className="shrink-0 text-sm text-destructive">{error}</p>}
+        <DialogFooter className="shrink-0">
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancel</Button>
+          <Button disabled={busy || !content.trim()} onClick={() => void handleImport()}>{busy ? "Importing…" : "Import"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
 }
 
 interface CluesPanelProps { topicId: string; version?: number; isCurrentVersion?: boolean }

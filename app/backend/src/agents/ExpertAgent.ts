@@ -87,4 +87,5 @@ export interface FinalVerdict {
   final_assessment: string
   confidence_note: string
   weight_challenge_decisions: WeightChallengeDecision[]
+  debate_summary?: string
 }

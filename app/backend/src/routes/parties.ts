@@ -1,6 +1,7 @@
 import { Elysia, t } from "elysia"
 import { getTopic } from "../pipeline/topicManager"
 import { smartAddParty, smartEditParty, smartSplitParty, smartMergeParties } from "../agents/PartyIntelligence"
+import { rescoreParty, computePentagonScore } from "../agents/PartyScorer"
 import { dbGetParties, dbGetParty, dbUpsertParty, dbDeleteParty, dbSetParties } from "../db/queries/parties"
 import { dbGetClues, dbReplaceClues } from "../db/queries/clues"
 import { dbGetState } from "../db/queries/states"
@@ -35,7 +36,7 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
       const b = body as Partial<Party>
       if (!b.name) return error(400, { message: "name is required" })
       const id = (b.id || b.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 30))
-      const party: Party = {
+      let party: Party = {
         id, name: b.name, type: b.type ?? "non_state",
         description: b.description ?? "", weight: b.weight ?? 0,
         weight_factors: b.weight_factors ?? { military_capacity: 0, economic_control: 0, information_control: 0, international_support: 0, internal_legitimacy: 0 },
@@ -44,6 +45,8 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
         stance: b.stance ?? "passive", vulnerabilities: b.vulnerabilities ?? [],
         auto_discovered: false, user_verified: true,
       }
+      const topic = await getTopic(params.id)
+      party = await rescoreParty(params.id, topic.title, topic.description, party, topic.models.enrichment)
       dbUpsertParty(params.id, party)
       return party
     } catch (e) {
@@ -55,9 +58,10 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
     try {
       const existing = dbGetParty(params.id, params.partyId)
       if (!existing) return error(404, { message: "Party not found" })
-      const updated: Party = { ...existing, ...(body as Partial<Party>), id: existing.id }
-      dbUpsertParty(params.id, updated)
-      return updated
+      const merged: Party = { ...existing, ...(body as Partial<Party>), id: existing.id }
+      merged.weight = computePentagonScore(merged.weight_factors)
+      dbUpsertParty(params.id, merged)
+      return merged
     } catch (e) {
       return error(400, { message: String(e) })
     }
@@ -78,10 +82,11 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
       const topic = await getTopic(topicId)
       const existing = dbGetParties(topicId)
 
-      const party = await smartAddParty(
+      const raw = await smartAddParty(
         topicId, topic.title, topic.description,
         b.name.trim(), topic.models.enrichment, existing,
       )
+      const party = await rescoreParty(topicId, topic.title, topic.description, raw, topic.models.enrichment)
 
       dbUpsertParty(topicId, party)
       return party
@@ -101,12 +106,13 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
       const current = dbGetParty(topicId, params.partyId)
       if (!current) return error(404, { message: "Party not found" })
 
-      const updated = await smartEditParty(
+      const edited = await smartEditParty(
         topicId, topic.title, current,
         b.feedback.trim(), topic.models.enrichment,
       )
 
-      const final: Party = { ...updated as Party, id: current.id }
+      const merged: Party = { ...edited as Party, id: current.id }
+      const final = await rescoreParty(topicId, topic.title, topic.description, merged, topic.models.enrichment)
       dbUpsertParty(topicId, final)
       return final
     } catch (e) {
@@ -127,8 +133,11 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
       if (!source) return error(404, { message: "Source party not found" })
 
       const splitNames = b.into.map(i => i.name)
-      const newParties = await smartSplitParty(
+      const splitParties = await smartSplitParty(
         topicId, topic.title, source, splitNames, topic.models.enrichment,
+      )
+      const newParties = await Promise.all(
+        splitParties.map(p => rescoreParty(topicId, topic.title, topic.description, p, topic.models.enrichment))
       )
 
       // Remove source, add new parties
@@ -168,9 +177,10 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
       const sources = b.source_ids.map(id => dbGetParty(topicId, id)).filter(Boolean) as Party[]
       if (sources.length < 2) return error(400, { message: "Not enough matching source parties" })
 
+      const topic = await getTopic(topicId)
+
       let merged: Party
       try {
-        const topic = await getTopic(topicId)
         const smartMerged = await smartMergeParties(
           topic.title, sources, b.target.name!, topic.models.enrichment,
         )
@@ -201,8 +211,11 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
       const targetId = merged.id || b.target.name!.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 30)
       merged.id = targetId
 
+      const scored = await rescoreParty(topicId, topic.title, topic.description, merged, topic.models.enrichment)
+      scored.id = targetId
+
       for (const id of b.source_ids) dbDeleteParty(topicId, id)
-      dbUpsertParty(topicId, merged)
+      dbUpsertParty(topicId, scored)
 
       // Update clue party_relevance references
       const allClues = dbGetClues(topicId)
@@ -215,7 +228,7 @@ export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
       }))
       dbReplaceClues(topicId, updated)
 
-      return merged
+      return scored
     } catch (e) {
       return error(500, { message: `Merge failed: ${e}` })
     }

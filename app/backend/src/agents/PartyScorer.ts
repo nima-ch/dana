@@ -33,7 +33,7 @@ export function computePentagonScore(factors: Record<string, number>): number {
   return Math.round(100 * area / maxArea)
 }
 
-async function scoreOneParty(
+export async function scoreOneParty(
   topicId: string,
   title: string,
   description: string,
@@ -150,4 +150,15 @@ export async function scoreAllParties(
 
   log.discovery(`PartyScorer: complete. Scores: ${parties.map(p => `${p.name}=${p.weight}`).join(", ")}`)
   return parties
+}
+
+export async function rescoreParty(
+  topicId: string,
+  title: string,
+  description: string,
+  party: Party,
+  model: string,
+): Promise<Party> {
+  const { factors, evidence, overall } = await scoreOneParty(topicId, title, description, party, model)
+  return { ...party, weight_factors: factors, weight_evidence: evidence, weight: overall }
 }

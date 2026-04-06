@@ -340,6 +340,9 @@ function applySchema(db: Database): void {
   try { db.run(`ALTER TABLE states ADD COLUMN parties_snapshot TEXT`) } catch { /* already exists */ }
   try { db.run(`ALTER TABLE states ADD COLUMN representatives_snapshot TEXT`) } catch { /* already exists */ }
   try { db.run(`ALTER TABLE states ADD COLUMN completed_stages TEXT NOT NULL DEFAULT '[]'`) } catch { /* already exists */ }
+  try { db.run(`ALTER TABLE expert_councils ADD COLUMN evidence_map TEXT`) } catch { /* already exists */ }
+  try { db.run(`ALTER TABLE forum_sessions ADD COLUMN debate_summary TEXT`) } catch { /* already exists */ }
+  try { db.run(`ALTER TABLE final_verdicts ADD COLUMN debate_summary TEXT`) } catch { /* already exists */ }
   // Backfill completed_stages for existing complete versions
   try { db.run(`UPDATE states SET completed_stages = '["discovery","enrichment","forum_prep","forum","expert_council"]' WHERE version_status = 'complete' AND completed_stages = '[]'`) } catch { /* ok */ }
   // Backfill in-progress versions: infer completed_stages from topic status

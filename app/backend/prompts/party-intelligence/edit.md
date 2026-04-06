@@ -17,14 +17,6 @@ When you are done researching, output ONLY a single valid JSON object matching t
   "name": "<full name>",
   "type": "<state|state_military|non_state|individual|media|economic|alliance>",
   "description": "<detailed 2-4 sentence description with specific facts, dates, events>",
-  "weight": <0-100>,
-  "weight_factors": {
-    "military_capacity": <0-100>,
-    "economic_control": <0-100>,
-    "information_control": <0-100>,
-    "international_support": <0-100>,
-    "internal_legitimacy": <0-100>
-  },
   "agenda": "<their goal regarding this topic>",
   "means": ["<specific lever of power or action>"],
   "circle": {
@@ -36,5 +28,7 @@ When you are done researching, output ONLY a single valid JSON object matching t
   "auto_discovered": false,
   "user_verified": true
 }
+
+Do NOT include "weight" or "weight_factors" — those are computed separately via a dedicated scoring pipeline after this step.
 
 Preserve accurate existing information. Only change fields that the feedback and research warrant updating. Be specific and fact-based. Cite specific dates, numbers, and events from your research.

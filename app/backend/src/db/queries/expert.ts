@@ -3,7 +3,7 @@ import type { ExpertArtifact, ExpertCouncilOutput, ExpertPersona, FinalVerdict }
 
 type CouncilRow = {
   id: number; topic_id: string; version: number; verdict_id: string | null
-  created_at: string; experts: string
+  created_at: string; experts: string; evidence_map: string | null
 }
 type AssessmentRow = {
   id: number; council_id: number; topic_id: string; expert_id: string; expert_name: string
@@ -12,6 +12,7 @@ type AssessmentRow = {
 type VerdictRow = {
   id: number; council_id: number; topic_id: string; synthesized_at: string
   scenarios_ranked: string; final_assessment: string; confidence_note: string; weight_challenge_decisions: string
+  debate_summary: string | null
 }
 
 export function dbSaveExpertCouncil(topicId: string, output: ExpertCouncilOutput): void {
@@ -28,9 +29,9 @@ export function dbSaveExpertCouncil(topicId: string, output: ExpertCouncilOutput
     }
 
     db.run(
-      `INSERT INTO expert_councils (topic_id, version, verdict_id, created_at, experts)
-       VALUES (?, ?, ?, ?, ?)`,
-      [topicId, output.version, output.verdict_id, new Date().toISOString(), JSON.stringify(output.experts)]
+      `INSERT INTO expert_councils (topic_id, version, verdict_id, created_at, experts, evidence_map)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [topicId, output.version, output.verdict_id, new Date().toISOString(), JSON.stringify(output.experts), JSON.stringify(output.evidence_map ?? [])]
     )
     const councilId = db.query<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!.id
 
@@ -47,10 +48,11 @@ export function dbSaveExpertCouncil(topicId: string, output: ExpertCouncilOutput
     if (output.final_verdict) {
       const v = output.final_verdict
       db.run(
-        `INSERT INTO final_verdicts (council_id, topic_id, synthesized_at, scenarios_ranked, final_assessment, confidence_note, weight_challenge_decisions)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO final_verdicts (council_id, topic_id, synthesized_at, scenarios_ranked, final_assessment, confidence_note, weight_challenge_decisions, debate_summary)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [councilId, topicId, v.synthesized_at, JSON.stringify(v.scenarios_ranked),
-         v.final_assessment, v.confidence_note, JSON.stringify(v.weight_challenge_decisions)]
+         v.final_assessment, v.confidence_note, JSON.stringify(v.weight_challenge_decisions),
+         v.debate_summary ?? null]
       )
     }
   })
@@ -87,6 +89,7 @@ export function dbGetExpertCouncil(topicId: string, version: number): ExpertCoun
     final_assessment: verdictRow.final_assessment,
     confidence_note: verdictRow.confidence_note,
     weight_challenge_decisions: JSON.parse(verdictRow.weight_challenge_decisions),
+    debate_summary: verdictRow.debate_summary ?? undefined,
   } : undefined
 
   return {
@@ -95,6 +98,7 @@ export function dbGetExpertCouncil(topicId: string, version: number): ExpertCoun
     experts: JSON.parse(councilRow.experts),
     deliberations,
     final_verdict: finalVerdict,
+    evidence_map: councilRow.evidence_map ? JSON.parse(councilRow.evidence_map) : undefined,
   }
 }
 

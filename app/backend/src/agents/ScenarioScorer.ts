@@ -437,6 +437,7 @@ export async function runScenarioScorer(
     final_assessment: verdict.final_assessment,
     confidence_note: verdict.confidence_note,
     weight_challenge_decisions: [],
+    debate_summary: session.debate_summary,
   }
 
   // Determine version — prefer passed version, fallback to extraction from runId

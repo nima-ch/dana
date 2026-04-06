@@ -34,7 +34,19 @@ type Party = {
   [key: string]: unknown
 }
 
-type EditableField = "name" | "type" | "weight" | "agenda" | "means" | "stance" | "vulnerabilities" | "circle"
+type EditableField = "name" | "type" | "agenda" | "means" | "stance" | "vulnerabilities" | "circle"
+
+const AXIS_KEYS = ["military_capacity", "economic_control", "information_control", "international_support", "internal_legitimacy"] as const
+
+function computePentagonScore(factors: PartyWeightFactors): number {
+  const s = AXIS_KEYS.map(k => Math.max(0, Math.min(100, factors[k] ?? 0)))
+  const sin72 = Math.sin((2 * Math.PI) / 5)
+  let area = 0
+  for (let i = 0; i < 5; i++) area += s[i] * s[(i + 1) % 5]
+  area *= 0.5 * sin72
+  const maxArea = 0.5 * sin72 * 5 * 100 * 100
+  return Math.round(100 * area / maxArea)
+}
 
 const DIMENSION_LABELS: Record<string, string> = {
   military_capacity: "Military",
@@ -193,7 +205,7 @@ function PartyCard({
           <div className="flex items-center gap-2">
             <span className="truncate text-sm font-medium">{party.name}</span>
             <Badge variant="outline" className="shrink-0">{formatType(party.type)}</Badge>
-            <Badge className="shrink-0 tabular-nums">{Math.round(weightValue(party))}</Badge>
+            <Badge className="shrink-0 tabular-nums">{Math.round(editing && draft.weight !== undefined ? (draft.weight as number) : weightValue(party))}</Badge>
           </div>
           {!expanded && party.description && (
             <p className="mt-0.5 truncate text-xs text-muted-foreground">{party.description}</p>
@@ -214,20 +226,37 @@ function PartyCard({
 
           <div className="grid gap-4 lg:grid-cols-[auto_1fr]">
             <div className="rounded-lg border border-border bg-background p-3">
-              <RadarChart data={factors} size={140} />
+              <RadarChart data={editing ? (safeWeightFactors({ weight_factors: draft.weight_factors ?? factors } as Party)) : factors} size={140} />
             </div>
             <div className="space-y-2">
               {sortedFactors.map(([key, value]) => {
                 const evidence = party.weight_evidence?.[key]
+                const draftFactors = draft.weight_factors as PartyWeightFactors | undefined
+                const editingValue = draftFactors?.[key] ?? value
                 return (
                   <div key={key} className="space-y-1">
                     <div className="flex items-center justify-between text-xs text-muted-foreground">
                       <span>{DIMENSION_LABELS[key] ?? key}</span>
-                      <span>{Math.round(value)}</span>
+                      <span className="tabular-nums">{Math.round(editing ? editingValue : value)}</span>
                     </div>
-                    <div className="h-2 rounded-full bg-muted">
-                      <div className="h-2 rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
-                    </div>
+                    {editing ? (
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={Math.round(editingValue)}
+                        className="w-full accent-primary"
+                        onChange={(e) => {
+                          const newFactors = { ...(draftFactors ?? factors), [key]: Number(e.target.value) }
+                          onDraftChange({ weight_factors: newFactors, weight: computePentagonScore(newFactors) })
+                        }}
+                      />
+                    ) : (
+                      <div className="h-2 rounded-full bg-muted">
+                        <div className="h-2 rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+                      </div>
+                    )}
                     {evidence && <div className="text-[10px] leading-tight text-muted-foreground/70">{evidence}</div>}
                   </div>
                 )

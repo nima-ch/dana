@@ -190,6 +190,7 @@ export async function runForumOrchestrator(
     contested_clues: contestedClues,
     uncontested_clues: uncontestedClues,
   }
+  session.debate_summary = debateSummary
   session.status = "complete"
   session.completed_at = new Date().toISOString()
   await writeForumSession(topicId, session)
