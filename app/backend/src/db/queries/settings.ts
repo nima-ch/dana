@@ -42,6 +42,14 @@ export interface AnalysisControls {
   // Smart Edit
   smart_edit_queries: number
   smart_edit_max_chars: number
+  // Bulk Import
+  bulk_import_iterations: number
+  bulk_import_chunk_target_chars: number
+  bulk_import_chunk_max_chars: number
+  bulk_fact_check_iterations: number
+  // Evidence Update
+  evidence_update_batch_size: number
+  evidence_update_iterations: number
   // Forum
   forum_max_turns: number
   forum_compress_interval: number
@@ -75,6 +83,14 @@ export const DEFAULT_CONTROLS: AnalysisControls = {
   // Smart Edit
   smart_edit_queries: 3,
   smart_edit_max_chars: 15000,
+  // Bulk Import
+  bulk_import_iterations: 5,
+  bulk_import_chunk_target_chars: 2000,
+  bulk_import_chunk_max_chars: 4000,
+  bulk_fact_check_iterations: 2,
+  // Evidence Update
+  evidence_update_batch_size: 3,
+  evidence_update_iterations: 3,
   // Forum
   forum_max_turns: 60,
   forum_compress_interval: 10,

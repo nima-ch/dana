@@ -6,7 +6,8 @@ import { dbGetState } from "../db/queries/states"
 import type { Clue, ClueVersion } from "../db/queries/clues"
 
 const cleanupJobs = new Map<string, { status: string; groups: any[] | null; original_count: number; error?: string }>()
-const bulkImportJobs = new Map<string, { status: string; imported: number; error?: string }>()
+const bulkImportJobs = new Map<string, { status: string; stored: number; updated: number; skipped: number; error?: string }>()
+const updateJobs = new Map<string, { status: string; checked: number; updated: number; error?: string }>()
 
 export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
   .get("/", async ({ params, query }) => {
@@ -168,65 +169,33 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     }
   }, { body: t.Record(t.String(), t.Any()) })
 
-  // Smart bulk import: fire-and-forget + poll
+  // Agentic bulk import: fire-and-forget + poll
   .post("/bulk", async ({ params, body, error }) => {
-    const b = body as { content: string; type?: string }
+    const b = body as { content: string }
     if (!b.content?.trim()) return error(400, { message: "content is required" })
     const topicId = params.id
 
-    if (!bulkImportJobs.has(topicId) || bulkImportJobs.get(topicId)!.status === "done" || bulkImportJobs.get(topicId)!.status === "error") {
-      bulkImportJobs.set(topicId, { status: "running", imported: 0 })
+    const job = bulkImportJobs.get(topicId)
+    if (!job || job.status === "done" || job.status === "error") {
+      bulkImportJobs.set(topicId, { status: "running", stored: 0, updated: 0, skipped: 0 })
 
       ;(async () => {
         try {
           const { getTopic } = await import("../pipeline/topicManager")
-          const { smartExtractClues } = await import("../agents/SmartClueExtractor")
+          const { runBulkImportAgent } = await import("../agents/BulkImportAgent")
           const { dbGetParties } = await import("../db/queries/parties")
           const topic = await getTopic(topicId)
           const parties = dbGetParties(topicId)
 
-          const extracted = await smartExtractClues(
+          const result = await runBulkImportAgent(
             topicId, topic.title, topic.description,
             b.content, parties, topic.models.enrichment,
           )
 
-          let count = 0
-          for (const item of extracted) {
-            const now = new Date().toISOString()
-            const id = dbNextClueId(topicId)
-            const urls = item.source_urls ?? (item.source_url ? [item.source_url] : [])
-            const outlets = item.source_outlets ?? (item.source_outlet ? [item.source_outlet] : ["user"])
-            const version: ClueVersion = {
-              v: 1, date: now, title: item.title,
-              raw_source: { urls, outlets, fetched_at: now },
-              source_credibility: {
-                score: item.credibility ?? 50,
-                notes: `Source: ${outlets.join(", ") || "user-submitted"}`,
-                bias_flags: item.bias_flags ?? [],
-                origin_sources: urls.map((url: string, i: number) => ({
-                  url, outlet: outlets[i] ?? "user", is_republication: false,
-                })),
-              },
-              bias_corrected_summary: item.summary,
-              relevance_score: item.relevance ?? 70,
-              party_relevance: item.parties ?? [],
-              domain_tags: item.domain_tags ?? [],
-              timeline_date: item.date || now.slice(0, 10),
-              clue_type: item.clue_type || "event",
-              change_note: "Smart bulk import",
-              key_points: item.key_points ?? [],
-            }
-            dbInsertClue(topicId, {
-              id, current: 1, added_at: now, last_updated_at: now,
-              added_by: "user", status: "verified", version,
-            })
-            count++
-          }
-
-          if (count > 0) await markStale(topicId)
-          bulkImportJobs.set(topicId, { status: "done", imported: count })
+          if (result.stored > 0 || result.updated > 0) await markStale(topicId)
+          bulkImportJobs.set(topicId, { status: "done", ...result })
         } catch (e) {
-          bulkImportJobs.set(topicId, { status: "error", imported: 0, error: String(e) })
+          bulkImportJobs.set(topicId, { status: "error", stored: 0, updated: 0, skipped: 0, error: String(e) })
         }
       })()
     }
@@ -236,6 +205,44 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
 
   .get("/bulk/status", async ({ params }) => {
     const job = bulkImportJobs.get(params.id)
+    if (!job) return { status: "none" }
+    return job
+  })
+
+  // Evidence update: check all clues for updates
+  .post("/update-all", async ({ params }) => {
+    const topicId = params.id
+    const job = updateJobs.get(topicId)
+    if (!job || job.status === "done" || job.status === "error") {
+      updateJobs.set(topicId, { status: "running", checked: 0, updated: 0 })
+
+      ;(async () => {
+        try {
+          const { getTopic } = await import("../pipeline/topicManager")
+          const { runEvidenceUpdateAgent } = await import("../agents/EvidenceUpdateAgent")
+          const { dbGetParties } = await import("../db/queries/parties")
+          const topic = await getTopic(topicId)
+          const clues = dbGetClues(topicId)
+          const parties = dbGetParties(topicId)
+
+          const result = await runEvidenceUpdateAgent(
+            topicId, topic.title, topic.description,
+            clues, parties, topic.models.enrichment,
+          )
+
+          if (result.updated > 0) await markStale(topicId)
+          updateJobs.set(topicId, { status: "done", ...result })
+        } catch (e) {
+          updateJobs.set(topicId, { status: "error", checked: 0, updated: 0, error: String(e) })
+        }
+      })()
+    }
+
+    return { status: updateJobs.get(topicId)!.status }
+  })
+
+  .get("/update-all/status", async ({ params }) => {
+    const job = updateJobs.get(params.id)
     if (!job) return { status: "none" }
     return job
   })

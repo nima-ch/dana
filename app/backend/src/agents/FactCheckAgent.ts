@@ -22,6 +22,7 @@ export interface FactCheckInput {
   topicTitle: string
   topicDescription: string
   model: string
+  maxIterations?: number
 }
 
 export interface FactCheckVerdict {
@@ -70,7 +71,7 @@ export async function runFactCheck(input: FactCheckInput): Promise<FactCheckVerd
     topicId: input.topicId,
     stage: "fact-check",
     tools: RESEARCH_TOOLS,
-    maxIterations: controls.fact_check_iterations,
+    maxIterations: input.maxIterations ?? controls.fact_check_iterations,
     temperature: 0.2,
     max_tokens: budgetOutput(effectiveModel, config.content, { min: 1500, max: 3000 }),
     contextWarningThreshold: 80000,

@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { ArrowRight, ChevronDown, ChevronRight, MessageSquarePlus, PencilLine, RefreshCw, Search, Trash2 } from "lucide-react"
+import { ArrowRight, ChevronDown, ChevronRight, MessageSquarePlus, PencilLine, RefreshCw, Search, Trash2, Zap } from "lucide-react"
 import { api } from "@/api/client"
 import { CredibilityRing } from "../Common/CredibilityRing"
 import { Button } from "@/components/ui/button"
@@ -233,40 +233,20 @@ function EditClueCard({ clue, onSave, onCancel }: { clue: Clue; onSave: (patch: 
   </Card>
 }
 
-function BulkImportDialog({ topicId, open, onOpenChange, onImported }: { topicId: string; open: boolean; onOpenChange: (open: boolean) => void; onImported: () => void }) {
+function BulkImportDialog({ open, onOpenChange, onStart }: { open: boolean; onOpenChange: (open: boolean) => void; onStart: (content: string) => Promise<void> }) {
   const [content, setContent] = useState("")
   const [busy, setBusy] = useState(false)
-  const [statusMsg, setStatusMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const handleImport = async () => {
     setBusy(true)
     setError(null)
-    setStatusMsg("Starting import…")
     try {
-      await api.clues.bulkImportStart(topicId, content)
-      setStatusMsg("Extracting clues…")
-
-      // Poll until done or error
-      while (true) {
-        await new Promise(r => setTimeout(r, 2000))
-        const job = await api.clues.bulkImportStatus(topicId)
-        if (job.status === "done") {
-          setStatusMsg(null)
-          onImported()
-          onOpenChange(false)
-          setContent("")
-          break
-        }
-        if (job.status === "error") {
-          setError(job.error ?? "Bulk import failed")
-          setStatusMsg(null)
-          break
-        }
-      }
+      await onStart(content)
+      setContent("")
+      onOpenChange(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Bulk import failed")
-      setStatusMsg(null)
     } finally {
       setBusy(false)
     }
@@ -277,16 +257,15 @@ function BulkImportDialog({ topicId, open, onOpenChange, onImported }: { topicId
       <DialogContent className="flex max-h-[90vh] flex-col">
         <DialogHeader className="shrink-0">
           <DialogTitle>Bulk import clues</DialogTitle>
-          <DialogDescription>Paste research notes or mixed text to extract multiple clues.</DialogDescription>
+          <DialogDescription>Paste research notes, article text, or URLs. Each chunk will be verified with web search and fact-checked.</DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <Textarea value={content} onChange={(e) => setContent(e.target.value)} className="min-h-64 resize-none" placeholder="Paste text here..." disabled={busy} />
+          <Textarea value={content} onChange={(e) => setContent(e.target.value)} className="min-h-64 resize-none" placeholder="Paste text, URLs, or notes here..." disabled={busy} />
         </div>
-        {statusMsg && <p className="shrink-0 text-sm text-muted-foreground">{statusMsg}</p>}
         {error && <p className="shrink-0 text-sm text-destructive">{error}</p>}
         <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancel</Button>
-          <Button disabled={busy || !content.trim()} onClick={() => void handleImport()}>{busy ? "Importing…" : "Import"}</Button>
+          <Button disabled={busy || !content.trim()} onClick={() => void handleImport()}>{busy ? "Starting…" : "Import"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -305,6 +284,7 @@ export function CluesPanel({ topicId, version, isCurrentVersion = true }: CluesP
   const [bulkOpen, setBulkOpen] = useState(false)
   const [researchError] = useState<string | null>(null)
   const [cleanupBusy, setCleanupBusy] = useState(false)
+  const [updateBusy, setUpdateBusy] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Clue | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [smartEditClue, setSmartEditClue] = useState<Clue | null>(null)
@@ -320,6 +300,19 @@ export function CluesPanel({ topicId, version, isCurrentVersion = true }: CluesP
 
   const load = useCallback(async () => { setLoading(true); setError(null); try { setClues(await api.clues.list(topicId, version)) } catch (err) { setError(err instanceof Error ? err.message : "Failed to load clues") } finally { setLoading(false) } }, [topicId, version])
   useEffect(() => { void load() }, [load])
+
+  // Reload clues when bulk-import or evidence-update completes
+  const lastStageComplete = usePipelineStore((s) => {
+    const items = s.sessions[topicId]?.items
+    if (!items?.length) return null
+    const last = items[items.length - 1]
+    return last?.type === "stage_complete" ? `${last.stage}:${last.id}` : null
+  })
+  useEffect(() => {
+    if (lastStageComplete?.startsWith("bulk_import:") || lastStageComplete?.startsWith("evidence_update:")) {
+      void load()
+    }
+  }, [lastStageComplete, load])
 
   const options = useMemo(() => ({ parties: getParties(clues), domains: getDomains(clues), types: getTypes(clues) }), [clues])
   const filtered = useMemo(() => clues.filter((clue) => clueMatchesFilters(clue, { party: filters.party === "all" ? "" : filters.party, domain: filters.domain === "all" ? "" : filters.domain, type: filters.type === "all" ? "" : filters.type }) && matchesQuery(clue, search.trim())), [clues, filters, search])
@@ -350,6 +343,27 @@ export function CluesPanel({ topicId, version, isCurrentVersion = true }: CluesP
   const cleanup = async () => {
     setCleanupBusy(true); setError(null)
     try { await api.clues.cleanupStart(topicId); await load() } catch (err) { setError(err instanceof Error ? err.message : "Cleanup failed") } finally { setCleanupBusy(false) }
+  }
+
+  const handleBulkImport = async (content: string) => {
+    startOp(topicId, "bulk-import", "Bulk Import: extracting & fact-checking")
+    await api.clues.bulkImportStart(topicId, content)
+    // OperationModal listens for stage_complete and calls onComplete which triggers load()
+  }
+
+  const handleUpdateEvidence = async () => {
+    if (updateBusy) return
+    setUpdateBusy(true)
+    setError(null)
+    startOp(topicId, "evidence-update", "Updating Evidence: checking for new developments")
+    try {
+      await api.clues.updateAllStart(topicId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Evidence update failed")
+      finishOp()
+    } finally {
+      setUpdateBusy(false)
+    }
   }
 
   const handleSmartAdd = async () => {
@@ -387,6 +401,7 @@ export function CluesPanel({ topicId, version, isCurrentVersion = true }: CluesP
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setSmartAddOpen(true)} disabled={smartAddBusy}><Search className="size-4" /> Smart Add</Button>
           <Button variant="outline" onClick={() => setBulkOpen(true)}><MessageSquarePlus className="size-4" /> Bulk import</Button>
+          <Button variant="outline" onClick={() => void handleUpdateEvidence()} disabled={updateBusy}><Zap className="size-4" /> Update Evidence</Button>
           <Button variant="outline" onClick={cleanup} disabled={cleanupBusy}><RefreshCw className={cn("size-4", cleanupBusy && "animate-spin")} /> Cleanup</Button>
         </div>
       )}
@@ -430,7 +445,7 @@ export function CluesPanel({ topicId, version, isCurrentVersion = true }: CluesP
     </Dialog>
     {editingClue && <Dialog open={!!editingClue} onOpenChange={(open) => !open && setEditingClue(null)}><DialogContent className="sm:max-w-2xl"><DialogHeader><DialogTitle>Edit clue</DialogTitle><DialogDescription>Update summary, credibility, relevance, and bias flags.</DialogDescription></DialogHeader><EditClueCard clue={editingClue} onSave={saveClue} onCancel={() => setEditingClue(null)} /></DialogContent></Dialog>}
     {deleteTarget && <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}><DialogContent><DialogHeader><DialogTitle>Delete clue?</DialogTitle><DialogDescription>This action cannot be undone.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" onClick={async () => { if (!deleteTarget) return; try { await api.clues.delete(topicId, deleteTarget.id); setClues((prev) => prev.filter((item) => item.id !== deleteTarget.id)); setDeleteTarget(null) } catch (err) { setError(err instanceof Error ? err.message : "Failed to delete clue") } }}>Delete</Button></DialogFooter></DialogContent></Dialog>}
-    <BulkImportDialog topicId={topicId} open={bulkOpen} onOpenChange={setBulkOpen} onImported={load} />
+    <BulkImportDialog open={bulkOpen} onOpenChange={setBulkOpen} onStart={handleBulkImport} />
     <Dialog open={smartAddOpen} onOpenChange={setSmartAddOpen}>
       <DialogContent>
         <DialogHeader>

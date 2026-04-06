@@ -139,7 +139,11 @@ export const api = {
         method: "POST", body: JSON.stringify({ content }),
       }),
     bulkImportStatus: (topicId: string) =>
-      request<{ status: string; imported?: number; error?: string }>(`/topics/${topicId}/clues/bulk/status`),
+      request<{ status: string; stored?: number; updated?: number; skipped?: number; error?: string }>(`/topics/${topicId}/clues/bulk/status`),
+    updateAllStart: (topicId: string) =>
+      request<{ status: string }>(`/topics/${topicId}/clues/update-all`, { method: "POST" }),
+    updateAllStatus: (topicId: string) =>
+      request<{ status: string; checked?: number; updated?: number; error?: string }>(`/topics/${topicId}/clues/update-all/status`),
     research: (topicId: string, query: string) =>
       request<{ imported: number; clues: any[]; query: string }>(`/topics/${topicId}/clues/research`, {
         method: "POST", body: JSON.stringify({ query }),

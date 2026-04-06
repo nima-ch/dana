@@ -258,6 +258,25 @@ export function dbUpdateClueVersion(topicId: string, clueId: string, patch: Part
   )
 }
 
+export function dbAddClueVersion(topicId: string, clueId: string, version: ClueVersion): void {
+  const db = getDb()
+  const txn = db.transaction(() => {
+    db.run(
+      `INSERT INTO clue_versions (clue_id, topic_id, version, date, title, raw_source, source_credibility, bias_corrected_summary, relevance_score, party_relevance, domain_tags, timeline_date, clue_type, change_note, key_points, fact_check)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [clueId, topicId, version.v, version.date, version.title, JSON.stringify(version.raw_source),
+       JSON.stringify(version.source_credibility), version.bias_corrected_summary, version.relevance_score,
+       JSON.stringify(version.party_relevance), JSON.stringify(version.domain_tags), version.timeline_date,
+       version.clue_type, version.change_note, JSON.stringify(version.key_points), JSON.stringify(version.fact_check ?? {})]
+    )
+    db.run(
+      "UPDATE clues SET current_version=?, last_updated_at=?, status=? WHERE id=? AND topic_id=?",
+      [version.v, new Date().toISOString(), "pending", clueId, topicId]
+    )
+  })
+  txn()
+}
+
 export function dbDeleteClue(topicId: string, clueId: string): void {
   getDb().run("DELETE FROM clues WHERE topic_id = ? AND id = ?", [topicId, clueId])
 }

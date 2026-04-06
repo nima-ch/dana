@@ -52,6 +52,7 @@ const STORE_CLUE: ToolDefinition = {
         domain_tags: { type: "array", items: { type: "string" }, description: "Domain tags: economic, military, political, diplomatic, intelligence" },
         bias_flags: { type: "array", items: { type: "string" }, description: "Bias flags if applicable, else empty array" },
         key_points: { type: "array", items: { type: "string" }, description: "2-4 specific verifiable facts from this clue" },
+        updates_clue_id: { type: "string", description: "If this clue updates an existing one, provide the existing clue ID here. A new version will be added instead of creating a duplicate." },
       },
       required: ["title", "summary", "credibility", "relevance", "source_urls", "parties", "date", "clue_type"],
     },
