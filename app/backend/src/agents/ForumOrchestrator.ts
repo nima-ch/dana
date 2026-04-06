@@ -31,8 +31,9 @@ export async function runForumOrchestrator(
   runId: string,
   sessionId: string,
   model: string,
-  _checkpoint: unknown,   // kept for API compatibility, unused in dynamic forum
-  onProgress?: (msg: string) => void
+  _checkpoint: unknown,
+  onProgress?: (msg: string) => void,
+  version?: number,
 ): Promise<ForumOrchestratorOutput> {
   const representatives = dbGetRepresentatives(topicId) as Representative[]
   if (!representatives.length) throw new Error("No representatives found")
@@ -45,7 +46,7 @@ export async function runForumOrchestrator(
   // ── Always start a fresh session ──────────────────────────────────────────
   const session: ForumSession = {
     session_id: sessionId,
-    version: 1,
+    version: version ?? 1,
     type: "full",
     status: "running",
     started_at: new Date().toISOString(),

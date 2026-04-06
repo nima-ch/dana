@@ -1,14 +1,30 @@
 import { Elysia, t } from "elysia"
 import { markStale } from "../pipeline/stateManager"
-import { dbGetClues, dbGetClue, dbInsertClue, dbUpdateClueVersion, dbDeleteClue,
+import { dbGetClues, dbGetClue, dbGetCluesAtSnapshot, dbInsertClue, dbUpdateClueVersion, dbDeleteClue,
          dbReplaceClues, dbNextClueId, dbCountClues } from "../db/queries/clues"
+import { dbGetState } from "../db/queries/states"
 import type { Clue, ClueVersion } from "../db/queries/clues"
 
 const cleanupJobs = new Map<string, { status: string; groups: any[] | null; original_count: number; error?: string }>()
 const bulkImportJobs = new Map<string, { status: string; imported: number; error?: string }>()
 
 export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
-  .get("/", async ({ params }) => dbGetClues(params.id))
+  .get("/", async ({ params, query }) => {
+    const version = query.version ? parseInt(query.version as string) : null
+    if (version) {
+      const state = dbGetState(params.id, version)
+      if (!state) return []
+
+      // Only show clues if enrichment has completed for this version
+      if (!state.completed_stages.includes("enrichment")) return []
+
+      // Use snapshot for completed historical versions
+      if (state.version_status === "complete" && state.clue_snapshot?.ids_and_versions) {
+        return dbGetCluesAtSnapshot(params.id, state.clue_snapshot)
+      }
+    }
+    return dbGetClues(params.id)
+  })
 
   .get("/:clueId", async ({ params, error }) => {
     const clue = dbGetClue(params.id, params.clueId)

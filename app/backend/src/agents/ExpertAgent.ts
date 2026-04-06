@@ -41,6 +41,16 @@ export interface ExpertCouncilOutput {
   experts: ExpertPersona[]
   deliberations: ExpertArtifact[]
   final_verdict?: FinalVerdict
+  evidence_map?: any[]           // ScenarioEvidence[] persisted from scorer
+}
+
+export interface PowerBalance {
+  backing_parties: { party_id: string; party_name: string; weight: number }[]
+  opposing_parties: { party_id: string; party_name: string; weight: number }[]
+  net_power: number
+  forum_support_ratio: string      // e.g. "7:2"
+  weight_adjusted_ratio: string    // e.g. "180:120"
+  explanation: string
 }
 
 export interface RankedScenario {
@@ -57,6 +67,7 @@ export interface RankedScenario {
     "6_months": string
     "1_year": string
   }
+  power_balance?: PowerBalance
 }
 
 export interface WeightChallengeDecision {

@@ -263,11 +263,12 @@ function PartyCard({
 interface PartiesPanelProps {
   topicId: string
   status: string
+  version?: number
   onApprove?: () => void
   approveLoading?: boolean
 }
 
-export function PartiesPanel({ topicId, status, onApprove, approveLoading }: PartiesPanelProps) {
+export function PartiesPanel({ topicId, status, version, onApprove, approveLoading }: PartiesPanelProps) {
   const startOp = usePipelineStore((s) => s.startOperation)
   const finishOp = usePipelineStore((s) => s.finishOperation)
   const [parties, setParties] = useState<Party[]>([])
@@ -296,7 +297,7 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await api.parties.list(topicId)
+      const data = await api.parties.list(topicId, version)
       setParties(Array.isArray(data) ? data : [])
       setError(null)
     } catch (err) {
@@ -304,7 +305,7 @@ export function PartiesPanel({ topicId, status, onApprove, approveLoading }: Par
     } finally {
       setLoading(false)
     }
-  }, [topicId])
+  }, [topicId, version])
 
   useEffect(() => { void load() }, [load])
 

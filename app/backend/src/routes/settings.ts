@@ -17,6 +17,9 @@ const CONTROL_RANGES: Record<keyof AnalysisControls, [number, number]> = {
   enrichment_iterations: [2, 25],
   enrichment_context_warning: [50000, 200000],
   enrichment_batch_size: [1, 8],
+  enrichment_search_results: [3, 10],
+  enrichment_max_searches_per_round: [1, 5],
+  enrichment_max_fetches_per_round: [2, 10],
   fact_check_iterations: [1, 8],
   smart_extract_url_limit: [3, 30],
   research_search_queries: [2, 20],
@@ -51,6 +54,7 @@ function clampControls(input: Partial<AnalysisControls>): Partial<AnalysisContro
 export const settingsRouter = new Elysia({ prefix: "/api/settings" })
   .get("/", () => dbGetSettings())
   .put("/", ({ body }) => {
+    console.log("[SETTINGS] PUT received:", JSON.stringify(body).slice(0, 200))
     const settings = dbGetSettings()
 
     if (body.default_models) {

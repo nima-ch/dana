@@ -6,14 +6,18 @@ import { cn } from "@/lib/utils"
 import { useSSE } from "@/hooks/useSSE"
 import { usePipelineStore, type PipelineFeedItem } from "@/stores/pipelineStore"
 
-export function OperationModal() {
+export function OperationModal({ onComplete }: { onComplete?: () => void } = {}) {
   const op = usePipelineStore((s) => s.activeOperation)
   const pushEvent = usePipelineStore((s) => s.pushEvent)
+  const finishOp = usePipelineStore((s) => s.finishOperation)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Own SSE connection that activates whenever there's an active operation
   useSSE(op?.topicId ?? null, (event) => {
     if (op) pushEvent(op.topicId, event)
+    if (event.type === "stage_complete" || event.type === "error") {
+      setTimeout(() => { finishOp(); onComplete?.() }, 1500)
+    }
   })
 
   useEffect(() => {

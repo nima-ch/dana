@@ -90,7 +90,7 @@ function RepDetailPopup({ rep, onClose }: { rep: Representative; onClose: () => 
   )
 }
 
-export function ForumTab({ topicId }: { topicId: string }) {
+export function ForumTab({ topicId, version }: { topicId: string; version?: number }) {
   const [reps, setReps] = useState<Representative[]>([])
   const [forum, setForum] = useState<ForumSession | null>(null)
   const [loading, setLoading] = useState(true)
@@ -99,14 +99,15 @@ export function ForumTab({ topicId }: { topicId: string }) {
 
   useEffect(() => {
     setLoading(true)
+    const versionParam = version ? `?version=${version}` : ""
     Promise.all([
-      api.representatives.list(topicId).catch(() => []),
-      fetch(`/api/topics/${topicId}/forum`).then(r => r.ok ? r.json() : null).catch(() => null),
+      api.representatives.list(topicId, version).catch(() => []),
+      fetch(`/api/topics/${topicId}/forum${versionParam}`).then(r => r.ok ? r.json() : null).catch(() => null),
     ]).then(([r, f]) => {
       setReps(r)
       setForum(f)
     }).finally(() => setLoading(false))
-  }, [topicId])
+  }, [topicId, version])
 
   if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading...</div>
 

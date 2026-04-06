@@ -59,6 +59,8 @@ export async function runPartyEnrichmentAgent(
     ? existingClues.map(c => `- [${c.id}] (${c.clue_type}, cred=${c.credibility}) ${c.title}: ${c.summary.slice(0, 150)}`).join("\n")
     : "No existing clues for this party."
 
+  const controls = dbGetControls()
+
   const config = await resolvePrompt("enrichment/agentic-enrich", {
     today,
     year,
@@ -67,6 +69,8 @@ export async function runPartyEnrichmentAgent(
     description,
     party_profile: partyProfile,
     existing_clues: existingCluesSummary,
+    max_searches: String(controls.enrichment_max_searches_per_round),
+    max_fetches: String(controls.enrichment_max_fetches_per_round),
   })
   const effectiveModel = config.model ?? model
   // Always include store_clue alongside config tools
@@ -167,7 +171,6 @@ export async function runPartyEnrichmentAgent(
     }
   } catch { /* corpus unavailable, proceed without */ }
 
-  const controls = dbGetControls()
   const raw = await runAgenticLoop({
     model: effectiveModel,
     topicId,
@@ -178,6 +181,11 @@ export async function runPartyEnrichmentAgent(
     max_tokens: budgetOutput(effectiveModel, config.content, { min: 3000, max: 6000 }),
     contextWarningThreshold: controls.enrichment_context_warning,
     customTools: { store_clue: storeClueHandler },
+    freeTools: ["store_clue"],
+    perRoundCaps: {
+      web_search: controls.enrichment_max_searches_per_round,
+      fetch_url: controls.enrichment_max_fetches_per_round,
+    },
     messages: [
       { role: "system", content: config.content },
       { role: "user", content: `Begin your research on ${party.name}. Use the tools to search, fetch, and store clues. Each clue will be independently fact-checked. Output your final profile update as JSON when done.${corpusContext}` },

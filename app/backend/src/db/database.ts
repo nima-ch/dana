@@ -332,4 +332,43 @@ function applySchema(db: Database): void {
   try { db.run(`ALTER TABLE parties ADD COLUMN weight_evidence TEXT NOT NULL DEFAULT '{}'`) } catch { /* column already exists */ }
   try { db.run(`ALTER TABLE forum_turns ADD COLUMN moderator_directive TEXT`) } catch { /* already exists */ }
   try { db.run(`ALTER TABLE forum_turns ADD COLUMN moderator_reason TEXT`) } catch { /* already exists */ }
+
+  // Version isolation migrations
+  try { db.run(`ALTER TABLE states ADD COLUMN parent_version INTEGER`) } catch { /* already exists */ }
+  try { db.run(`ALTER TABLE states ADD COLUMN fork_stage TEXT`) } catch { /* already exists */ }
+  try { db.run(`ALTER TABLE states ADD COLUMN version_status TEXT NOT NULL DEFAULT 'complete'`) } catch { /* already exists */ }
+  try { db.run(`ALTER TABLE states ADD COLUMN parties_snapshot TEXT`) } catch { /* already exists */ }
+  try { db.run(`ALTER TABLE states ADD COLUMN representatives_snapshot TEXT`) } catch { /* already exists */ }
+  try { db.run(`ALTER TABLE states ADD COLUMN completed_stages TEXT NOT NULL DEFAULT '[]'`) } catch { /* already exists */ }
+  // Backfill completed_stages for existing complete versions
+  try { db.run(`UPDATE states SET completed_stages = '["discovery","enrichment","forum_prep","forum","expert_council"]' WHERE version_status = 'complete' AND completed_stages = '[]'`) } catch { /* ok */ }
+  // Backfill in-progress versions: infer completed_stages from topic status
+  try {
+    const inProgress = db.query<{ topic_id: string; version: number }, []>(
+      "SELECT s.topic_id, s.version FROM states s WHERE s.version_status = 'in_progress' AND s.completed_stages = '[]'"
+    ).all()
+    for (const row of inProgress) {
+      const topic = db.query<{ status: string }, [string]>("SELECT status FROM topics WHERE id = ?").get(row.topic_id)
+      if (!topic) continue
+      const statusStageMap: Record<string, string[]> = {
+        review_parties: ["discovery"],
+        enrichment: ["discovery"],
+        review_enrichment: ["discovery", "enrichment"],
+        forum_prep: ["discovery", "enrichment"],
+        review_forum_prep: ["discovery", "enrichment", "forum_prep"],
+        forum: ["discovery", "enrichment", "forum_prep"],
+        review_forum: ["discovery", "enrichment", "forum_prep", "forum"],
+        expert_council: ["discovery", "enrichment", "forum_prep", "forum"],
+      }
+      const stages = statusStageMap[topic.status] ?? []
+      if (stages.length > 0) {
+        db.run("UPDATE states SET completed_stages = ? WHERE topic_id = ? AND version = ?",
+          [JSON.stringify(stages), row.topic_id, row.version])
+      }
+    }
+  } catch { /* ok */ }
+
+  // Unique indices for version integrity
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_states_topic_version ON states(topic_id, version)`)
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_expert_councils_topic_version ON expert_councils(topic_id, version)`)
 }

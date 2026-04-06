@@ -93,9 +93,9 @@ function ClueCard({ clue, expanded, onToggleExpanded, onEdit, onSmartEdit, onDel
   clue: Clue
   expanded: boolean
   onToggleExpanded: () => void
-  onEdit: () => void
-  onSmartEdit: () => void
-  onDelete: () => void
+  onEdit?: () => void
+  onSmartEdit?: () => void
+  onDelete?: () => void
 }) {
   const current = getCurrent(clue)
   const credibility = Number(current.source_credibility?.score ?? 0)
@@ -196,11 +196,13 @@ function ClueCard({ clue, expanded, onToggleExpanded, onEdit, onSmartEdit, onDel
             {timelineDate && <div className="rounded-lg border border-border bg-background p-3"><div className="text-xs text-muted-foreground">Date</div><div className="mt-1 text-sm">{timelineDate}</div></div>}
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={onEdit}><PencilLine className="size-4" /> Edit</Button>
-            <Button variant="outline" size="sm" onClick={onSmartEdit}><ArrowRight className="size-4" /> Smart edit</Button>
-            <Button variant="destructive" size="sm" onClick={onDelete}><Trash2 className="size-4" /> Delete</Button>
-          </div>
+          {(onEdit || onSmartEdit || onDelete) && (
+            <div className="flex flex-wrap gap-2">
+              {onEdit && <Button variant="outline" size="sm" onClick={onEdit}><PencilLine className="size-4" /> Edit</Button>}
+              {onSmartEdit && <Button variant="outline" size="sm" onClick={onSmartEdit}><ArrowRight className="size-4" /> Smart edit</Button>}
+              {onDelete && <Button variant="destructive" size="sm" onClick={onDelete}><Trash2 className="size-4" /> Delete</Button>}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -238,9 +240,9 @@ function BulkImportDialog({ topicId, open, onOpenChange, onImported }: { topicId
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>Bulk import clues</DialogTitle><DialogDescription>Paste research notes or mixed text to extract multiple clues.</DialogDescription></DialogHeader><Textarea value={content} onChange={(e) => setContent(e.target.value)} className="min-h-64" placeholder="Paste text here..." />{error && <p className="text-sm text-destructive">{error}</p>}<DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button disabled={busy || !content.trim()} onClick={async () => { setBusy(true); setError(null); try { await api.clues.bulkImportStart(topicId, content); onImported(); onOpenChange(false); } catch (err) { setError(err instanceof Error ? err.message : "Bulk import failed") } finally { setBusy(false) } }}>{busy ? "Importing..." : "Import"}</Button></DialogFooter></DialogContent></Dialog>
 }
 
-interface CluesPanelProps { topicId: string }
+interface CluesPanelProps { topicId: string; version?: number; isCurrentVersion?: boolean }
 
-export function CluesPanel({ topicId }: CluesPanelProps) {
+export function CluesPanel({ topicId, version, isCurrentVersion = true }: CluesPanelProps) {
   const [clues, setClues] = useState<Clue[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -255,11 +257,15 @@ export function CluesPanel({ topicId }: CluesPanelProps) {
   const [smartEditClue, setSmartEditClue] = useState<Clue | null>(null)
   const [smartEditFeedback, setSmartEditFeedback] = useState("")
   const [smartEditBusy, setSmartEditBusy] = useState(false)
+  const [smartAddOpen, setSmartAddOpen] = useState(false)
+  const [smartAddQuery, setSmartAddQuery] = useState("")
+  const [smartAddBusy, setSmartAddBusy] = useState(false)
   const startOp = usePipelineStore((s) => s.startOperation)
   const finishOp = usePipelineStore((s) => s.finishOperation)
+  const readOnly = !isCurrentVersion
 
 
-  const load = useCallback(async () => { setLoading(true); setError(null); try { setClues(await api.clues.list(topicId)) } catch (err) { setError(err instanceof Error ? err.message : "Failed to load clues") } finally { setLoading(false) } }, [topicId])
+  const load = useCallback(async () => { setLoading(true); setError(null); try { setClues(await api.clues.list(topicId, version)) } catch (err) { setError(err instanceof Error ? err.message : "Failed to load clues") } finally { setLoading(false) } }, [topicId, version])
   useEffect(() => { void load() }, [load])
 
   const options = useMemo(() => ({ parties: getParties(clues), domains: getDomains(clues), types: getTypes(clues) }), [clues])
@@ -293,7 +299,29 @@ export function CluesPanel({ topicId }: CluesPanelProps) {
     try { await api.clues.cleanupStart(topicId); await load() } catch (err) { setError(err instanceof Error ? err.message : "Cleanup failed") } finally { setCleanupBusy(false) }
   }
 
+  const handleSmartAdd = async () => {
+    if (!smartAddQuery.trim()) return
+    setSmartAddBusy(true); setSmartAddOpen(false); setError(null)
+    startOp(topicId, "smart-add", `Research: ${smartAddQuery.slice(0, 40)}`)
+    try {
+      const result = await api.clues.smartAdd(topicId, smartAddQuery.trim())
+      await load()
+      setSmartAddQuery("")
+      if (result.imported === 0) setError("No clues found for that query. Try a different search.")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Smart add failed")
+    } finally {
+      finishOp()
+      setSmartAddBusy(false)
+    }
+  }
+
   return <div className="space-y-4 text-foreground">
+    {readOnly && (
+      <div className="flex items-center gap-2 rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-2.5 text-sm text-blue-400">
+        Viewing evidence from v{version}. Switch to the current version to edit.
+      </div>
+    )}
     <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-sm lg:flex-row lg:items-end lg:justify-between">
       <div className="space-y-1">
         <div className="flex items-center gap-2">
@@ -302,10 +330,13 @@ export function CluesPanel({ topicId }: CluesPanelProps) {
         </div>
         <p className="text-sm text-muted-foreground">Search, filter, inspect, and refine clues.</p>
       </div>
-      <div className="flex flex-wrap gap-2">
-        <Button variant="outline" onClick={() => setBulkOpen(true)}><MessageSquarePlus className="size-4" /> Bulk import</Button>
-        <Button variant="outline" onClick={cleanup} disabled={cleanupBusy}><RefreshCw className={cn("size-4", cleanupBusy && "animate-spin")} /> Cleanup</Button>
-      </div>
+      {!readOnly && (
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => setSmartAddOpen(true)} disabled={smartAddBusy}><Search className="size-4" /> Smart Add</Button>
+          <Button variant="outline" onClick={() => setBulkOpen(true)}><MessageSquarePlus className="size-4" /> Bulk import</Button>
+          <Button variant="outline" onClick={cleanup} disabled={cleanupBusy}><RefreshCw className={cn("size-4", cleanupBusy && "animate-spin")} /> Cleanup</Button>
+        </div>
+      )}
     </div>
 
     <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-5">
@@ -327,7 +358,7 @@ export function CluesPanel({ topicId }: CluesPanelProps) {
       <Card className="border-dashed"><CardContent className="py-10 text-center text-sm text-muted-foreground">{clues.length === 0 ? "No clues yet. Use Bulk import or Research to add evidence." : "No clues match the current filters."}</CardContent></Card>
     ) : (
       <div className="max-h-[70vh] space-y-3 overflow-y-auto pr-4">
-        {filtered.map((clue) => <ClueCard key={clue.id} clue={clue} expanded={expandedId === clue.id} onToggleExpanded={() => setExpandedId(expandedId === clue.id ? null : clue.id)} onEdit={() => setEditingClue(clue)} onSmartEdit={() => { setSmartEditClue(clue); setSmartEditFeedback("") }} onDelete={() => setDeleteTarget(clue)} />)}
+        {filtered.map((clue) => <ClueCard key={clue.id} clue={clue} expanded={expandedId === clue.id} onToggleExpanded={() => setExpandedId(expandedId === clue.id ? null : clue.id)} onEdit={readOnly ? undefined : () => setEditingClue(clue)} onSmartEdit={readOnly ? undefined : () => { setSmartEditClue(clue); setSmartEditFeedback("") }} onDelete={readOnly ? undefined : () => setDeleteTarget(clue)} />)}
       </div>
     )}
 
@@ -347,5 +378,18 @@ export function CluesPanel({ topicId }: CluesPanelProps) {
     {editingClue && <Dialog open={!!editingClue} onOpenChange={(open) => !open && setEditingClue(null)}><DialogContent className="sm:max-w-2xl"><DialogHeader><DialogTitle>Edit clue</DialogTitle><DialogDescription>Update summary, credibility, relevance, and bias flags.</DialogDescription></DialogHeader><EditClueCard clue={editingClue} onSave={saveClue} onCancel={() => setEditingClue(null)} /></DialogContent></Dialog>}
     {deleteTarget && <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}><DialogContent><DialogHeader><DialogTitle>Delete clue?</DialogTitle><DialogDescription>This action cannot be undone.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" onClick={async () => { if (!deleteTarget) return; try { await api.clues.delete(topicId, deleteTarget.id); setClues((prev) => prev.filter((item) => item.id !== deleteTarget.id)); setDeleteTarget(null) } catch (err) { setError(err instanceof Error ? err.message : "Failed to delete clue") } }}>Delete</Button></DialogFooter></DialogContent></Dialog>}
     <BulkImportDialog topicId={topicId} open={bulkOpen} onOpenChange={setBulkOpen} onImported={load} />
+    <Dialog open={smartAddOpen} onOpenChange={setSmartAddOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Smart Add Evidence</DialogTitle>
+          <DialogDescription>Enter a topic, fact, or question. The system will search the web, extract relevant clues, and fact-check them.</DialogDescription>
+        </DialogHeader>
+        <Input value={smartAddQuery} onChange={(e) => setSmartAddQuery(e.target.value)} placeholder='e.g. "ECB rate decision March 2026"' onKeyDown={(e) => { if (e.key === "Enter" && smartAddQuery.trim()) void handleSmartAdd() }} />
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setSmartAddOpen(false)}>Cancel</Button>
+          <Button onClick={() => void handleSmartAdd()} disabled={!smartAddQuery.trim() || smartAddBusy}>{smartAddBusy ? "Searching..." : "Search & Add"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 }

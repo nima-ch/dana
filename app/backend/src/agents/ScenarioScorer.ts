@@ -26,6 +26,8 @@ interface ClueEvidence {
   effective_weight: number       // credibility - 0.1 per bias flag, min 0.1
   summary: string
   cited_in_turns: number         // how many debate turns cited this clue
+  fact_check_verdict?: string    // verified/misleading/disputed/unverifiable
+  cui_bono?: string              // who benefits from this being believed
 }
 
 interface ScenarioEvidence {
@@ -53,7 +55,7 @@ function buildEvidenceMap(
   allTurns: ForumTurn[],
   scratchpads: { party_id: string; content: ScratchpadContent }[],
   parties: Party[],
-  clueMap: Map<string, { title: string; clue_type: string; credibility: number; bias_flags: string[]; summary: string }>,
+  clueMap: Map<string, { title: string; clue_type: string; credibility: number; bias_flags: string[]; summary: string; fact_check_verdict?: string; cui_bono?: string }>,
 ): ScenarioEvidence[] {
   const partyMap = new Map(parties.map(p => [p.id, p]))
 
@@ -102,6 +104,8 @@ function buildEvidenceMap(
         effective_weight: computeEffectiveWeight(clue.credibility, clue.bias_flags),
         summary: clue.summary,
         cited_in_turns: (clueCitedBy.get(cId) ?? []).length,
+        fact_check_verdict: clue.fact_check_verdict,
+        cui_bono: clue.cui_bono,
       })
     }
 
@@ -124,6 +128,8 @@ function buildEvidenceMap(
           effective_weight: computeEffectiveWeight(clue.credibility, clue.bias_flags),
           summary: clue.summary,
           cited_in_turns: (clueCitedBy.get(cId) ?? []).length,
+          fact_check_verdict: clue.fact_check_verdict,
+          cui_bono: clue.cui_bono,
         })
       }
     }
@@ -217,16 +223,20 @@ function serializeEvidenceMap(evidenceMap: ScenarioEvidence[], parties: Party[])
     if (sc.supporting_clues.length > 0) {
       lines.push(`\nSUPPORTING CLUES (${sc.supporting_clues.length}):`)
       for (const c of sc.supporting_clues) {
-        lines.push(`  [${c.clue_id}] ${c.title} | type=${c.clue_type} | credibility=${c.credibility.toFixed(2)} | bias_flags=[${c.bias_flags.join(", ")}] | effective_weight=${c.effective_weight.toFixed(2)} | cited_in_${c.cited_in_turns}_turns`)
+        const verdict = c.fact_check_verdict ? ` | verdict=${c.fact_check_verdict.toUpperCase()}` : ""
+        lines.push(`  [${c.clue_id}] ${c.title} | type=${c.clue_type} | credibility=${c.credibility.toFixed(2)}${verdict} | bias_flags=[${c.bias_flags.join(", ")}] | effective_weight=${c.effective_weight.toFixed(2)} | cited_in_${c.cited_in_turns}_turns`)
         lines.push(`    Summary: ${c.summary.slice(0, 120)}`)
+        if (c.cui_bono) lines.push(`    Cui bono: ${c.cui_bono.slice(0, 100)}`)
       }
     }
 
     if (sc.contesting_clues.length > 0) {
       lines.push(`\nCONTESTING CLUES (${sc.contesting_clues.length}):`)
       for (const c of sc.contesting_clues) {
-        lines.push(`  [${c.clue_id}] ${c.title} | effective_weight=${c.effective_weight.toFixed(2)}`)
+        const verdict = c.fact_check_verdict ? ` | verdict=${c.fact_check_verdict.toUpperCase()}` : ""
+        lines.push(`  [${c.clue_id}] ${c.title} | credibility=${c.credibility.toFixed(2)}${verdict} | effective_weight=${c.effective_weight.toFixed(2)}`)
         lines.push(`    Summary: ${c.summary.slice(0, 100)}`)
+        if (c.cui_bono) lines.push(`    Cui bono: ${c.cui_bono.slice(0, 80)}`)
       }
     }
 
@@ -282,6 +292,7 @@ export async function runScenarioScorer(
   sessionId: string,
   model: string,
   onProgress?: (msg: string) => void,
+  version?: number,
 ): Promise<ExpertCouncilOutput> {
   const scorerConfig = await resolvePrompt("scoring/score-scenarios")
   const effectiveModel = scorerConfig.model ?? model
@@ -307,7 +318,7 @@ export async function runScenarioScorer(
   if (scenarios.length === 0) throw new Error("No scenarios found in forum session — cannot score")
 
   // Build clue lookup map
-  const clueMap = new Map<string, { title: string; clue_type: string; credibility: number; bias_flags: string[]; summary: string }>()
+  const clueMap = new Map<string, { title: string; clue_type: string; credibility: number; bias_flags: string[]; summary: string; fact_check_verdict?: string; cui_bono?: string }>()
   for (const clue of rawClues) {
     const v = clue.versions[clue.current - 1] ?? clue.versions[clue.versions.length - 1]
     if (!v) continue
@@ -317,6 +328,8 @@ export async function runScenarioScorer(
       credibility: v.source_credibility.score,
       bias_flags: v.source_credibility.bias_flags,
       summary: v.bias_corrected_summary,
+      fact_check_verdict: v.fact_check?.verdict,
+      cui_bono: v.fact_check?.cui_bono,
     })
   }
 
@@ -401,6 +414,23 @@ export async function runScenarioScorer(
   // Sort descending
   verdict.scenarios_ranked.sort((a, b) => b.probability - a.probability)
 
+  // Augment each ranked scenario with deterministic power_balance from evidence map
+  for (const ranked of verdict.scenarios_ranked) {
+    const ev = evidenceMap.find(e => e.scenario_id === ranked.scenario_id)
+    if (ev) {
+      const backingWeight = ev.forum_for.reduce((s, p) => s + p.weight, 0)
+      const opposingWeight = ev.forum_against.reduce((s, p) => s + p.weight, 0)
+      ranked.power_balance = {
+        backing_parties: ev.forum_for.map(p => ({ party_id: p.party_id, party_name: p.party_name, weight: p.weight })),
+        opposing_parties: ev.forum_against.map(p => ({ party_id: p.party_id, party_name: p.party_name, weight: p.weight })),
+        net_power: ev.net_power_projection,
+        forum_support_ratio: `${ev.forum_for.length}:${ev.forum_against.length}`,
+        weight_adjusted_ratio: `${backingWeight}:${opposingWeight}`,
+        explanation: ranked.power_balance?.explanation ?? "",
+      }
+    }
+  }
+
   const finalVerdict: FinalVerdict = {
     synthesized_at: new Date().toISOString(),
     scenarios_ranked: verdict.scenarios_ranked,
@@ -409,21 +439,24 @@ export async function runScenarioScorer(
     weight_challenge_decisions: [],
   }
 
-  // Determine version
-  let version = 1
-  try {
-    const topic = dbGetTopic(topicId)
-    if (topic) version = Math.max(version, (topic.current_version || 0) + 1)
-  } catch { /* use default */ }
-  const vMatch = runId.match(/v(\d+)/)
-  if (vMatch) version = parseInt(vMatch[1])
+  // Determine version — prefer passed version, fallback to extraction from runId
+  let effectiveVersion = version ?? 1
+  if (!version) {
+    try {
+      const topic = dbGetTopic(topicId)
+      if (topic) effectiveVersion = Math.max(effectiveVersion, (topic.current_version || 0))
+    } catch { /* use default */ }
+    const vMatch = runId.match(/v(\d+)/)
+    if (vMatch) effectiveVersion = parseInt(vMatch[1])
+  }
 
   const councilOutput: ExpertCouncilOutput = {
-    version,
-    verdict_id: `verdict-v${version}`,
+    version: effectiveVersion,
+    verdict_id: `verdict-v${effectiveVersion}`,
     experts: [],         // no expert personas — single scorer
     deliberations: [],   // no per-expert artifacts
     final_verdict: finalVerdict,
+    evidence_map: evidenceMap,
   }
 
   // Persist

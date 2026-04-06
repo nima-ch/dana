@@ -30,11 +30,18 @@ export async function runForumPrepAgent(
   log.forum(`ForumPrepAgent: preparing ${representatives.length} representatives`)
   emitThink(topicId, "📋", "Forum preparation", `${representatives.length} representatives reading evidence…`)
 
-  // Build clue list string once (shared across all agents)
+  // Build clue list with credibility intelligence
   const clueList = allClues.map(clue => {
     const cur = clue.versions.find(v => v.v === clue.current)!
-    const status = clue.status === "disputed" ? " [DISPUTED]" : ""
-    return `[${clue.id}]${status} (${cur.clue_type}, ${cur.timeline_date}) ${cur.title}: ${cur.bias_corrected_summary.slice(0, 200)}`
+    const cred = cur.source_credibility
+    const fc = cur.fact_check
+    const verdictTag = fc?.verdict ? fc.verdict.toUpperCase() : "UNCHECKED"
+    const biasStr = cred.bias_flags.length > 0 ? `, bias:${cred.bias_flags.join("+")}` : ""
+    const header = `[${clue.id}] [${verdictTag}, cred:${cred.score}${biasStr}] (${cur.clue_type}, ${cur.timeline_date})`
+    const title = cur.title
+    const summary = cur.bias_corrected_summary.slice(0, 200)
+    const cuiBono = fc?.cui_bono ? `\n  Cui bono: ${fc.cui_bono.slice(0, 150)}` : ""
+    return `${header}\n  ${title}: ${summary}${cuiBono}`
   }).join("\n")
 
   const prepared: string[] = []
@@ -46,7 +53,19 @@ export async function runForumPrepAgent(
 
     const otherParties = parties
       .filter(p => p.id !== party.id)
-      .map(p => `- ${p.name} (${p.type}): agenda="${p.agenda.slice(0, 100)}" stance=${p.stance}`)
+      .map(p => {
+        const means = p.means.slice(0, 3).map(m => `"${m}"`).join(", ")
+        const vulns = p.vulnerabilities.slice(0, 2).map(v => `"${v}"`).join(", ")
+        const allies = (p.circle?.visible ?? []).slice(0, 5).join(", ")
+        return [
+          `- ${p.name} (${p.type}):`,
+          `  agenda="${p.agenda.slice(0, 120)}"`,
+          `  stance=${p.stance}`,
+          `  means=[${means}]`,
+          `  vulnerabilities=[${vulns}]`,
+          allies ? `  allies=[${allies}]` : "",
+        ].filter(Boolean).join("\n")
+      })
       .join("\n")
 
     onProgress?.(`Forum prep: ${party.name} reading evidence…`)

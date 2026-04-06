@@ -17,6 +17,16 @@ type VerdictRow = {
 export function dbSaveExpertCouncil(topicId: string, output: ExpertCouncilOutput): void {
   const db = getDb()
   const txn = db.transaction(() => {
+    // Delete existing council for same topic+version (allows re-runs)
+    const existing = db.query<{ id: number }, [string, number]>(
+      "SELECT id FROM expert_councils WHERE topic_id = ? AND version = ?"
+    ).get(topicId, output.version)
+    if (existing) {
+      db.run("DELETE FROM final_verdicts WHERE council_id = ?", [existing.id])
+      db.run("DELETE FROM expert_assessments WHERE council_id = ?", [existing.id])
+      db.run("DELETE FROM expert_councils WHERE id = ?", [existing.id])
+    }
+
     db.run(
       `INSERT INTO expert_councils (topic_id, version, verdict_id, created_at, experts)
        VALUES (?, ?, ?, ?, ?)`,

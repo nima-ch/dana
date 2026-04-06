@@ -5,7 +5,7 @@ import { runForumPrep } from "../agents/WeightCalculator"
 import { runForumOrchestrator } from "../agents/ForumOrchestrator"
 import { runScenarioScorer } from "../agents/ScenarioScorer"
 import { writeCheckpoint, readCheckpoint, isStageComplete } from "./checkpointManager"
-import { createVersion } from "./stateManager"
+import { allocateVersion, finalizeVersion, setVersionSessionId, markStageComplete } from "./stateManager"
 import { emit, makeProgressEmitter } from "../routes/stream"
 import { getTopic, updateTopic } from "./topicManager"
 import type { Topic } from "./topicManager"
@@ -20,15 +20,15 @@ async function loadTopic(topicId: string): Promise<Topic> {
 
 export async function runInitialPipeline(topicId: string, runId?: string): Promise<{ run_id: string; status: string }> {
   const topic = await loadTopic(topicId)
-  // Use deterministic runId so restarts resume from the same checkpoint
-  runId = runId ?? `initial-v${topic.current_version + 1}`
+  const v = await allocateVersion(topicId, { forkFrom: null, forkStage: null })
+  runId = runId ?? `run-v${v}`
   const checkpoint = await readCheckpoint(topicId, runId)
   const progress = makeProgressEmitter(topicId, "pipeline")
-  const sessionId = "forum-session-v1"
+  const sessionId = `forum-session-v${v}`
 
   try {
     log.separator()
-    log.pipeline(`Starting initial pipeline for "${topic.title}"`, `run=${runId}`)
+    log.pipeline(`Starting initial pipeline for "${topic.title}"`, `run=${runId}, version=${v}`)
     log.pipeline(`Models: enrichment=${topic.models.enrichment} forum=${topic.models.forum_reasoning} scorer=${topic.models.expert_council}`)
     log.separator()
     const pipelineStart = Date.now()
@@ -40,18 +40,16 @@ export async function runInitialPipeline(topicId: string, runId?: string): Promi
       emit(topicId, { type: "progress", stage: "discovery", pct: 0, msg: "Starting discovery..." })
 
       await runDiscoveryAgent(
-        topicId,
-        topic.title,
-        topic.description,
-        topic.models.enrichment,
-        runId,
+        topicId, topic.title, topic.description,
+        topic.models.enrichment, runId,
         (msg) => emit(topicId, { type: "progress", stage: "discovery", pct: 0.5, msg })
       )
 
       await writeCheckpoint(topicId, runId, { stage: "enrichment", step: 0 })
+      await markStageComplete(topicId, v, "discovery")
       log.discovery("Stage 1/5: DISCOVERY complete")
       emit(topicId, { type: "stage_complete", stage: "discovery" })
-    } else { log.discovery("Stage 1/6: DISCOVERY skipped (checkpoint)") }
+    } else { log.discovery("Stage 1/5: DISCOVERY skipped (checkpoint)") }
 
     // Stage 2: Enrichment
     if (!isStageComplete(checkpoint, "enrichment")) {
@@ -60,33 +58,30 @@ export async function runInitialPipeline(topicId: string, runId?: string): Promi
       emit(topicId, { type: "progress", stage: "enrichment", pct: 0, msg: "Starting enrichment..." })
 
       await runEnrichmentAgent(
-        topicId,
-        topic.title,
-        topic.description,
+        topicId, topic.title, topic.description,
         { enrichment: topic.models.enrichment, extraction: topic.models.extraction },
         runId,
         (msg) => emit(topicId, { type: "progress", stage: "enrichment", pct: 0.5, msg })
       )
 
       await writeCheckpoint(topicId, runId, { stage: "weight", step: 0 })
+      await markStageComplete(topicId, v, "enrichment")
       log.enrichment("Stage 2/5: ENRICHMENT complete")
       emit(topicId, { type: "stage_complete", stage: "enrichment" })
-    } else { log.enrichment("Stage 2/6: ENRICHMENT skipped (checkpoint)") }
+    } else { log.enrichment("Stage 2/5: ENRICHMENT skipped (checkpoint)") }
 
-    // Stage 3: Forum Prep (persona generation + speaking budgets)
+    // Stage 3: Forum Prep
     if (!isStageComplete(checkpoint, "forum_prep") && !isStageComplete(checkpoint, "weight")) {
       log.weight("Stage 3/5: FORUM PREP starting")
       emit(topicId, { type: "progress", stage: "forum_prep", pct: 0, msg: "Generating forum representatives..." })
 
       await runForumPrep(
-        topicId,
-        topic.title,
-        topic.models.enrichment,
-        runId,
+        topicId, topic.title, topic.models.enrichment, runId,
         (msg) => emit(topicId, { type: "progress", stage: "forum_prep", pct: 0.5, msg })
       )
 
       await writeCheckpoint(topicId, runId, { stage: "forum", step: 0 })
+      await markStageComplete(topicId, v, "forum_prep")
       log.weight("Stage 3/5: FORUM PREP complete")
       emit(topicId, { type: "stage_complete", stage: "forum_prep" })
     } else { log.weight("Stage 3/5: FORUM PREP skipped (checkpoint)") }
@@ -97,17 +92,14 @@ export async function runInitialPipeline(topicId: string, runId?: string): Promi
       log.forum("Stage 4/5: FORUM starting")
       emit(topicId, { type: "progress", stage: "forum", pct: 0, msg: "Starting forum..." })
 
-      const forumCheckpoint = await readCheckpoint(topicId, runId)
-
       await runForumOrchestrator(
-        topicId,
-        runId,
-        sessionId,
-        topic.models.forum_reasoning,
-        forumCheckpoint,
-        (msg) => emit(topicId, { type: "progress", stage: "forum", pct: 0.5, msg })
+        topicId, runId, sessionId, topic.models.forum_reasoning, null,
+        (msg) => emit(topicId, { type: "progress", stage: "forum", pct: 0.5, msg }),
+        v,
       )
 
+      await setVersionSessionId(topicId, v, sessionId)
+      await markStageComplete(topicId, v, "forum")
       await writeCheckpoint(topicId, runId, { stage: "expert_council", step: 0 })
       log.forum("Stage 4/5: FORUM complete")
     } else { log.forum("Stage 4/5: FORUM skipped (checkpoint)") }
@@ -119,22 +111,20 @@ export async function runInitialPipeline(topicId: string, runId?: string): Promi
 
     const councilOutput = await runScenarioScorer(
       topicId, runId, sessionId, topic.models.expert_council,
-      (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: 0.5, msg })
+      (msg) => emit(topicId, { type: "progress", stage: "expert_council", pct: 0.5, msg }),
+      v,
     )
 
-    await createVersion(topicId, {
-      label: "Initial analysis",
-      trigger: "initial_run",
+    await finalizeVersion(topicId, v, {
       forum_session_id: sessionId,
       verdict_id: councilOutput.verdict_id,
     })
 
-    await updateTopicStatus(topicId, "complete")
     emit(topicId, { type: "stage_complete", stage: "verdict" })
 
     const totalElapsed = Math.round((Date.now() - pipelineStart) / 1000)
     log.separator()
-    log.pipeline(`Pipeline COMPLETE in ${totalElapsed}s`, `run=${runId}`)
+    log.pipeline(`Pipeline COMPLETE in ${totalElapsed}s`, `run=${runId}, version=${v}`)
     log.separator()
 
     return { run_id: runId, status: "complete" }

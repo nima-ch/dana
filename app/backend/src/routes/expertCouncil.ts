@@ -1,5 +1,4 @@
 import { Elysia } from "elysia"
-import { getAllVersions } from "../pipeline/stateManager"
 import { dbGetExpertCouncil, dbGetLatestExpertCouncil } from "../db/queries/expert"
 
 export const expertCouncilRouter = new Elysia({ prefix: "/api/topics/:id" })

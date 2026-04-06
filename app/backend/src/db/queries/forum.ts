@@ -216,10 +216,21 @@ export function dbGetForumSession(topicId: string, sessionId: string): ForumSess
 export function dbUpsertForumSession(topicId: string, session: ForumSession): void {
   const db = getDb()
   const txn = db.transaction(() => {
+    // Clean up old rounds/turns for this session before re-creating (prevents accumulation across re-runs)
+    if (session.status === "running") {
+      const oldRounds = db.query<{ id: number }, [string, string]>(
+        "SELECT id FROM forum_rounds WHERE session_id = ? AND topic_id = ?"
+      ).all(session.session_id, topicId)
+      for (const r of oldRounds) {
+        db.run("DELETE FROM forum_turns WHERE round_id = ?", [r.id])
+      }
+      db.run("DELETE FROM forum_rounds WHERE session_id = ? AND topic_id = ?", [session.session_id, topicId])
+    }
+
     db.run(
       `INSERT INTO forum_sessions (id, topic_id, version, type, status, started_at, completed_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id, topic_id) DO UPDATE SET status=excluded.status, completed_at=excluded.completed_at`,
+       ON CONFLICT(id, topic_id) DO UPDATE SET status=excluded.status, completed_at=excluded.completed_at, version=excluded.version, started_at=excluded.started_at`,
       [session.session_id, topicId, session.version, session.type, session.status,
        session.started_at, session.completed_at ?? null]
     )
@@ -293,6 +304,7 @@ export interface ScratchpadContent {
     r: "S" | "W" | "N"                // S=supports, W=weakens, N=neutral
     use: string
     counter: string
+    credibility_attack?: string        // how to use credibility/bias to attack this evidence
     // legacy field names — kept for backward compat with full-format scratchpads
     relevance_to_us?: string
     how_we_use_it?: string
@@ -301,6 +313,7 @@ export interface ScratchpadContent {
   our_core_position: string
   scenario_we_are_pushing: string
   strongest_opposing_party: string
+  attack_strategy?: string             // how to exploit opponent's vulnerability
   our_key_vulnerabilities: string[]
   opening_move: string
 }

@@ -85,11 +85,16 @@ export const api = {
         `/topics/${topicId}/pipeline/status`
       ),
   },
+  states: {
+    list: (topicId: string) => request<any[]>(`/topics/${topicId}/states`),
+  },
   representatives: {
-    list: (topicId: string) => request<any[]>(`/topics/${topicId}/representatives`),
+    list: (topicId: string, version?: number) =>
+      request<any[]>(`/topics/${topicId}/representatives${version ? `?version=${version}` : ""}`),
   },
   parties: {
-    list: (topicId: string) => request<any[]>(`/topics/${topicId}/parties`),
+    list: (topicId: string, version?: number) =>
+      request<any[]>(`/topics/${topicId}/parties${version ? `?version=${version}` : ""}`),
     update: (topicId: string, partyId: string, data: Record<string, unknown>) =>
       request<any>(`/topics/${topicId}/parties/${partyId}`, { method: "PUT", body: JSON.stringify(data) }),
     delete: (topicId: string, partyId: string) =>
@@ -114,7 +119,13 @@ export const api = {
       }),
   },
   clues: {
-    list: (topicId: string) => request<any[]>(`/topics/${topicId}/clues`),
+    list: (topicId: string, version?: number) =>
+      request<any[]>(`/topics/${topicId}/clues${version ? `?version=${version}` : ""}`),
+    smartAdd: (topicId: string, query: string) =>
+      request<{ imported: number; clues: any[]; query: string }>(`/topics/${topicId}/clues/research`, {
+        method: "POST", body: JSON.stringify({ query }),
+        signal: AbortSignal.timeout(600_000),
+      }),
     update: (topicId: string, clueId: string, data: Record<string, unknown>) =>
       request<any>(`/topics/${topicId}/clues/${clueId}`, { method: "PUT", body: JSON.stringify(data) }),
     delete: (topicId: string, clueId: string) =>

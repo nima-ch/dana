@@ -3,10 +3,26 @@ import { getTopic } from "../pipeline/topicManager"
 import { smartAddParty, smartEditParty, smartSplitParty, smartMergeParties } from "../agents/PartyIntelligence"
 import { dbGetParties, dbGetParty, dbUpsertParty, dbDeleteParty, dbSetParties } from "../db/queries/parties"
 import { dbGetClues, dbReplaceClues } from "../db/queries/clues"
+import { dbGetState } from "../db/queries/states"
 import type { Party } from "../db/queries/parties"
 
 export const partiesRouter = new Elysia({ prefix: "/api/topics/:id/parties" })
-  .get("/", async ({ params }) => dbGetParties(params.id))
+  .get("/", async ({ params, query }) => {
+    const version = query.version ? parseInt(query.version as string) : null
+    if (version) {
+      const state = dbGetState(params.id, version)
+      if (!state) return []
+
+      // Only show parties if discovery has completed for this version
+      if (!state.completed_stages.includes("discovery")) return []
+
+      // Use snapshot for completed historical versions
+      if (state.version_status === "complete" && state.parties_snapshot) {
+        try { return JSON.parse(state.parties_snapshot) } catch { /* fall through */ }
+      }
+    }
+    return dbGetParties(params.id)
+  })
 
   .get("/:partyId", async ({ params, error }) => {
     const party = dbGetParty(params.id, params.partyId)

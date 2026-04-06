@@ -146,6 +146,20 @@ export function dbGetClues(topicId: string): Clue[] {
   })
 }
 
+export function dbGetCluesAtSnapshot(topicId: string, snapshot: { ids_and_versions: Record<string, number> }): Clue[] {
+  const all = dbGetClues(topicId)
+  return all
+    .filter(c => c.id in snapshot.ids_and_versions)
+    .map(c => {
+      const pinnedVersion = snapshot.ids_and_versions[c.id]
+      return {
+        ...c,
+        current: pinnedVersion,
+        versions: c.versions.filter(v => v.v <= pinnedVersion),
+      }
+    })
+}
+
 export function dbGetClue(topicId: string, clueId: string): Clue | null {
   const db = getDb()
   const row = db.query<ClueRow, [string, string]>(

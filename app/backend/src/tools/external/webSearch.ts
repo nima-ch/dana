@@ -10,12 +10,13 @@ export interface SearchResult {
 export async function webSearch(
   query: string,
   numResults: number = 5,
-  dateFilter?: string
+  dateFilter?: string,
+  language?: string,
 ): Promise<SearchResult[]> {
   const searxngUrl = process.env.SEARXNG_URL || "http://searxng:8080"
 
   try {
-    return await searchWithSearXNG(searxngUrl, query, numResults, dateFilter)
+    return await searchWithSearXNG(searxngUrl, query, numResults, dateFilter, language)
   } catch (searxngError) {
     try {
       return await searchWithBrave(query, numResults)
@@ -33,16 +34,24 @@ async function searchWithSearXNG(
   searxngBaseUrl: string,
   query: string,
   numResults: number,
-  dateFilter?: string
+  dateFilter?: string,
+  language?: string,
 ): Promise<SearchResult[]> {
+  // Strip site: operators — SearXNG meta-search doesn't support them reliably
+  const cleanQuery = query.replace(/site:\S+/gi, "").replace(/\s{2,}/g, " ").trim()
   const url = new URL("/search", normalizeBaseUrl(searxngBaseUrl))
-  url.searchParams.set("q", query)
+  url.searchParams.set("q", cleanQuery || query)
   url.searchParams.set("format", "json")
   url.searchParams.set("pageno", "1")
 
   const timeRange = mapDateFilterToTimeRange(dateFilter)
   if (timeRange) {
     url.searchParams.set("time_range", timeRange)
+  }
+
+  // Only pass language for non-English searches; "en" is too restrictive and drops results
+  if (language && language !== "en") {
+    url.searchParams.set("language", language)
   }
 
   const res = await fetch(url.toString(), {

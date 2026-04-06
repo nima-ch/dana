@@ -65,7 +65,7 @@ export function PipelineActivityFeed({ topicId, status, active = false, onAction
   const stageActions = useMemo(() => getStageActions(status), [status])
 
   const idle = !active && items.length === 0 && status === "draft"
-  const minimized = collapsed || idle
+  const minimized = collapsed
 
   return <Card className={cn("border-border/70 bg-card/80 shadow-none", minimized ? "sticky bottom-4 mx-4" : "mx-0")}> 
     <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 px-4 py-3">

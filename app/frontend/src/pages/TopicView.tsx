@@ -1,15 +1,16 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { Navigate, useParams, useSearchParams } from "react-router-dom"
 import { api, type Topic } from "@/api/client"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { PipelineActivityFeed } from "@/components/Pipeline/PipelineActivityFeed"
 import { OperationModal } from "@/components/Pipeline/OperationModal"
 import { PartiesPanel } from "@/components/Topic/PartiesPanel"
 import { CluesPanel } from "@/components/Topic/CluesPanel"
 import { ForumTab } from "@/components/Topic/ForumTab"
 import { VerdictPanel } from "@/components/Expert/VerdictPanel"
-import { usePipelineStore } from "@/stores/pipelineStore"
+
 
 const TAB_SLUGS = ["overview", "parties", "evidence", "forum", "verdict"] as const
 
@@ -23,33 +24,36 @@ export function TopicView() {
   const activeTab = tabFromSlug(params.get("tab"))
   const [topic, setTopic] = useState<Topic | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [states, setStates] = useState<any[]>([])
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null)
+
+  const loadStates = useCallback((topicId: string) => {
+    api.states.list(topicId).then(setStates).catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (!id) return
     setError(null)
     api.topics.get(id).then(setTopic).catch((e) => setError(e instanceof Error ? e.message : String(e)))
-  }, [id])
+    loadStates(id)
+  }, [id, loadStates])
 
-  const startOp = usePipelineStore((s) => s.startOperation)
-  const finishOp = usePipelineStore((s) => s.finishOperation)
+
 
   const refreshTopic = () => {
     if (!id) return
     api.topics.get(id).then(setTopic).catch(() => {})
+    loadStates(id)
   }
 
   async function handlePipelineAction(action: string) {
     if (!id) return
-    const labels: Record<string, string> = {
-      discover: "Discovery", enrich: "Enrichment", forum_prep: "Forum Prep",
-      forum: "Forum", score: "Scenario Scoring", analyze: "Analysis", reanalyze: "Re-analysis",
+    const statusMap: Record<string, string> = {
+      discover: "discovery", enrich: "enrichment", forum_prep: "forum_prep",
+      forum: "forum", score: "expert_council", analyze: "forum_prep", reanalyze: "forum_prep",
     }
-    startOp(id, action, labels[action] ?? action)
+    // All stages use PipelineActivityFeed for SSE — no popup modal needed
     try {
-      const statusMap: Record<string, string> = {
-        discover: "discovery", enrich: "enrichment", forum_prep: "forum_prep",
-        forum: "forum", score: "expert_council", analyze: "forum_prep", reanalyze: "forum_prep",
-      }
       const apiCall: Record<string, () => Promise<unknown>> = {
         discover: () => api.pipeline.discover(id),
         enrich: () => api.pipeline.enrich(id),
@@ -61,8 +65,7 @@ export function TopicView() {
       }
       await apiCall[action]?.()
       setTopic(current => current ? { ...current, status: statusMap[action] ?? current.status } : current)
-    } finally {
-      finishOp()
+    } catch {
       refreshTopic()
     }
   }
@@ -71,7 +74,20 @@ export function TopicView() {
   if (!id) return <Navigate to="/" replace />
   if (!topic) return <div className="p-6 text-sm text-muted-foreground">Loading topic…</div>
 
-  const pipelineFeed = <PipelineActivityFeed topicId={id} status={topic.status} active={topic.status !== "draft"} onAction={handlePipelineAction} onStageComplete={refreshTopic} />
+  const viewingVersion = selectedVersion ?? topic.current_version
+  const isCurrentVersion = viewingVersion === topic.current_version
+  const selectedState = states.find((s: any) => s.version === viewingVersion)
+
+  // For historical complete versions, show all stages as complete.
+  // For in-progress versions that aren't the current pipeline, derive status from fork_stage.
+  // For the current version, use the live topic status.
+  const effectiveStatus = isCurrentVersion
+    ? topic.status
+    : selectedState?.version_status === "complete"
+      ? "complete"
+      : topic.status
+
+  const pipelineFeed = <PipelineActivityFeed topicId={id} status={effectiveStatus} active={topic.status !== "draft"} onAction={handlePipelineAction} onStageComplete={refreshTopic} />
   const content = {
     overview: <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-border/70 bg-card/80 px-4 py-2.5 text-sm">
@@ -79,16 +95,31 @@ export function TopicView() {
         <Badge variant="secondary" className="capitalize">{topic.status.replace(/_/g, " ")}</Badge>
         <span className="text-border">|</span>
         <span className="text-muted-foreground">Version</span>
-        <span className="font-medium">v{topic.current_version}</span>
+        {states.length > 1 ? (
+          <Select value={String(selectedVersion ?? topic.current_version)} onValueChange={(v) => setSelectedVersion(parseInt(v))}>
+            <SelectTrigger className="h-7 w-auto min-w-[80px] gap-1 border-none bg-transparent px-1 text-sm font-medium">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {states.map((s) => (
+                <SelectItem key={s.version} value={String(s.version)}>
+                  v{s.version}{s.version_status === "in_progress" ? " (running)" : ""} — {s.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <span className="font-medium">v{topic.current_version}</span>
+        )}
         <span className="text-border">|</span>
         <span className="truncate font-mono text-xs text-muted-foreground">{topic.id}</span>
       </div>
       {pipelineFeed}
     </div>,
-    parties: <PartiesPanel topicId={id} status={topic.status} />,
-    evidence: <CluesPanel topicId={id} />,
-    forum: <ForumTab topicId={id} />,
-    verdict: <VerdictPanel topicId={id} />,
+    parties: <PartiesPanel topicId={id} status={topic.status} version={viewingVersion} />,
+    evidence: <CluesPanel topicId={id} version={viewingVersion} isCurrentVersion={isCurrentVersion} />,
+    forum: <ForumTab topicId={id} version={viewingVersion} />,
+    verdict: <VerdictPanel topicId={id} version={viewingVersion} />,
   }
 
   return (
@@ -114,7 +145,7 @@ export function TopicView() {
         {TAB_SLUGS.map(slug => <TabsContent key={slug} value={slug} className="mt-4">{content[slug]}</TabsContent>)}
       </Tabs>
 
-      <OperationModal />
+      <OperationModal onComplete={refreshTopic} />
     </div>
   )
 }

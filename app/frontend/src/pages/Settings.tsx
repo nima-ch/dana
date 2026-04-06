@@ -48,6 +48,9 @@ const CONTROLS_DEFAULTS = {
   enrichment_iterations: 8,
   enrichment_context_warning: 100000,
   enrichment_batch_size: 2,
+  enrichment_search_results: 5,
+  enrichment_max_searches_per_round: 3,
+  enrichment_max_fetches_per_round: 5,
   fact_check_iterations: 3,
   smart_extract_url_limit: 10,
   research_search_queries: 4,
@@ -653,12 +656,15 @@ const CATEGORIES: ControlCategory[] = [
   },
   {
     id: "enrichment", label: "Enrichment", icon: "📊",
-    description: "Controls for per-party clue gathering, fact-checking, and evidence extraction.",
+    description: "Controls for per-party research, clue storage, and fact-checking. Only web_search counts as a research round — fetch and store_clue are free.",
     fields: [
-      { key: "enrichment_iterations", label: "Research depth per party", hint: "Max agentic rounds per party for clue gathering + fact-check", min: 2, max: 25 },
-      { key: "enrichment_context_warning", label: "Context budget warning", hint: "Token count at which enrichment is told to wrap up", min: 50000, max: 200000, step: 10000 },
+      { key: "enrichment_iterations", label: "Research rounds", hint: "Research rounds per party. Only web_search counts — fetch_url and store_clue are free.", min: 2, max: 25 },
+      { key: "enrichment_search_results", label: "Search results", hint: "Number of results returned per web_search call", min: 3, max: 10 },
+      { key: "enrichment_max_searches_per_round", label: "Searches per round", hint: "Max web_search calls allowed per research round", min: 1, max: 5 },
+      { key: "enrichment_max_fetches_per_round", label: "Fetches per round", hint: "Max fetch_url calls per research round (match or exceed search results)", min: 2, max: 10 },
+      { key: "enrichment_context_warning", label: "Context budget", hint: "Token count at which agent is told to wrap up", min: 50000, max: 200000, step: 10000 },
       { key: "enrichment_batch_size", label: "Parallelism", hint: "Number of parties enriched in parallel", min: 1, max: 8 },
-      { key: "fact_check_iterations", label: "Fact-check depth", hint: "Max agentic rounds for the adversarial fact-check agent per clue", min: 1, max: 8 },
+      { key: "fact_check_iterations", label: "Fact-check depth", hint: "Max rounds for adversarial fact-check per clue", min: 1, max: 8 },
       { key: "smart_extract_url_limit", label: "URL fetch limit", hint: "Max URLs fetched during smart clue extraction", min: 3, max: 30 },
       { key: "research_search_queries", label: "Research search queries", hint: "Max search queries in research-and-extract mode", min: 2, max: 20 },
     ],
@@ -705,9 +711,16 @@ function PipelinePanel() {
   useEffect(() => {
     void (async () => {
       const appSettings = await api.settings.get()
-      const next = { ...CONTROLS_DEFAULTS, ...(appSettings.analysis_controls ?? {}) }
-      setControls(next)
-      setSaved(next)
+      const merged = { ...CONTROLS_DEFAULTS, ...(appSettings.analysis_controls ?? {}) }
+      // Clamp any out-of-range values from older sessions
+      for (const f of CATEGORIES.flatMap(c => c.fields)) {
+        const v = Number(merged[f.key])
+        if (!Number.isFinite(v) || v < f.min || v > f.max) {
+          merged[f.key] = Math.max(f.min, Math.min(f.max, Number.isFinite(v) ? v : CONTROLS_DEFAULTS[f.key]))
+        }
+      }
+      setControls(merged)
+      setSaved(merged)
     })()
   }, [])
 
@@ -729,20 +742,22 @@ function PipelinePanel() {
     try {
       const updated = await api.settings.update({ analysis_controls: controls })
       const next = { ...CONTROLS_DEFAULTS, ...(updated.analysis_controls ?? controls) }
-      setControls(next); setSaved(next); setMessage("Saved.")
+      setControls(next); setSaved(next); setManualDirty(false); setMessage("Saved.")
       setTimeout(() => setMessage(null), 2000)
     } finally { setSaving(false) }
   }
 
-  const reset = () => { setControls(CONTROLS_DEFAULTS); setErrors({}); setMessage("Reset to defaults.") }
+  const reset = () => { setControls(CONTROLS_DEFAULTS); setErrors({}); setManualDirty(true); setMessage("Reset to defaults.") }
+
+  const [manualDirty, setManualDirty] = useState(false)
 
   const update = (key: keyof typeof CONTROLS_DEFAULTS, value: string) => {
     const parsed = value === "" ? 0 : Number(value)
     const next = { ...controls, [key]: parsed }
-    setControls(next); validate(next)
+    setControls(next); validate(next); setManualDirty(true)
   }
 
-  const isDirty = JSON.stringify(controls) !== JSON.stringify(saved)
+  const isDirty = manualDirty || JSON.stringify(controls) !== JSON.stringify(saved)
   const category = CATEGORIES.find(c => c.id === activeCategory) ?? CATEGORIES[0]
 
   const categoryDirtyCount = (cat: ControlCategory) =>

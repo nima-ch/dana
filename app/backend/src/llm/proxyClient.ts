@@ -109,23 +109,93 @@ async function fetchWithTimeout(url: string, options: RequestInit): Promise<Resp
 let _modelsCache: { models: ModelInfo[]; fetchedAt: number } | null = null
 const MODELS_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
 
-export async function fetchAvailableModels(): Promise<ModelInfo[]> {
-  if (_modelsCache && Date.now() - _modelsCache.fetchedAt < MODELS_CACHE_TTL) {
-    return _modelsCache.models
-  }
+let _verifiedModels: { ids: Set<string>; verifiedAt: number } | null = null
+const VERIFIED_CACHE_TTL = 30 * 60 * 1000 // 30 minutes
+let _verificationPromise: Promise<Set<string>> | null = null
+
+async function verifyModel(modelId: string): Promise<boolean> {
   try {
-    const res = await fetchWithTimeout(`${PROXY_BASE_URL}/v1/models`, {
-      headers: { Authorization: `Bearer ${process.env.PROXY_API_KEY || "sk-dummy"}` },
+    const res = await fetch(`${PROXY_BASE_URL}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.PROXY_API_KEY || "sk-dummy"}`,
+      },
+      body: JSON.stringify({ model: modelId, messages: [{ role: "user", content: "hi" }], max_tokens: 1 }),
+      signal: AbortSignal.timeout(15_000),
     })
-    if (!res.ok) throw new Error(`Models endpoint returned ${res.status}`)
-    const data = await res.json() as { data: ModelInfo[] }
-    const models = data.data || []
-    _modelsCache = { models, fetchedAt: Date.now() }
-    return models
-  } catch (e) {
-    console.warn("Could not fetch models from proxy:", e)
-    return _modelsCache?.models ?? []
+    if (!res.ok) {
+      const text = await res.text().catch(() => "")
+      if (text.includes("auth_unavailable") || text.includes("no auth available")) return false
+    }
+    return res.ok
+  } catch {
+    return false
   }
+}
+
+async function runVerification(models: ModelInfo[]): Promise<Set<string>> {
+  const verified = new Set<string>()
+  const BATCH = 3
+  for (let i = 0; i < models.length; i += BATCH) {
+    const batch = models.slice(i, i + BATCH)
+    const results = await Promise.all(batch.map(async m => ({ id: m.id, ok: await verifyModel(m.id) })))
+    for (const r of results) {
+      if (r.ok) verified.add(r.id)
+      else console.log(`[ModelVerify] ${r.id}: not accessible with current credentials`)
+    }
+  }
+  console.log(`[ModelVerify] ${verified.size}/${models.length} models verified`)
+  return verified
+}
+
+async function ensureVerified(models: ModelInfo[]): Promise<Set<string>> {
+  if (_verifiedModels && Date.now() - _verifiedModels.verifiedAt < VERIFIED_CACHE_TTL) {
+    return _verifiedModels.ids
+  }
+  if (!_verificationPromise) {
+    _verificationPromise = runVerification(models)
+      .then(ids => {
+        _verifiedModels = { ids, verifiedAt: Date.now() }
+        _verificationPromise = null
+        return ids
+      })
+      .catch(e => {
+        console.warn("[ModelVerify] Verification failed:", e)
+        _verificationPromise = null
+        return new Set<string>(models.map(m => m.id))
+      })
+  }
+  return _verificationPromise
+}
+
+export async function fetchAvailableModels(): Promise<ModelInfo[]> {
+  let models: ModelInfo[]
+  if (_modelsCache && Date.now() - _modelsCache.fetchedAt < MODELS_CACHE_TTL) {
+    models = _modelsCache.models
+  } else {
+    try {
+      const res = await fetchWithTimeout(`${PROXY_BASE_URL}/v1/models`, {
+        headers: { Authorization: `Bearer ${process.env.PROXY_API_KEY || "sk-dummy"}` },
+      })
+      if (!res.ok) throw new Error(`Models endpoint returned ${res.status}`)
+      const data = await res.json() as { data: ModelInfo[] }
+      models = data.data || []
+      _modelsCache = { models, fetchedAt: Date.now() }
+    } catch (e) {
+      console.warn("Could not fetch models from proxy:", e)
+      return _modelsCache?.models ?? []
+    }
+  }
+
+  const verified = await ensureVerified(models)
+  return models.filter(m => verified.has(m.id))
+}
+
+export function invalidateVerifiedModels(): void {
+  _verifiedModels = null
+  _verificationPromise = null
+  _modelsCache = null
 }
 
 export function isProxyAvailable(): Promise<boolean> {

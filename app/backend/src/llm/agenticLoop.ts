@@ -22,6 +22,8 @@ interface AgenticLoopOptions {
   max_tokens?: number
   customTools?: Record<string, CustomToolHandler>
   contextWarningThreshold?: number
+  freeTools?: string[]
+  perRoundCaps?: Record<string, number>
 }
 
 function stageLog(stage: string, msg: string, detail?: string) {
@@ -58,9 +60,12 @@ async function executeBuiltinTool(call: ToolCall, topicId: string, stage: string
 
   if (name === "web_search") {
     const query = String(args.query ?? "")
-    const numResults = Math.min(Math.max(Number(args.num_results) || 3, 1), 5)
-    emitThink(topicId, "🔎", "Searching", query)
-    stageLog(stage, `Tool call: web_search("${query}", ${numResults})`)
+    const searchResultsCap = controls.enrichment_search_results ?? 5
+    const numResults = Math.min(Math.max(Number(args.num_results) || 3, 1), searchResultsCap)
+    const language = args.language ? String(args.language) : undefined
+    const langTag = language ? ` [${language}]` : ""
+    emitThink(topicId, "🔎", "Searching" + langTag, query)
+    stageLog(stage, `Tool call: web_search("${query}", ${numResults}${language ? `, lang=${language}` : ""})`)
 
     // Check corpus for similar recent search
     try {
@@ -76,9 +81,9 @@ async function executeBuiltinTool(call: ToolCall, topicId: string, stage: string
     } catch { /* corpus query failed, proceed with live search */ }
 
     try {
-      const results = await webSearch(query, numResults)
-      emitThink(topicId, "📄", `Found ${results.length} results`, results.slice(0, 3).map(r => r.title).join(", "))
-      stageLog(stage, `web_search: ${results.length} results for "${query}"`)
+      const results = await webSearch(query, numResults, undefined, language)
+      emitThink(topicId, "📄", `Found ${results.length} results` + langTag, results.slice(0, 3).map(r => r.title).join(", "))
+      stageLog(stage, `web_search: ${results.length} results for "${query}"${langTag}`)
 
       // Store in corpus
       try { storeSearch(topicId, query, results, stage) } catch { /* non-fatal */ }
@@ -134,10 +139,16 @@ export async function runAgenticLoop(options: AgenticLoopOptions): Promise<strin
   const stage = options.stage ?? "tool"
   const maxIter = options.maxIterations ?? dbGetControls().default_max_iterations
   const contextWarning = options.contextWarningThreshold ?? dbGetControls().default_context_warning
+  const freeTools = new Set(options.freeTools ?? [])
+  const perRoundCaps = options.perRoundCaps ?? {}
+  const hasBudgetMode = freeTools.size > 0
   const messages: ChatMessage[] = [...options.messages]
   let contextWarned = false
+  let researchCount = 0
+  let researchExhausted = false
+  const hardCap = maxIter + 10
 
-  for (let iteration = 0; iteration < maxIter; iteration++) {
+  for (let totalRounds = 0; totalRounds < hardCap; totalRounds++) {
     const response = await chatCompletion({
       model,
       messages,
@@ -157,59 +168,101 @@ export async function runAgenticLoop(options: AgenticLoopOptions): Promise<strin
       return assistantMsg.content ?? ""
     }
 
-    emitThink(topicId, "🔧", `Tool calls (round ${iteration + 1})`, assistantMsg.tool_calls.map(tc => tc.function.name).join(", "))
-    stageLog(stage, `Agentic loop iteration ${iteration + 1}: ${assistantMsg.tool_calls.length} tool call(s)`)
+    // Enforce per-round caps: count calls per tool, skip excess
+    const toolCallCounts: Record<string, number> = {}
+    const executableCalls: ToolCall[] = []
+    const skippedCalls: ToolCall[] = []
 
-    for (const toolCall of assistantMsg.tool_calls) {
+    for (const tc of assistantMsg.tool_calls) {
+      const name = tc.function.name
+      toolCallCounts[name] = (toolCallCounts[name] ?? 0) + 1
+      if (perRoundCaps[name] && toolCallCounts[name] > perRoundCaps[name]) {
+        skippedCalls.push(tc)
+      } else {
+        executableCalls.push(tc)
+      }
+    }
+
+    // Determine if this round has research tools (non-free)
+    const hasResearchTool = executableCalls.some(tc => !freeTools.has(tc.function.name))
+    const roundLabel = hasBudgetMode
+      ? `Round ${totalRounds + 1} (research ${researchCount + (hasResearchTool ? 1 : 0)}/${maxIter})`
+      : `Iteration ${totalRounds + 1}`
+
+    emitThink(topicId, "🔧", roundLabel, executableCalls.map(tc => tc.function.name).join(", "))
+    stageLog(stage, `Agentic loop ${roundLabel}: ${executableCalls.length} tool call(s)${skippedCalls.length ? ` (${skippedCalls.length} capped)` : ""}`)
+
+    // Execute tool calls
+    for (const toolCall of executableCalls) {
       let result: string
-
       if (customTools && customTools[toolCall.function.name]) {
         let args: Record<string, unknown>
-        try {
-          args = JSON.parse(toolCall.function.arguments)
-        } catch {
-          args = {}
-        }
+        try { args = JSON.parse(toolCall.function.arguments) } catch { args = {} }
         result = await customTools[toolCall.function.name](args)
       } else {
         result = await executeBuiltinTool(toolCall, topicId, stage)
       }
-
-      messages.push({
-        role: "tool",
-        content: result,
-        tool_call_id: toolCall.id,
-      })
+      messages.push({ role: "tool", content: result, tool_call_id: toolCall.id })
     }
 
+    // Return cap-exceeded messages for skipped calls
+    for (const tc of skippedCalls) {
+      const cap = perRoundCaps[tc.function.name]
+      stageLog(stage, `  ${tc.function.name} capped (${cap}/round)`)
+      messages.push({ role: "tool", content: JSON.stringify({ error: `Per-round cap reached (${cap} ${tc.function.name} calls/round). Try in the next round.` }), tool_call_id: tc.id })
+    }
+
+    // Budget counting (only in budget mode)
+    if (hasBudgetMode && hasResearchTool) {
+      researchCount++
+
+      if (!researchExhausted && researchCount === maxIter - 1) {
+        emitThink(topicId, "⏱", "1 research round remaining", "Plan your final searches carefully.")
+        stageLog(stage, `Budget warning: 1 research round remaining (${researchCount}/${maxIter})`)
+        messages.push({
+          role: "user",
+          content: `BUDGET WARNING: You have 1 research round remaining (${researchCount}/${maxIter}). Plan your final searches carefully. After that, analyze all gathered evidence and store your distilled clues using store_clue.`,
+        })
+      }
+
+      if (!researchExhausted && researchCount >= maxIter) {
+        researchExhausted = true
+        emitThink(topicId, "📊", "Research complete — storing clues", `${researchCount} rounds used`)
+        stageLog(stage, `Research budget exhausted (${researchCount}/${maxIter}). Entering storage phase.`)
+        messages.push({
+          role: "user",
+          content: "RESEARCH PHASE COMPLETE. You have used all your research rounds. Now analyze everything you gathered and call store_clue for ALL your distilled findings in a SINGLE batch — call store_clue multiple times in one response, one call per distinct clue. Each clue should synthesize related sources into a single multi-source finding. store_clue calls are completely free. When done storing all clues, output your final profile_update JSON.",
+        })
+      }
+    }
+
+    // Legacy mode (no freeTools): simple iteration counting
+    if (!hasBudgetMode && totalRounds + 1 >= maxIter) {
+      stageLog(stage, `Agentic loop hit max iterations (${maxIter}), forcing final response`)
+      emitThink(topicId, "⏱", "Max rounds reached", "Generating final answer...")
+      messages.push({ role: "user", content: "You have done enough research. Now output your final answer as valid JSON based on everything you have gathered. No more tool calls." })
+      const finalResponse = await chatCompletion({ model, messages, temperature, max_tokens })
+      return finalResponse.choices[0]?.message?.content ?? ""
+    }
+
+    // Context warning (both modes)
     if (!contextWarned) {
       const estTokens = estimateTokens(messages)
       if (estTokens > contextWarning) {
         contextWarned = true
-        emitThink(topicId, "⏱", "Context budget high", `~${Math.round(estTokens / 1000)}k tokens used. Wrapping up soon.`)
+        emitThink(topicId, "⏱", "Context budget high", `~${Math.round(estTokens / 1000)}k tokens used.`)
         stageLog(stage, `Agentic loop: context warning at ~${estTokens} tokens`)
         messages.push({
           role: "user",
-          content: "IMPORTANT: You are approaching the context budget limit. Finish your current research and produce your final output within the next 2-3 tool calls.",
+          content: "IMPORTANT: You are approaching the context budget limit. Wrap up your work and produce your final output soon.",
         })
       }
     }
   }
 
-  stageLog(stage, `Agentic loop hit max iterations (${maxIter}), forcing final response`)
-  emitThink(topicId, "⏱", "Max research rounds reached", "Generating final answer...")
-
-  messages.push({
-    role: "user",
-    content: "You have done enough research. Now output your final answer as valid JSON based on everything you have gathered. No more tool calls.",
-  })
-
-  const finalResponse = await chatCompletion({
-    model,
-    messages,
-    temperature,
-    max_tokens,
-  })
-
+  // Hard cap reached (budget mode only — shouldn't normally happen)
+  stageLog(stage, `Agentic loop hard cap reached (${hardCap} total rounds), forcing final response`)
+  messages.push({ role: "user", content: "You have done enough. Output your final answer as valid JSON now. No more tool calls." })
+  const finalResponse = await chatCompletion({ model, messages, temperature, max_tokens })
   return finalResponse.choices[0]?.message?.content ?? ""
 }

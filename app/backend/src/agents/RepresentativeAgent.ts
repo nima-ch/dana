@@ -6,6 +6,7 @@ import { getPartyProfile } from "../tools/internal/getPartyProfile"
 import { writeArtifact } from "../tools/internal/artifactStore"
 import { log } from "../utils/logger"
 import { dbGetScratchpad } from "../db/queries/forum"
+import { dbGetClues } from "../db/queries/clues"
 import type { ForumTurn, ForumScenario, ScratchpadContent } from "../db/queries/forum"
 
 export interface RepTurnInput {
@@ -44,18 +45,37 @@ function formatScratchpad(content: ScratchpadContent): string {
     .map(c => {
       const rel = c.r ?? (c.relevance_to_us === "supports" ? "S" : c.relevance_to_us === "weakens" ? "W" : "N")
       const use = c.use || c.how_we_use_it || ""
-      return `  [${c.clue_id}] ${rel}: ${use.slice(0, 100)}`
+      const credAttack = c.credibility_attack ? ` | ATTACK: ${c.credibility_attack.slice(0, 80)}` : ""
+      return `  [${c.clue_id}] ${rel}: ${use.slice(0, 100)}${credAttack}`
     })
+
+  const attackLine = content.attack_strategy
+    ? `ATTACK STRATEGY: ${content.attack_strategy}`
+    : ""
 
   return [
     `YOUR CORE POSITION: ${content.our_core_position}`,
     `SCENARIO YOU ARE PUSHING: ${content.scenario_we_are_pushing}`,
     `STRONGEST OPPONENT: ${content.strongest_opposing_party}`,
+    attackLine,
     `YOUR VULNERABILITIES: ${content.our_key_vulnerabilities.join("; ")}`,
     `YOUR OPENING MOVE: ${content.opening_move}`,
     `\nCLUE STRATEGY (non-neutral clues):`,
     ...clueLines,
-  ].join("\n")
+  ].filter(Boolean).join("\n")
+}
+
+function buildCredibilityReference(topicId: string): string {
+  const clues = dbGetClues(topicId)
+  return clues.map(clue => {
+    const cur = clue.versions.find(v => v.v === clue.current)!
+    const cred = cur.source_credibility
+    const fc = cur.fact_check
+    const verdict = fc?.verdict?.toUpperCase() ?? "UNCHECKED"
+    const biasStr = cred.bias_flags.length > 0 ? `, bias:${cred.bias_flags.slice(0, 2).join("+")}` : ""
+    const outlet = cred.origin_sources?.[0]?.outlet ?? ""
+    return `[${clue.id}] ${verdict}, cred:${cred.score}${biasStr}${outlet ? " — " + outlet : ""}`
+  }).join("\n")
 }
 
 function formatRecentTurns(turns: ForumTurn[]): string {
@@ -100,10 +120,13 @@ export async function runRepresentativeTurn(input: RepTurnInput): Promise<RepTur
     ? `\nMODERATOR NOTE: ${moderatorDirective}\n`
     : ""
 
+  const credibilityReference = buildCredibilityReference(topicId)
+
   const turnConfig = await resolvePrompt("forum/representative-turn", {
     persona_title: personaTitle,
     party_name: party.name,
     scratchpad: scratchpadStr,
+    credibility_reference: credibilityReference,
     topic,
     live_scenarios: scenariosStr,
     conversation_history: historyBlock,
@@ -153,6 +176,10 @@ export async function runRepresentativeTurn(input: RepTurnInput): Promise<RepTur
   // Parse output
   let action: "speak" | "pass" = "speak"
   let statement = ""
+  let position: string | undefined
+  let evidence: { claim: string; clue_id: string; interpretation: string }[] = []
+  let challenges: { target_party: string; challenge: string; clue_id?: string }[] = []
+  let concessions: string[] = []
   let cluesCited: string[] = []
   let scenarioSignal: string | undefined
 
@@ -163,10 +190,13 @@ export async function runRepresentativeTurn(input: RepTurnInput): Promise<RepTur
       const parsed = JSON.parse(match[0])
       action = parsed.action === "pass" ? "pass" : "speak"
       statement = parsed.statement || ""
+      position = parsed.position || undefined
+      evidence = Array.isArray(parsed.evidence) ? parsed.evidence : []
+      challenges = Array.isArray(parsed.challenges) ? parsed.challenges : []
+      concessions = Array.isArray(parsed.concessions) ? parsed.concessions : []
       cluesCited = parsed.clues_cited || []
       scenarioSignal = parsed.scenario_signal || undefined
     } else {
-      // Treat raw text as a statement
       statement = raw.trim()
     }
   } catch {
@@ -182,25 +212,34 @@ export async function runRepresentativeTurn(input: RepTurnInput): Promise<RepTur
   const inlineCites = statement.match(/\[clue-\d+\]/g) ?? []
   const allCited = [...new Set([...cluesCited, ...inlineCites.map(m => m.replace(/[\[\]]/g, ""))])]
 
+  // Also extract clue IDs from structured evidence/challenges
+  const structuredCites = [
+    ...evidence.map(e => e.clue_id).filter(Boolean),
+    ...challenges.map(c => c.clue_id).filter((id): id is string => !!id),
+  ]
+
+  const allCitedFull = [...new Set([...allCited, ...structuredCites])]
+
   const turn: ForumTurn = {
     id: `turn-${partyId}-t${turnNumber}`,
     representative_id: repId,
     party_name: party.name,
     persona_title: personaTitle,
     statement,
-    clues_cited: allCited,
+    position,
+    clues_cited: allCitedFull,
     scenario_endorsement: scenarioSignal,
     timestamp: new Date().toISOString(),
-    round: turnNumber,       // repurposed: turn number in the dynamic debate
+    round: turnNumber,
     type: "debate",
     word_count: countWords(statement),
-    evidence: [],
-    challenges: [],
-    concessions: [],
+    evidence,
+    challenges,
+    concessions,
   }
 
   await writeArtifact(topicId, runId, `turn_${partyId}_t${turnNumber}`, turn)
-  log.forum(`  ${partyId} spoke (${turn.word_count}w, cited ${allCited.length} clues): "${statement.slice(0, 80)}…"`)
+  log.forum(`  ${partyId} spoke (${turn.word_count}w, cited ${allCitedFull.length} clues): "${statement.slice(0, 80)}…"`)
 
   return { turn, passed: false }
 }

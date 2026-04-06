@@ -3,6 +3,7 @@ import { readFileSync } from "fs"
 import { getPromptConfig, getTaskProfile } from "../db/queries/promptConfigs"
 import { TOOL_REGISTRY } from "./toolDefinitions"
 import { resolveSmartDefault } from "./modelCatalog"
+import { fetchAvailableModels } from "./proxyClient"
 import type { ToolDefinition } from "./proxyClient"
 
 const cache = new Map<string, string>()
@@ -38,6 +39,14 @@ export async function resolvePrompt(name: string, vars?: Record<string, string>)
 
   // Model resolution: explicit override > smart default > null (caller fallback)
   let model = config.model
+  if (model) {
+    const available = await fetchAvailableModels()
+    const availableIds = new Set(available.map(m => m.id))
+    if (!availableIds.has(model)) {
+      console.warn(`[PromptLoader] Model "${model}" configured for "${name}" is not available, falling back to smart default`)
+      model = null
+    }
+  }
   if (!model) {
     const profile = getTaskProfile(name)
     if (profile) {

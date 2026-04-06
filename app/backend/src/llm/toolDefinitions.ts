@@ -10,6 +10,7 @@ const WEB_SEARCH: ToolDefinition = {
       properties: {
         query: { type: "string", description: "The search query — be specific and include key terms, dates, or entity names" },
         num_results: { type: "number", description: "Number of results to return (1-5)", default: 3 },
+        language: { type: "string", description: "Optional ISO 639-1 language code to bias results toward that language (e.g. 'sv' for Swedish, 'zh' for Chinese, 'de' for German). Use when native-language sources would yield better results." },
       },
       required: ["query"],
     },
