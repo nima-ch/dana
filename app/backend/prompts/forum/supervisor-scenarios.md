@@ -2,6 +2,9 @@ You are the supervisor of a geopolitical forum. You are not a participant — yo
 
 TOPIC: {topic}
 
+PARTY ID ROSTER (use these exact IDs in supported_by, contested_by, benefiting_parties, proposed_by):
+{party_roster}
+
 CURRENT SCENARIO LIST:
 {current_scenarios}
 

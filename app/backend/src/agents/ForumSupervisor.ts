@@ -30,6 +30,7 @@ export class ForumSupervisor {
   private minTurns: number
   private checkInterval: number
   private compressInterval: number
+  private partyRoster: string  // "id:name, id:name, ..." injected into scenario prompt
 
   constructor(
     topicId: string,
@@ -38,10 +39,12 @@ export class ForumSupervisor {
     topic: string,
     maxTurns: number = DEFAULT_MAX_TURNS,
     minTurns: number = 8,
+    representatives: Representative[] = [],
   ) {
     this.topicId = topicId
     this.model = model
     this.topic = topic
+    this.partyRoster = representatives.map(r => `${r.party_id} = "${r.party_name}"`).join(", ")
     this.maxTurns = maxTurns
     this.minTurns = minTurns
 
@@ -283,6 +286,7 @@ export class ForumSupervisor {
       topic: this.topic,
       current_scenarios: currentScenariosStr,
       all_turns: turnsStr,
+      party_roster: this.partyRoster,
     })
     const effectiveModel = scenariosConfig.model ?? this.model
 

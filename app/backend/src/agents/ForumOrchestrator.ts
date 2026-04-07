@@ -74,7 +74,7 @@ export async function runForumOrchestrator(
   emit(topicId, { type: "progress", stage: "forum", pct: 0.1, msg: "All representatives ready. Debate opening…" })
 
   // ── Phase 2: Moderated debate loop ────────────────────────────────────────
-  const supervisor = new ForumSupervisor(topicId, sessionId, model, topicTitle, maxTurns, minTurns)
+  const supervisor = new ForumSupervisor(topicId, sessionId, model, topicTitle, maxTurns, minTurns, representatives)
   const scenarioInterval = (controls as any).forum_scenario_update_interval ?? 5
 
   const allTurns: ForumTurn[] = session.rounds.flatMap(r => r.turns)

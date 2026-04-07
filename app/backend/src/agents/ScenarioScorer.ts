@@ -21,12 +21,17 @@ interface ClueEvidence {
   clue_id: string
   title: string
   clue_type: string
-  credibility: number
+  credibility: number            // raw source credibility (0–100)
+  adjusted_credibility: number   // post-fact-check adjusted credibility
+  relevance: number              // relevance to topic (0–100)
   bias_flags: string[]
-  effective_weight: number       // credibility - 0.1 per bias flag, min 0.1
+  effective_weight: number       // adjusted_credibility × (relevance/100), penalized per bias flag
   summary: string
+  key_points: string[]           // specific verifiable facts from the clue
   cited_in_turns: number         // how many debate turns cited this clue
   fact_check_verdict?: string    // verified/misleading/disputed/unverifiable
+  bias_analysis?: string         // fact-checker's bias analysis
+  counter_evidence?: string      // contradicting evidence found by fact-checker
   cui_bono?: string              // who benefits from this being believed
 }
 
@@ -46,8 +51,27 @@ interface ScenarioEvidence {
 
 // ─── Pass 1: Build evidence map (no LLM) ─────────────────────────────────────
 
-function computeEffectiveWeight(credibility: number, biasFlags: string[]): number {
-  return Math.max(0.1, credibility - biasFlags.length * 0.1)
+function computeEffectiveWeight(adjustedCredibility: number, relevance: number, biasFlags: string[]): number {
+  // Base: post-fact-check credibility scaled by topic relevance
+  // Each bias flag deducts 5 points (meaningful penalty, not cosmetic 0.1)
+  const penalized = adjustedCredibility - biasFlags.length * 5
+  const clamped = Math.max(10, penalized)
+  return Math.round(clamped * (relevance / 100) * 10) / 10
+}
+
+type ClueMapEntry = {
+  title: string
+  clue_type: string
+  credibility: number
+  adjusted_credibility: number
+  relevance: number
+  bias_flags: string[]
+  summary: string
+  key_points: string[]
+  fact_check_verdict?: string
+  bias_analysis?: string
+  counter_evidence?: string
+  cui_bono?: string
 }
 
 function buildEvidenceMap(
@@ -55,9 +79,16 @@ function buildEvidenceMap(
   allTurns: ForumTurn[],
   scratchpads: { party_id: string; content: ScratchpadContent }[],
   parties: Party[],
-  clueMap: Map<string, { title: string; clue_type: string; credibility: number; bias_flags: string[]; summary: string; fact_check_verdict?: string; cui_bono?: string }>,
+  clueMap: Map<string, ClueMapEntry>,
 ): ScenarioEvidence[] {
   const partyMap = new Map(parties.map(p => [p.id, p]))
+  // Defensive: also build name → id map to handle legacy data where supported_by stored names not IDs
+  const partyNameToId = new Map(parties.map(p => [p.name.toLowerCase().trim(), p.id]))
+
+  function resolvePartyId(nameOrId: string): string {
+    if (partyMap.has(nameOrId)) return nameOrId
+    return partyNameToId.get(nameOrId.toLowerCase().trim()) ?? nameOrId
+  }
 
   // Build turn citation index: clue_id → [party_id list]
   const clueCitedBy = new Map<string, string[]>()
@@ -79,8 +110,9 @@ function buildEvidenceMap(
     const scClueIds = new Set(sc.clues_cited)
 
     // Collect all clue IDs cited in turns by parties who supported/contested this scenario
-    const supportingPartyIds = new Set(sc.supported_by)
-    const contestingPartyIds = new Set(sc.contested_by)
+    // Normalize: resolve both IDs and legacy names to canonical party IDs
+    const supportingPartyIds = new Set(sc.supported_by.map(resolvePartyId))
+    const contestingPartyIds = new Set(sc.contested_by.map(resolvePartyId))
 
     // Augment scenario clues with clues from supporting parties' turns
     for (const turn of allTurns) {
@@ -100,11 +132,16 @@ function buildEvidenceMap(
         title: clue.title,
         clue_type: clue.clue_type,
         credibility: clue.credibility,
+        adjusted_credibility: clue.adjusted_credibility,
+        relevance: clue.relevance,
         bias_flags: clue.bias_flags,
-        effective_weight: computeEffectiveWeight(clue.credibility, clue.bias_flags),
+        effective_weight: computeEffectiveWeight(clue.adjusted_credibility, clue.relevance, clue.bias_flags),
         summary: clue.summary,
+        key_points: clue.key_points,
         cited_in_turns: (clueCitedBy.get(cId) ?? []).length,
         fact_check_verdict: clue.fact_check_verdict,
+        bias_analysis: clue.bias_analysis,
+        counter_evidence: clue.counter_evidence,
         cui_bono: clue.cui_bono,
       })
     }
@@ -124,24 +161,31 @@ function buildEvidenceMap(
           title: clue.title,
           clue_type: clue.clue_type,
           credibility: clue.credibility,
+          adjusted_credibility: clue.adjusted_credibility,
+          relevance: clue.relevance,
           bias_flags: clue.bias_flags,
-          effective_weight: computeEffectiveWeight(clue.credibility, clue.bias_flags),
+          effective_weight: computeEffectiveWeight(clue.adjusted_credibility, clue.relevance, clue.bias_flags),
           summary: clue.summary,
+          key_points: clue.key_points,
           cited_in_turns: (clueCitedBy.get(cId) ?? []).length,
           fact_check_verdict: clue.fact_check_verdict,
+          bias_analysis: clue.bias_analysis,
+          counter_evidence: clue.counter_evidence,
           cui_bono: clue.cui_bono,
         })
       }
     }
 
-    // Forum participation: who argued for/against
-    const forumFor = sc.supported_by.map(pid => {
+    // Forum participation: who argued for/against (normalize to canonical IDs)
+    const forumFor = sc.supported_by.map(raw => {
+      const pid = resolvePartyId(raw)
       const party = partyMap.get(pid)
-      return { party_id: pid, party_name: party?.name ?? pid, weight: party?.weight ?? 0, turn_count: partyTurnCount.get(pid) ?? 0 }
+      return { party_id: pid, party_name: party?.name ?? raw, weight: party?.weight ?? 0, turn_count: partyTurnCount.get(pid) ?? 0 }
     })
-    const forumAgainst = sc.contested_by.map(pid => {
+    const forumAgainst = sc.contested_by.map(raw => {
+      const pid = resolvePartyId(raw)
       const party = partyMap.get(pid)
-      return { party_id: pid, party_name: party?.name ?? pid, weight: party?.weight ?? 0, turn_count: partyTurnCount.get(pid) ?? 0 }
+      return { party_id: pid, party_name: party?.name ?? raw, weight: party?.weight ?? 0, turn_count: partyTurnCount.get(pid) ?? 0 }
     })
 
     // Scratchpad intelligence
@@ -224,8 +268,16 @@ function serializeEvidenceMap(evidenceMap: ScenarioEvidence[], parties: Party[])
       lines.push(`\nSUPPORTING CLUES (${sc.supporting_clues.length}):`)
       for (const c of sc.supporting_clues) {
         const verdict = c.fact_check_verdict ? ` | verdict=${c.fact_check_verdict.toUpperCase()}` : ""
-        lines.push(`  [${c.clue_id}] ${c.title} | type=${c.clue_type} | credibility=${c.credibility.toFixed(2)}${verdict} | bias_flags=[${c.bias_flags.join(", ")}] | effective_weight=${c.effective_weight.toFixed(2)} | cited_in_${c.cited_in_turns}_turns`)
-        lines.push(`    Summary: ${c.summary.slice(0, 120)}`)
+        const credStr = c.adjusted_credibility !== c.credibility
+          ? `raw_cred=${c.credibility} → adj_cred=${c.adjusted_credibility}`
+          : `credibility=${c.credibility}`
+        lines.push(`  [${c.clue_id}] ${c.title}`)
+        lines.push(`    type=${c.clue_type} | ${credStr} | relevance=${c.relevance}${verdict} | effective_weight=${c.effective_weight} | cited_in_${c.cited_in_turns}_turns`)
+        if (c.bias_flags.length > 0) lines.push(`    Bias flags: ${c.bias_flags.join("; ")}`)
+        lines.push(`    Summary: ${c.summary.slice(0, 150)}`)
+        if (c.key_points.length > 0) lines.push(`    Key facts: ${c.key_points.slice(0, 4).map(kp => kp.slice(0, 100)).join(" | ")}`)
+        if (c.bias_analysis) lines.push(`    Bias analysis: ${c.bias_analysis.slice(0, 150)}`)
+        if (c.counter_evidence) lines.push(`    Counter-evidence: ${c.counter_evidence.slice(0, 150)}`)
         if (c.cui_bono) lines.push(`    Cui bono: ${c.cui_bono.slice(0, 100)}`)
       }
     }
@@ -234,8 +286,11 @@ function serializeEvidenceMap(evidenceMap: ScenarioEvidence[], parties: Party[])
       lines.push(`\nCONTESTING CLUES (${sc.contesting_clues.length}):`)
       for (const c of sc.contesting_clues) {
         const verdict = c.fact_check_verdict ? ` | verdict=${c.fact_check_verdict.toUpperCase()}` : ""
-        lines.push(`  [${c.clue_id}] ${c.title} | credibility=${c.credibility.toFixed(2)}${verdict} | effective_weight=${c.effective_weight.toFixed(2)}`)
-        lines.push(`    Summary: ${c.summary.slice(0, 100)}`)
+        lines.push(`  [${c.clue_id}] ${c.title}`)
+        lines.push(`    credibility=${c.adjusted_credibility} | relevance=${c.relevance}${verdict} | effective_weight=${c.effective_weight}`)
+        lines.push(`    Summary: ${c.summary.slice(0, 120)}`)
+        if (c.key_points.length > 0) lines.push(`    Key facts: ${c.key_points.slice(0, 3).map(kp => kp.slice(0, 80)).join(" | ")}`)
+        if (c.counter_evidence) lines.push(`    Counter-evidence: ${c.counter_evidence.slice(0, 120)}`)
         if (c.cui_bono) lines.push(`    Cui bono: ${c.cui_bono.slice(0, 80)}`)
       }
     }
@@ -317,18 +372,25 @@ export async function runScenarioScorer(
 
   if (scenarios.length === 0) throw new Error("No scenarios found in forum session — cannot score")
 
-  // Build clue lookup map
-  const clueMap = new Map<string, { title: string; clue_type: string; credibility: number; bias_flags: string[]; summary: string; fact_check_verdict?: string; cui_bono?: string }>()
+  // Build clue lookup map with full evidence richness
+  const clueMap = new Map<string, ClueMapEntry>()
   for (const clue of rawClues) {
     const v = clue.versions[clue.current - 1] ?? clue.versions[clue.versions.length - 1]
     if (!v) continue
+    const rawCredibility = v.source_credibility.score
+    const adjustedCredibility = v.fact_check?.adjusted_credibility ?? rawCredibility
     clueMap.set(clue.id, {
       title: v.title,
       clue_type: v.clue_type,
-      credibility: v.source_credibility.score,
-      bias_flags: v.source_credibility.bias_flags,
+      credibility: rawCredibility,
+      adjusted_credibility: adjustedCredibility,
+      relevance: v.relevance_score ?? 50,
+      bias_flags: v.fact_check?.adjusted_bias_flags ?? v.source_credibility.bias_flags,
       summary: v.bias_corrected_summary,
+      key_points: v.key_points ?? [],
       fact_check_verdict: v.fact_check?.verdict,
+      bias_analysis: v.fact_check?.bias_analysis,
+      counter_evidence: v.fact_check?.counter_evidence,
       cui_bono: v.fact_check?.cui_bono,
     })
   }
