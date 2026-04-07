@@ -33,7 +33,6 @@ export interface AnalysisControls {
   enrichment_iterations: number
   enrichment_context_warning: number
   enrichment_batch_size: number
-  enrichment_search_results: number
   enrichment_max_searches_per_round: number
   enrichment_max_fetches_per_round: number
   fact_check_iterations: number
@@ -50,6 +49,8 @@ export interface AnalysisControls {
   // Evidence Update
   evidence_update_batch_size: number
   evidence_update_iterations: number
+  // Cleanup
+  cleanup_fact_check_iterations: number
   // Forum
   forum_max_turns: number
   forum_compress_interval: number
@@ -57,8 +58,6 @@ export interface AnalysisControls {
   forum_scenario_update_interval: number
   forum_min_turns_multiplier: number
   // Agentic Loop defaults
-  default_max_iterations: number
-  default_context_warning: number
   max_fetch_chars: number
   corpus_cache_hours: number
 }
@@ -74,7 +73,6 @@ export const DEFAULT_CONTROLS: AnalysisControls = {
   enrichment_iterations: 8,
   enrichment_context_warning: 100000,
   enrichment_batch_size: 2,
-  enrichment_search_results: 5,
   enrichment_max_searches_per_round: 3,
   enrichment_max_fetches_per_round: 5,
   fact_check_iterations: 3,
@@ -91,6 +89,8 @@ export const DEFAULT_CONTROLS: AnalysisControls = {
   // Evidence Update
   evidence_update_batch_size: 3,
   evidence_update_iterations: 3,
+  // Cleanup
+  cleanup_fact_check_iterations: 2,
   // Forum
   forum_max_turns: 60,
   forum_compress_interval: 10,
@@ -98,8 +98,6 @@ export const DEFAULT_CONTROLS: AnalysisControls = {
   forum_scenario_update_interval: 5,
   forum_min_turns_multiplier: 2.5,
   // Agentic Loop defaults
-  default_max_iterations: 5,
-  default_context_warning: 150000,
   max_fetch_chars: 10000,
   corpus_cache_hours: 24,
 }

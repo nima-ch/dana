@@ -303,7 +303,7 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     return { imported: created.length, clues: created, query: b.query }
   }, { body: t.Record(t.String(), t.Any()) })
 
-  // Cleanup: categorize and propose consolidation groups (fire-and-forget + poll)
+  // Cleanup: propose consolidation groups via CleanupAgent (fire-and-forget + poll)
   .post("/cleanup/propose", async ({ params }) => {
     const topicId = params.id
 
@@ -313,7 +313,7 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
       ;(async () => {
         try {
           const { getTopic } = await import("../pipeline/topicManager")
-          const { categorizeAndCleanup } = await import("../agents/SmartClueExtractor")
+          const { runCleanupPropose } = await import("../agents/CleanupAgent")
           const { dbGetParties } = await import("../db/queries/parties")
           const topic = await getTopic(topicId)
           const clues = dbGetClues(topicId)
@@ -330,7 +330,7 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
             }
           })
 
-          const groups = await categorizeAndCleanup(topicId, topic.title, clueData, parties, topic.models.enrichment)
+          const groups = await runCleanupPropose(topicId, topic.title, clueData, parties, topic.models.enrichment)
           cleanupJobs.set(topicId, { status: "done", groups, original_count: clues.length })
         } catch (e) {
           cleanupJobs.set(topicId, { status: "error", groups: null, original_count: 0, error: String(e) })
@@ -359,8 +359,15 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
     const groups = b.groups
     const now = new Date().toISOString()
 
+    const allClues = dbGetClues(topicId)
+    const clueMap = new Map(allClues.map(c => [c.id, c]))
+
+    function getCur(c: Clue): ClueVersion {
+      return c.versions.find(v => v.v === c.current) ?? c.versions[c.versions.length - 1]!
+    }
+
     const idsToDelete = new Set<string>()
-    const newClues: { id: string; version: ClueVersion }[] = []
+    const newClues: { version: ClueVersion }[] = []
 
     for (const g of groups) {
       if (g.action === "keep") continue
@@ -370,16 +377,56 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
       }
       if (g.action === "merge") {
         for (const id of g.source_clue_ids) idsToDelete.add(id)
+
+        // Collect source data from all merged clues
+        const sourceClues = (g.source_clue_ids as string[]).map(id => clueMap.get(id)).filter(Boolean) as Clue[]
+        // Sort by descending relevance so best key points come first
+        sourceClues.sort((a, b) => (getCur(b).relevance_score ?? 0) - (getCur(a).relevance_score ?? 0))
+
+        const seenUrls = new Set<string>()
+        const mergedUrls: string[] = []
+        const mergedOutlets: string[] = []
+        const mergedOriginSources: ClueVersion["source_credibility"]["origin_sources"] = []
+
+        for (const sc of sourceClues) {
+          const cur = getCur(sc)
+          const urls = cur.raw_source.urls ?? []
+          const outlets = cur.raw_source.outlets ?? []
+          urls.forEach((url, i) => {
+            if (url && !seenUrls.has(url)) {
+              seenUrls.add(url)
+              mergedUrls.push(url)
+              mergedOutlets.push(outlets[i] ?? "")
+            }
+          })
+          for (const os of cur.source_credibility.origin_sources ?? []) {
+            if (os.url && !seenUrls.has(`os:${os.url}`)) {
+              seenUrls.add(`os:${os.url}`)
+              mergedOriginSources.push(os)
+            }
+          }
+        }
+
+        const seenKp = new Set<string>()
+        const mergedKeyPoints: string[] = []
+        for (const sc of sourceClues) {
+          for (const kp of getCur(sc).key_points ?? []) {
+            const norm = kp.trim().toLowerCase()
+            if (norm && !seenKp.has(norm)) { seenKp.add(norm); mergedKeyPoints.push(kp.trim()) }
+          }
+        }
+
         newClues.push({
-          id: `clue-${g.group_id}`,
           version: {
             v: 1, date: now, title: g.merged_title,
-            raw_source: { urls: [], outlets: ["consolidated"], fetched_at: now },
+            raw_source: { urls: mergedUrls, outlets: mergedOutlets, fetched_at: now },
             source_credibility: {
               score: g.merged_credibility ?? 60,
-              notes: `Merged from ${g.source_clue_ids.length} clues`,
+              notes: `Merged from ${sourceClues.length} clues: ${sourceClues.map(c => c.id).join(", ")}`,
               bias_flags: g.merged_bias_flags ?? [],
-              origin_sources: [{ url: "", outlet: "consolidated", is_republication: false }],
+              origin_sources: mergedOriginSources.length > 0
+                ? mergedOriginSources
+                : [{ url: "", outlet: "consolidated", is_republication: false }],
             },
             bias_corrected_summary: g.merged_summary,
             relevance_score: g.merged_relevance ?? 70,
@@ -388,33 +435,84 @@ export const cluesRouter = new Elysia({ prefix: "/api/topics/:id/clues" })
             timeline_date: g.merged_date || now.slice(0, 10),
             clue_type: g.merged_clue_type || "event",
             change_note: `Cleanup merge: ${g.reason}`,
-            key_points: [],
+            key_points: mergedKeyPoints.slice(0, 10),
           },
         })
       }
     }
 
-    // Load current clues, filter out deleted/merged, add new merged ones, then re-number
-    const allClues = dbGetClues(topicId)
+    // Filter out deleted/merged, renumber, append merged clues
     const filtered = allClues.filter(c => !idsToDelete.has(c.id))
-
     const renumbered: Clue[] = filtered.map((c, i) => ({
       ...c,
       id: `clue-${String(i + 1).padStart(3, "0")}`,
     }))
-
     const mergedClues: Clue[] = newClues.map((nc, i) => ({
       id: `clue-${String(renumbered.length + i + 1).padStart(3, "0")}`,
       current: 1,
       added_at: now,
       last_updated_at: now,
       added_by: "cleanup" as any,
-      status: "verified" as const,
+      status: "pending" as const,
       versions: [nc.version],
     }))
 
     dbReplaceClues(topicId, [...renumbered, ...mergedClues])
     await markStale(topicId)
+
+    // Fire background fact-check sweep for all pending clues (merged + pre-existing)
+    ;(async () => {
+      try {
+        const { getTopic } = await import("../pipeline/topicManager")
+        const { runFactCheck } = await import("../agents/FactCheckAgent")
+        const { dbGetControls } = await import("../db/queries/settings")
+        const { emitThink, emit } = await import("../routes/stream")
+
+        const topic = await getTopic(topicId)
+        const controls = dbGetControls()
+        const model = topic.models.enrichment
+
+        const allAfter = dbGetClues(topicId)
+        const pendingClues = allAfter.filter(c => {
+          const cur = c.versions.find(v => v.v === c.current) ?? c.versions[c.versions.length - 1]
+          return c.status === "pending" || !cur?.fact_check?.verdict
+        })
+
+        emitThink(topicId, "🔬", `Fact-checking ${pendingClues.length} pending clue(s)…`, "")
+
+        await Promise.all(pendingClues.map(async (clue) => {
+          const cur = clue.versions.find(v => v.v === clue.current) ?? clue.versions[clue.versions.length - 1]!
+          try {
+            const verdict = await runFactCheck({
+              topicId, clueId: clue.id,
+              title: cur.title,
+              summary: cur.bias_corrected_summary,
+              sourceUrls: cur.raw_source.urls ?? [],
+              sourceOutlets: cur.raw_source.outlets ?? [],
+              keyPoints: cur.key_points ?? [],
+              biasFlags: cur.source_credibility.bias_flags ?? [],
+              credibility: cur.source_credibility.score,
+              partyContext: (cur.party_relevance ?? []).join(", "),
+              topicTitle: topic.title,
+              topicDescription: topic.description,
+              model,
+              maxIterations: controls.cleanup_fact_check_iterations,
+            })
+            emitThink(topicId,
+              verdict.verdict === "verified" ? "✅" : verdict.verdict === "disputed" ? "🔶" : "⚠️",
+              `${verdict.verdict.toUpperCase()}: ${cur.title.slice(0, 50)}`,
+              verdict.bias_analysis.slice(0, 100))
+          } catch {
+            // fact-check failed — leave status as pending, don't crash the sweep
+          }
+        }))
+
+        emit(topicId, { type: "stage_complete", stage: "cleanup" })
+      } catch (e) {
+        const { emit } = await import("../routes/stream")
+        emit(topicId, { type: "stage_complete", stage: "cleanup" })
+      }
+    })()
 
     const finalClues = dbGetClues(topicId)
     return {

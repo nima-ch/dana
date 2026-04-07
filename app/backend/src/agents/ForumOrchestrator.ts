@@ -63,7 +63,7 @@ export async function runForumOrchestrator(
 
   const controls = dbGetControls()
   const maxTurns = controls.forum_max_turns
-  const multiplier = (controls as any).forum_min_turns_multiplier ?? 2.5
+  const multiplier = controls.forum_min_turns_multiplier
   const minTurns = Math.max(15, Math.floor(representatives.length * multiplier))
 
   // ── Phase 1: Preparation ─────────────────────────────────────────────────

@@ -233,6 +233,76 @@ function EditClueCard({ clue, onSave, onCancel }: { clue: Clue; onSave: (patch: 
   </Card>
 }
 
+const ACTION_CYCLE: Record<string, string> = { merge: "keep", keep: "delete", delete: "merge" }
+const ACTION_STYLE: Record<string, string> = {
+  merge: "border-blue-500/40 bg-blue-500/10 text-blue-700 dark:text-blue-400",
+  keep: "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+  delete: "border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-400",
+}
+
+function CleanupReviewDialog({ open, groups, originalCount, onGroupsChange, onApply, onCancel, applying }: {
+  open: boolean
+  groups: any[]
+  originalCount: number
+  onGroupsChange: (groups: any[]) => void
+  onApply: () => void
+  onCancel: () => void
+  applying: boolean
+}) {
+  const mergeCount = groups.filter(g => g.action === "merge").length
+  const deleteCount = groups.filter(g => g.action === "delete").length
+  const keepCount = groups.filter(g => g.action === "keep").length
+  const finalCount = keepCount + mergeCount
+
+  const cycleAction = (groupId: string) => {
+    onGroupsChange(groups.map(g => g.group_id === groupId ? { ...g, action: ACTION_CYCLE[g.action] ?? "keep" } : g))
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o && !applying) onCancel() }}>
+      <DialogContent className="flex max-h-[90vh] flex-col sm:max-w-2xl">
+        <DialogHeader className="shrink-0">
+          <DialogTitle>Review Cleanup</DialogTitle>
+          <DialogDescription>
+            {originalCount} clues → {finalCount} after cleanup.
+            {mergeCount > 0 && ` ${mergeCount} merge${mergeCount !== 1 ? "s" : ""}.`}
+            {deleteCount > 0 && ` ${deleteCount} deletion${deleteCount !== 1 ? "s" : ""}.`}
+            {" "}Click an action badge to cycle it.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-y-auto space-y-2 pr-1">
+          {groups.map((g) => (
+            <div key={g.group_id} className="rounded-lg border border-border bg-card p-3 space-y-1.5">
+              <div className="flex items-start gap-2">
+                <button
+                  type="button"
+                  onClick={() => cycleAction(g.group_id)}
+                  className={cn("shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors", ACTION_STYLE[g.action])}
+                >
+                  {g.action}
+                </button>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium leading-snug">{g.merged_title}</div>
+                  {g.reason && <div className="text-xs text-muted-foreground mt-0.5">{g.reason}</div>}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {(g.source_clue_ids ?? []).map((id: string) => (
+                  <span key={id} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">{id}</span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        <DialogFooter className="shrink-0">
+          <Button variant="outline" onClick={onCancel} disabled={applying}>Cancel</Button>
+          <Button onClick={onApply} disabled={applying}>{applying ? "Applying…" : "Apply"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function BulkImportDialog({ open, onOpenChange, onStart }: { open: boolean; onOpenChange: (open: boolean) => void; onStart: (content: string) => Promise<void> }) {
   const [content, setContent] = useState("")
   const [busy, setBusy] = useState(false)
@@ -283,7 +353,9 @@ export function CluesPanel({ topicId, version, isCurrentVersion = true }: CluesP
   const [editingClue, setEditingClue] = useState<Clue | null>(null)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [researchError] = useState<string | null>(null)
-  const [cleanupBusy, setCleanupBusy] = useState(false)
+  const [cleanupState, setCleanupState] = useState<"idle" | "proposing" | "review" | "applying">("idle")
+  const [cleanupGroups, setCleanupGroups] = useState<any[]>([])
+  const [cleanupOriginalCount, setCleanupOriginalCount] = useState(0)
   const [updateBusy, setUpdateBusy] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Clue | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -301,7 +373,7 @@ export function CluesPanel({ topicId, version, isCurrentVersion = true }: CluesP
   const load = useCallback(async () => { setLoading(true); setError(null); try { setClues(await api.clues.list(topicId, version)) } catch (err) { setError(err instanceof Error ? err.message : "Failed to load clues") } finally { setLoading(false) } }, [topicId, version])
   useEffect(() => { void load() }, [load])
 
-  // Reload clues when bulk-import or evidence-update completes
+  // Reload clues when bulk-import, evidence-update, or cleanup completes
   const lastStageComplete = usePipelineStore((s) => {
     const items = s.sessions[topicId]?.items
     if (!items?.length) return null
@@ -309,7 +381,11 @@ export function CluesPanel({ topicId, version, isCurrentVersion = true }: CluesP
     return last?.type === "stage_complete" ? `${last.stage}:${last.id}` : null
   })
   useEffect(() => {
-    if (lastStageComplete?.startsWith("bulk_import:") || lastStageComplete?.startsWith("evidence_update:")) {
+    if (
+      lastStageComplete?.startsWith("bulk_import:") ||
+      lastStageComplete?.startsWith("evidence_update:") ||
+      lastStageComplete?.startsWith("cleanup:")
+    ) {
       void load()
     }
   }, [lastStageComplete, load])
@@ -340,9 +416,43 @@ export function CluesPanel({ topicId, version, isCurrentVersion = true }: CluesP
     }
   }
 
-  const cleanup = async () => {
-    setCleanupBusy(true); setError(null)
-    try { await api.clues.cleanupStart(topicId); await load() } catch (err) { setError(err instanceof Error ? err.message : "Cleanup failed") } finally { setCleanupBusy(false) }
+  const startCleanup = async () => {
+    setCleanupState("proposing"); setError(null)
+    try {
+      await api.clues.cleanupStart(topicId)
+      const poll = setInterval(async () => {
+        try {
+          const status = await api.clues.cleanupStatus(topicId)
+          if (status.status === "done") {
+            clearInterval(poll)
+            setCleanupGroups(status.groups ?? [])
+            setCleanupOriginalCount(status.original_count ?? 0)
+            setCleanupState("review")
+          } else if (status.status === "error") {
+            clearInterval(poll)
+            setError(status.error ?? "Cleanup failed")
+            setCleanupState("idle")
+          }
+        } catch { clearInterval(poll); setCleanupState("idle") }
+      }, 2000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Cleanup failed")
+      setCleanupState("idle")
+    }
+  }
+
+  const applyCleanup = async () => {
+    setCleanupState("applying")
+    startOp(topicId, "cleanup", "Cleanup: fact-checking merged clues…")
+    try {
+      await api.clues.cleanupApply(topicId, cleanupGroups)
+      setCleanupState("idle")
+      // OperationModal listens for stage_complete: cleanup and calls onComplete which triggers reload
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Cleanup apply failed")
+      finishOp()
+      setCleanupState("idle")
+    }
   }
 
   const handleBulkImport = async (content: string) => {
@@ -402,7 +512,7 @@ export function CluesPanel({ topicId, version, isCurrentVersion = true }: CluesP
           <Button variant="outline" onClick={() => setSmartAddOpen(true)} disabled={smartAddBusy}><Search className="size-4" /> Smart Add</Button>
           <Button variant="outline" onClick={() => setBulkOpen(true)}><MessageSquarePlus className="size-4" /> Bulk import</Button>
           <Button variant="outline" onClick={() => void handleUpdateEvidence()} disabled={updateBusy}><Zap className="size-4" /> Update Evidence</Button>
-          <Button variant="outline" onClick={cleanup} disabled={cleanupBusy}><RefreshCw className={cn("size-4", cleanupBusy && "animate-spin")} /> Cleanup</Button>
+          <Button variant="outline" onClick={() => void startCleanup()} disabled={cleanupState !== "idle"}><RefreshCw className={cn("size-4", cleanupState === "proposing" && "animate-spin")} />{cleanupState === "proposing" ? "Analyzing…" : "Cleanup"}</Button>
         </div>
       )}
     </div>
@@ -446,6 +556,15 @@ export function CluesPanel({ topicId, version, isCurrentVersion = true }: CluesP
     {editingClue && <Dialog open={!!editingClue} onOpenChange={(open) => !open && setEditingClue(null)}><DialogContent className="sm:max-w-2xl"><DialogHeader><DialogTitle>Edit clue</DialogTitle><DialogDescription>Update summary, credibility, relevance, and bias flags.</DialogDescription></DialogHeader><EditClueCard clue={editingClue} onSave={saveClue} onCancel={() => setEditingClue(null)} /></DialogContent></Dialog>}
     {deleteTarget && <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}><DialogContent><DialogHeader><DialogTitle>Delete clue?</DialogTitle><DialogDescription>This action cannot be undone.</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" onClick={async () => { if (!deleteTarget) return; try { await api.clues.delete(topicId, deleteTarget.id); setClues((prev) => prev.filter((item) => item.id !== deleteTarget.id)); setDeleteTarget(null) } catch (err) { setError(err instanceof Error ? err.message : "Failed to delete clue") } }}>Delete</Button></DialogFooter></DialogContent></Dialog>}
     <BulkImportDialog open={bulkOpen} onOpenChange={setBulkOpen} onStart={handleBulkImport} />
+    <CleanupReviewDialog
+      open={cleanupState === "review"}
+      groups={cleanupGroups}
+      originalCount={cleanupOriginalCount}
+      onGroupsChange={setCleanupGroups}
+      onApply={() => void applyCleanup()}
+      onCancel={() => setCleanupState("idle")}
+      applying={cleanupState === "applying"}
+    />
     <Dialog open={smartAddOpen} onOpenChange={setSmartAddOpen}>
       <DialogContent>
         <DialogHeader>

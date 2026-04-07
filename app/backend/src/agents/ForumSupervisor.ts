@@ -46,7 +46,7 @@ export class ForumSupervisor {
     this.minTurns = minTurns
 
     const controls = dbGetControls()
-    this.checkInterval = (controls as any).forum_scenario_update_interval ?? 5
+    this.checkInterval = controls.forum_scenario_update_interval
     this.compressInterval = controls.forum_compress_interval
 
     // Always start fresh — re-runs should not inherit old state
