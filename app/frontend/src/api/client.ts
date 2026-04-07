@@ -86,7 +86,14 @@ export const api = {
       ),
   },
   states: {
-    list: (topicId: string) => request<any[]>(`/topics/${topicId}/states`),
+    list: (topicId: string) => request<Array<{
+      version: number
+      label: string
+      version_status: string
+      completed_stages: string[]
+      fork_stage: string | null
+      delta_from: number | null
+    }>>(`/topics/${topicId}/states`),
   },
   representatives: {
     list: (topicId: string, version?: number) =>

@@ -265,5 +265,12 @@ export async function chatCompletion(options: ChatCompletionOptions): Promise<Ch
 
 export async function chatCompletionText(options: ChatCompletionOptions): Promise<string> {
   const res = await chatCompletion(options)
-  return res.choices[0]?.message?.content ?? ""
+  const msg = res.choices[0]?.message
+  const content = msg?.content ?? ""
+  // Null content with no tool calls = model refused or failed — treat as retryable error
+  if (!content && msg && !msg.tool_calls?.length) {
+    log.error("LLM", `chatCompletionText: null content from ${options.model} — treating as failure`)
+    throw new Error(`Model ${options.model} returned null content with no tool calls`)
+  }
+  return content
 }

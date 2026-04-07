@@ -38,6 +38,24 @@ type ProviderState = {
 }
 
 const STORAGE_KEY = "dana.settings.activeTab"
+const CATALOG_CACHE_KEY = "dana.settings.catalogCache"
+const CATALOG_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+
+type CatalogCache = { models: CatalogModel[]; ts: number }
+
+function readCatalogCache(): CatalogModel[] {
+  try {
+    const raw = localStorage.getItem(CATALOG_CACHE_KEY)
+    if (!raw) return []
+    const parsed: CatalogCache = JSON.parse(raw)
+    if (Date.now() - parsed.ts > CATALOG_CACHE_TTL) return []
+    return parsed.models
+  } catch { return [] }
+}
+
+function writeCatalogCache(models: CatalogModel[]): void {
+  try { localStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify({ models, ts: Date.now() })) } catch { /* ignore */ }
+}
 
 const CONTROLS_DEFAULTS = {
   discovery_research_iterations: 5,
@@ -88,11 +106,25 @@ export function SettingsPage() {
   const { tab } = useParams()
   const navigate = useNavigate()
   const activeTab = useMemo(() => resolveTab(tab), [tab])
+  const [catalogModels, setCatalogModels] = useState<CatalogModel[]>(() => readCatalogCache())
+
+  const refreshCatalog = async () => {
+    try {
+      const models = await api.models.catalog()
+      setCatalogModels(models)
+      writeCatalogCache(models)
+    } catch { /* ignore */ }
+  }
 
   useEffect(() => {
     if (tab && !(tab in tabMap)) { navigate("/settings", { replace: true }); return }
     if (typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, activeTab)
   }, [activeTab, navigate, tab])
+
+  // Load catalog on mount only if cache is empty
+  useEffect(() => {
+    if (catalogModels.length === 0) void refreshCatalog()
+  }, [])
 
   const setTab = (value: string) => {
     const next = value as TabKey
@@ -112,8 +144,8 @@ export function SettingsPage() {
             <TabsTrigger key={value} value={value} className="h-full min-h-12 px-4 py-3">{meta.label}</TabsTrigger>
           ))}
         </TabsList>
-        <TabsContent value="providers" className="mt-0"><ProvidersPanel /></TabsContent>
-        <TabsContent value="prompts" className="mt-0"><PromptsPanel /></TabsContent>
+        <TabsContent value="providers" className="mt-0"><ProvidersPanel catalogModels={catalogModels} onRefreshCatalog={refreshCatalog} /></TabsContent>
+        <TabsContent value="prompts" className="mt-0"><PromptsPanel catalogModels={catalogModels} /></TabsContent>
         <TabsContent value="pipeline" className="mt-0"><PipelinePanel /></TabsContent>
       </Tabs>
     </div>
@@ -173,7 +205,7 @@ function ModelCard({ model }: { model: CatalogModel }) {
   )
 }
 
-function ProvidersPanel() {
+function ProvidersPanel({ catalogModels, onRefreshCatalog }: { catalogModels: CatalogModel[]; onRefreshCatalog: () => Promise<void> }) {
   const [providers, setProviders] = useState<ProviderState[]>([
     { provider: "claude", label: "Claude / Anthropic", description: "Claude models for analysis and reasoning.", icon: Plug, status: "disconnected", models: [] },
     { provider: "openai", label: "OpenAI / Codex", description: "OpenAI and Codex-compatible models.", icon: ExternalLink, status: "disconnected", models: [] },
@@ -182,7 +214,6 @@ function ProvidersPanel() {
   const [login, setLogin] = useState<{ provider: ProviderId; oauthUrl: string | null } | null>(null)
   const [health, setHealth] = useState<HealthStatus>(null)
   const [healthLoading, setHealthLoading] = useState(false)
-  const [catalogModels, setCatalogModels] = useState<CatalogModel[]>([])
 
   const loadHealth = async () => {
     setHealthLoading(true)
@@ -198,12 +229,8 @@ function ProvidersPanel() {
     }))
   }
 
-  const loadCatalog = async () => {
-    try { setCatalogModels(await api.models.catalog()) } catch { /* ignore */ }
-  }
-
-  const refreshAll = async () => { await Promise.all([loadProviders(), loadHealth(), loadCatalog()]) }
-  useEffect(() => { void refreshAll() }, [])
+  const refreshAll = async () => { await Promise.all([loadProviders(), loadHealth(), onRefreshCatalog()]) }
+  useEffect(() => { void Promise.all([loadProviders(), loadHealth()]) }, [])
 
   const availableModels = useMemo(() => catalogModels.filter(m => m.available), [catalogModels])
   const groupedAvailable = useMemo(() => {
@@ -365,7 +392,7 @@ function smartDefaultLabel(profile: string | null, catalogModels: CatalogModel[]
   return `Auto (${profileLabels[profile] ?? profile})`
 }
 
-function PromptsPanel() {
+function PromptsPanel({ catalogModels }: { catalogModels: CatalogModel[] }) {
   const [prompts, setPrompts] = useState<PromptItem[]>([])
   const [expandedStages, setExpandedStages] = useState<Record<string, boolean>>({})
   const [selectedPrompt, setSelectedPrompt] = useState<string | null>(null)
@@ -375,19 +402,16 @@ function PromptsPanel() {
   const [message, setMessage] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [toolCatalog, setToolCatalog] = useState<ToolCatalogItem[]>([])
-  const [catalogModels, setCatalogModels] = useState<CatalogModel[]>([])
 
   const loadPrompts = async () => {
     setLoading(true)
     try {
-      const [data, catalog, catModels] = await Promise.all([
+      const [data, catalog] = await Promise.all([
         api.prompts.list(),
         api.prompts.toolCatalog(),
-        api.models.catalog(),
       ])
       setPrompts(data)
       setToolCatalog(catalog)
-      setCatalogModels(catModels)
       setExpandedStages(cur => {
         const next = { ...cur }
         for (const stage of Array.from(new Set(data.map(i => i.stage)))) { if (next[stage] === undefined) next[stage] = false }

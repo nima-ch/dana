@@ -24,12 +24,13 @@ export type PipelineStatus = "draft" | "review_parties" | "review_enrichment" | 
 interface Props {
   topicId: string | null
   status: PipelineStatus
+  completedStages?: string[]
   active?: boolean
   onAction: (action: PipelineAction) => void | Promise<void>
   onStageComplete?: () => void
 }
 
-export function PipelineActivityFeed({ topicId, status, active = false, onAction, onStageComplete }: Props) {
+export function PipelineActivityFeed({ topicId, status, completedStages, active = false, onAction, onStageComplete }: Props) {
   const [collapsed, setCollapsed] = useState(false)
   const topicRef = useRef(topicId)
   const pushEvent = usePipelineStore((state) => state.pushEvent)
@@ -53,16 +54,18 @@ export function PipelineActivityFeed({ topicId, status, active = false, onAction
 
 
   const stageState = useMemo(() => {
-    const completed = stagesCompletedByStatus(status)
+    const completed = completedStages?.length
+      ? new Set(completedStages as PipelineStage[])
+      : stagesCompletedByStatus(status)
     const running = stageRunningByStatus(status)
     return STAGES.map(stage => {
       if (completed.has(stage.key)) return { ...stage, state: "done" as const }
       if (running === stage.key) return { ...stage, state: "running" as const }
       return { ...stage, state: "pending" as const }
     })
-  }, [status])
+  }, [status, completedStages])
 
-  const stageActions = useMemo(() => getStageActions(status), [status])
+  const stageActions = useMemo(() => getStageActions(status, completedStages), [status, completedStages])
 
   const idle = !active && items.length === 0 && status === "draft"
   const minimized = collapsed
@@ -93,8 +96,10 @@ export function PipelineActivityFeed({ topicId, status, active = false, onAction
 
 type StageAction = { action: PipelineAction; label: string; variant: "run" | "rerun"; disabled: boolean; reason?: string }
 
-function getStageActions(status: PipelineStatus): Record<PipelineStage, StageAction> {
-  const completed = stagesCompletedByStatus(status)
+function getStageActions(status: PipelineStatus, completedStages?: string[]): Record<PipelineStage, StageAction> {
+  const completed = completedStages?.length
+    ? new Set(completedStages as PipelineStage[])
+    : stagesCompletedByStatus(status)
   const running = stageRunningByStatus(status)
   const isRunning = running !== null
 
@@ -155,7 +160,6 @@ function stagesCompletedByStatus(status: string): Set<PipelineStage> {
     review_forum: ["discovery", "enrichment", "forum_prep", "forum"],
     expert_council: ["discovery", "enrichment", "forum_prep", "forum"],
     complete: ["discovery", "enrichment", "forum_prep", "forum", "expert_council"],
-    stale: ["discovery", "enrichment", "forum_prep", "forum", "expert_council"],
   }
   return new Set(map[status] ?? [])
 }

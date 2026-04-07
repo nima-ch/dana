@@ -87,7 +87,8 @@ export function TopicView() {
       ? "complete"
       : topic.status
 
-  const pipelineFeed = <PipelineActivityFeed topicId={id} status={effectiveStatus} active={topic.status !== "draft"} onAction={handlePipelineAction} onStageComplete={refreshTopic} />
+  const completedStages: string[] = selectedState?.completed_stages ?? []
+  const pipelineFeed = <PipelineActivityFeed topicId={id} status={effectiveStatus} completedStages={completedStages} active={topic.status !== "draft"} onAction={handlePipelineAction} onStageComplete={refreshTopic} />
   const content = {
     overview: <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-border/70 bg-card/80 px-4 py-2.5 text-sm">

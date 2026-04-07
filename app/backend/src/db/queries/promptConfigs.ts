@@ -31,7 +31,8 @@ export const BUILTIN_DEFAULTS: Record<string, PromptDefault> = {
   "clue-extractor/extract":      { tools: [], task_profile: "fast" },
   "clue-extractor/queries":      { tools: [], task_profile: "fast" },
   "clue-extractor/research":     { tools: [], task_profile: "fast" },
-  "clue-extractor/cleanup":      { tools: [], task_profile: "balanced" },
+  "clue-extractor/cleanup-scan":    { tools: [], task_profile: "fast" },
+  "clue-extractor/cleanup-resolve": { tools: [], task_profile: "balanced" },
   "clue-processor/system":       { tools: [], task_profile: "fast" },
 
   // Balanced tasks — synthesis, intelligence

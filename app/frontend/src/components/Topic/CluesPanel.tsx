@@ -239,6 +239,10 @@ const ACTION_STYLE: Record<string, string> = {
   keep: "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
   delete: "border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-400",
 }
+const CONSOLIDATION_STYLE: Record<string, string> = {
+  dedup: "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-400",
+  consolidate: "border-purple-500/40 bg-purple-500/10 text-purple-700 dark:text-purple-400",
+}
 
 function CleanupReviewDialog({ open, groups, originalCount, onGroupsChange, onApply, onCancel, applying }: {
   open: boolean
@@ -281,6 +285,11 @@ function CleanupReviewDialog({ open, groups, originalCount, onGroupsChange, onAp
                 >
                   {g.action}
                 </button>
+                {g.action === "merge" && g.consolidation_type && (
+                  <span className={cn("shrink-0 rounded-full border px-2.5 py-0.5 text-xs font-medium", CONSOLIDATION_STYLE[g.consolidation_type])}>
+                    {g.consolidation_type}
+                  </span>
+                )}
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium leading-snug">{g.merged_title}</div>
                   {g.reason && <div className="text-xs text-muted-foreground mt-0.5">{g.reason}</div>}
